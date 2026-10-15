@@ -9,6 +9,7 @@ import {
   Waves,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   ChipPicker,
   ComingLaterBlock,
@@ -394,12 +395,18 @@ function IntegrationsSection() {
 }
 
 function AboutSection() {
+  const [version, setVersion] = useState("…");
+  useEffect(() => {
+    getVersion()
+      .then((v) => setVersion(import.meta.env.DEV ? `${v} (dev)` : v))
+      .catch(() => setVersion("unknown"));
+  }, []);
   return (
     <>
       <SectionCard title="Sailor">
         <dl className="flex flex-col gap-3">
           {[
-            ["Version", "0.1.0 (dev)"],
+            ["Version", version],
             ["Build", "Desktop (Tauri 2 / WebView2)"],
             ["License", "GPL-3.0-or-later — free and open source"],
           ].map(([label, value]) => (
