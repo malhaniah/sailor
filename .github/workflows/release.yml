@@ -61,6 +61,8 @@ jobs:
             - Debian/Ubuntu: `sudo apt install ./Sailor_*_amd64.deb` (pulls in mpv automatically)
             - Fedora/openSUSE: install the `.rpm`, plus mpv (Fedora: from RPM Fusion)
             - Anything else: make the `.AppImage` executable and run it; install mpv from your distro
-          releaseDraft: true
+          # not a draft: tauri-action must be able to attach assets to an already
+          # published release (e.g. one seeded with a locally built installer)
+          releaseDraft: false
           prerelease: true
           args: ${{ matrix.args }}
