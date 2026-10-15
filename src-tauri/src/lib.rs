@@ -39,6 +39,8 @@ pub fn run() {
             let cache_dir = app.path().app_cache_dir()?;
             let state = tauri::async_runtime::block_on(AppState::load(data_dir, cache_dir))?;
             app.manage(state);
+            // a unit struct without the `embedded` feature, a real state holder with it
+            #[allow(clippy::default_constructed_unit_structs)]
             app.manage(commands::mpv::PlayerState::default());
             info!("sailor started");
             Ok(())
