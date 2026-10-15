@@ -14,6 +14,8 @@ authors = ["Sailor contributors"]
 tauri = { version = "2.12", features = [] }
 tauri-build = "2.7"
 tauri-plugin-opener = "2.7"
+# Cargo.lock holds its Linux-only rust-ini dep at 0.21.1: 0.21.3 added ParseOption fields
+# that deep-link 2.6.2 doesn't set (E0063). Keep it there until deep-link ships a fix.
 tauri-plugin-deep-link = "2.6"
 tauri-plugin-single-instance = { version = "2.5", features = ["deep-link"] }
 tauri-plugin-window-state = "2.5"
