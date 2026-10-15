@@ -45,6 +45,11 @@ Release bundles: `npm run tauri build`. Architecture notes live in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); third-party attribution in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) — setup, quality gates, and the one
+non-negotiable rule (Sailor ships no content, ever).
+
 ## License
 
 Sailor is licensed under the [GNU General Public License v3.0](LICENSE).

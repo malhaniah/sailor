@@ -34,3 +34,14 @@ url = { workspace = true }
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { workspace = true }
 tauri-plugin-window-state = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+webview2-com = { workspace = true, optional = true }
+windows = { workspace = true, optional = true }
+
+[features]
+# Embedded libmpv playback (video under the transparent webview). On Windows,
+# vendor libmpv first: `node scripts/fetch-libmpv.mjs`. Without this feature
+# (or when libmpv-2.dll is missing at runtime) playback falls back to the
+# external mpv backend.
+embedded = ["sailor-player/embedded", "dep:webview2-com", "dep:windows"]

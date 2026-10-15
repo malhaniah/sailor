@@ -1,43 +1,147 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens mirroring Harbor's system (github.com/9000000/harbor, MIT) so its
+ * component recipes port 1:1. Fonts use bundled-free system stacks (no CDN).
+ */
 @theme {
-  --color-abyss: #0b1220;
-  --color-deep: #101a2e;
-  --color-hull: #16233d;
-  --color-rig: #22324f;
-  --color-foam: #dbe7ff;
-  --color-mist: #8fa3c4;
-  --color-buoy: #34d399;
-  --color-flare: #f59e0b;
-  --color-coral: #f87171;
+  --color-canvas: oklch(0.18 0.004 260);
+  --color-surface: oklch(0.22 0.004 260);
+  --color-elevated: oklch(0.27 0.004 260);
+  --color-raised: oklch(0.32 0.004 260);
+  --color-ink: oklch(0.97 0.003 260);
+  --color-ink-muted: oklch(0.72 0.003 260);
+  --color-ink-subtle: oklch(0.5 0.003 260);
+  --color-edge: oklch(0.36 0.004 260 / 0.55);
+  --color-edge-soft: oklch(0.36 0.004 260 / 0.25);
+  --color-accent: oklch(0.78 0.13 60);
+  --color-accent-soft: oklch(0.78 0.13 60 / 0.18);
+  --color-danger: oklch(0.55 0.18 25);
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
+
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-sans: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 150ms;
+  --duration-base: 250ms;
+  --duration-slow: 400ms;
+}
+
+:root {
+  color-scheme: dark;
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
 }
 
 html,
 body,
 #root {
   height: 100%;
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  overflow: hidden;
 }
 
 body {
-  background: var(--color-abyss);
-  color: var(--color-foam);
-  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
-  overscroll-behavior: none;
+  user-select: none;
+  cursor: default;
+}
+
+@layer base {
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+    background: none;
+    border: 0;
+  }
+  button {
+    cursor: pointer;
+  }
+  img {
+    display: block;
+    user-select: none;
+    -webkit-user-drag: none;
+  }
 }
 
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-*::-webkit-scrollbar-thumb {
-  background: var(--color-rig);
-  border-radius: 6px;
+  width: 8px;
+  height: 8px;
 }
 *::-webkit-scrollbar-track {
   background: transparent;
 }
+*::-webkit-scrollbar-thumb {
+  background: var(--color-edge);
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-raised);
+}
 
-img {
-  -webkit-user-drag: none;
-  user-select: none;
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* ---- animation utilities (Harbor's) ------------------------------------------------ */
+
+@keyframes sailor-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes sailor-step-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sailor-modal-in {
+  from { opacity: 0; transform: scale(0.96) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes sailor-nudge-in {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sailor-popover-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+@keyframes sailor-loader-pulse {
+  0%, 100% { opacity: 0.42; }
+  50% { opacity: 1; }
+}
+
+.animate-fade-in { animation: sailor-fade-in 350ms var(--ease-out) both; }
+.animate-step-in { animation: sailor-step-in 420ms var(--ease-out) both; }
+.animate-modal-in { animation: sailor-modal-in 480ms var(--ease-out) both; }
+.animate-nudge-in { animation: sailor-nudge-in 380ms var(--ease-out) both; }
+.animate-popover-in { animation: sailor-popover-in 220ms var(--ease-out) both; transform-origin: top right; }
+.animate-loader-pulse { animation: sailor-loader-pulse 2.4s var(--ease-in-out) infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-loader-pulse { animation: none; }
+}
+
+/* hide scrollbar utility (sidebar nav, rows) */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }

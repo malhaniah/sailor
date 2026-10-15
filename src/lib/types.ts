@@ -176,6 +176,10 @@ export interface Settings {
   uploadLimitKibps?: number | null;
   downloadLimitKibps?: number | null;
   deleteOnStop: boolean;
+  theme: string;
+  instantPlay: boolean;
+  hideAnime: boolean;
+  hideLiveTv: boolean;
 }
 
 export interface PlayerStatus {

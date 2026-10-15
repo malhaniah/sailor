@@ -11,6 +11,9 @@ dist/
 /src-tauri/target/
 /src-tauri/gen/schemas/
 
+# vendored libmpv binaries (scripts/fetch-libmpv.mjs)
+/src-tauri/libmpv/
+
 # Editors / OS
 .vscode/*
 !.vscode/extensions.json
@@ -22,3 +25,4 @@ Thumbs.db
 .env
 .env.*
 .devrun.log
+.vite-preview.log

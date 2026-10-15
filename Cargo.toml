@@ -41,6 +41,18 @@ uuid = { version = "1", features = ["v4"] }
 # route calls Api::api_log_lines_stream, which only exists with that feature enabled.
 librqbit = { git = "https://github.com/ikatson/rqbit", rev = "57e95d16c830863a1fde32d8fa98153b53a3d0b4", default-features = false, features = ["default-tls", "http-api", "tracing-subscriber-utils"] }
 
+# embedded player (behind sailor-player's `embedded` feature)
+libmpv2 = "6.0"
+# versions must match what tauri/wry pin, or controller() COM types won't line up
+webview2-com = "0.39"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+] }
+
 # workspace crates
 sailor-addon = { path = "crates/sailor-addon" }
 sailor-engine = { path = "crates/sailor-engine" }

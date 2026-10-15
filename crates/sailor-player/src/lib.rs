@@ -5,6 +5,9 @@
 //! `wid`/render API per OS — is the planned `embedded` backend and will reuse this
 //! crate's request types.
 
+#[cfg(feature = "embedded")]
+pub mod embedded;
+
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Mutex;

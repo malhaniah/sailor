@@ -23,6 +23,14 @@ pub struct Settings {
     pub download_limit_kibps: Option<u32>,
     /// Remove torrent data when playback of it is stopped from the UI.
     pub delete_on_stop: bool,
+    /// UI theme preset id (see src/lib/theme.ts).
+    pub theme: String,
+    /// Play the first direct stream automatically instead of always showing the picker.
+    pub instant_play: bool,
+    /// Hide the Anime room from navigation.
+    pub hide_anime: bool,
+    /// Hide the (placeholder) Live TV entry from navigation.
+    pub hide_live_tv: bool,
 }
 
 impl Default for Settings {
@@ -34,6 +42,10 @@ impl Default for Settings {
             upload_limit_kibps: None,
             download_limit_kibps: None,
             delete_on_stop: true,
+            theme: "harbor-grey".to_string(),
+            instant_play: false,
+            hide_anime: false,
+            hide_live_tv: false,
         }
     }
 }

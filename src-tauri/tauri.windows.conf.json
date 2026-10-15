@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": "npm run build && node scripts/fetch-libmpv.mjs"
+  },
+  "bundle": {
+    "resources": {
+      "libmpv/libmpv-2.dll": "libmpv-2.dll"
+    }
+  }
+}

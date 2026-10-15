@@ -39,6 +39,7 @@ pub fn run() {
             let cache_dir = app.path().app_cache_dir()?;
             let state = tauri::async_runtime::block_on(AppState::load(data_dir, cache_dir))?;
             app.manage(state);
+            app.manage(commands::mpv::PlayerState::default());
             info!("sailor started");
             Ok(())
         })
@@ -58,6 +59,12 @@ pub fn run() {
             commands::player::player_stop,
             commands::settings::settings_get,
             commands::settings::settings_set,
+            commands::mpv::player_embedded_available,
+            commands::mpv::player_embedded_start,
+            commands::mpv::player_embedded_stop,
+            commands::mpv::player_embedded_set_property,
+            commands::mpv::player_embedded_command,
+            commands::mpv::player_set_geometry,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
