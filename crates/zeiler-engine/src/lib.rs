@@ -1,8 +1,8 @@
-//! Embedded BitTorrent streaming engine for Sailor, built on librqbit.
+//! Embedded BitTorrent streaming engine for Zeiler, built on librqbit.
 //!
 //! The engine maps Stremio torrent streams (`infoHash` + `fileIdx` + `sources`) onto a
 //! librqbit session and hands the player a loopback HTTP URL with Range support.
-//! Sailor ships no content and no trackers of its own: every torrent comes from a stream
+//! Zeiler ships no content and no trackers of its own: every torrent comes from a stream
 //! object served by an addon the user installed.
 
 mod engine;

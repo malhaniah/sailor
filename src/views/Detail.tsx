@@ -29,9 +29,9 @@ function metaFromPreview(preview: MetaPreview): MetaItem {
 /** Why the full details are missing, in words a user can act on. */
 function fallbackReason(lookup: MetaLookup): string {
   if (lookup.asked.length === 0) {
-    return "None of your installed addons provides details for this title (some catalog addons rely on a separate metadata addon such as Cinemeta), so Sailor is showing what the catalog provided.";
+    return "None of your installed addons provides details for this title (some catalog addons rely on a separate metadata addon such as Cinemeta), so Zeiler is showing what the catalog provided.";
   }
-  return `Your metadata addons couldn't load this title (${lookup.errors.join("; ")}), so Sailor is showing what the catalog provided.`;
+  return `Your metadata addons couldn't load this title (${lookup.errors.join("; ")}), so Zeiler is showing what the catalog provided.`;
 }
 
 export function DetailView({

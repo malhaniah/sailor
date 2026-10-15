@@ -102,37 +102,37 @@ select:focus-visible,
 
 /* ---- animation utilities (Harbor's) ------------------------------------------------ */
 
-@keyframes sailor-fade-in {
+@keyframes zeiler-fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
 }
-@keyframes sailor-step-in {
+@keyframes zeiler-step-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
-@keyframes sailor-modal-in {
+@keyframes zeiler-modal-in {
   from { opacity: 0; transform: scale(0.96) translateY(6px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
-@keyframes sailor-nudge-in {
+@keyframes zeiler-nudge-in {
   from { opacity: 0; transform: translateY(-12px); }
   to { opacity: 1; transform: translateY(0); }
 }
-@keyframes sailor-popover-in {
+@keyframes zeiler-popover-in {
   from { opacity: 0; transform: scale(0.96) translateY(-6px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
-@keyframes sailor-loader-pulse {
+@keyframes zeiler-loader-pulse {
   0%, 100% { opacity: 0.42; }
   50% { opacity: 1; }
 }
 
-.animate-fade-in { animation: sailor-fade-in 350ms var(--ease-out) both; }
-.animate-step-in { animation: sailor-step-in 420ms var(--ease-out) both; }
-.animate-modal-in { animation: sailor-modal-in 480ms var(--ease-out) both; }
-.animate-nudge-in { animation: sailor-nudge-in 380ms var(--ease-out) both; }
-.animate-popover-in { animation: sailor-popover-in 220ms var(--ease-out) both; transform-origin: top right; }
-.animate-loader-pulse { animation: sailor-loader-pulse 2.4s var(--ease-in-out) infinite; }
+.animate-fade-in { animation: zeiler-fade-in 350ms var(--ease-out) both; }
+.animate-step-in { animation: zeiler-step-in 420ms var(--ease-out) both; }
+.animate-modal-in { animation: zeiler-modal-in 480ms var(--ease-out) both; }
+.animate-nudge-in { animation: zeiler-nudge-in 380ms var(--ease-out) both; }
+.animate-popover-in { animation: zeiler-popover-in 220ms var(--ease-out) both; transform-origin: top right; }
+.animate-loader-pulse { animation: zeiler-loader-pulse 2.4s var(--ease-in-out) infinite; }
 
 @media (prefers-reduced-motion: reduce) {
   .animate-loader-pulse { animation: none; }

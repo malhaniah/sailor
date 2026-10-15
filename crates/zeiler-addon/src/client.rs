@@ -12,7 +12,7 @@ use crate::resource::{CatalogResponse, MetaResponse, StreamsResponse, SubtitlesR
 pub const MAX_RESPONSE_BYTES: usize = 20 * 1024 * 1024;
 
 /// HTTP client for the addon protocol. Follows redirects (Cinemeta answers 307 for
-/// paginated catalogs), speaks gzip, sends a fixed `Sailor/<version>` user agent, and
+/// paginated catalogs), speaks gzip, sends a fixed `Zeiler/<version>` user agent, and
 /// never sends cookies or custom headers.
 #[derive(Debug, Clone)]
 pub struct AddonClient {
@@ -22,7 +22,7 @@ pub struct AddonClient {
 impl AddonClient {
     pub fn new() -> Result<Self, AddonError> {
         let http = reqwest::Client::builder()
-            .user_agent(concat!("Sailor/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Zeiler/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::limited(10))

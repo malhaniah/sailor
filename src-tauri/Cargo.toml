@@ -1,6 +1,6 @@
 [package]
-name = "sailor"
-description = "Sailor — free, open-source desktop client for the Stremio ecosystem"
+name = "zeiler"
+description = "Zeiler — free, open-source desktop client for the Stremio ecosystem"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ authors.workspace = true
 
 [lib]
 # the _lib suffix avoids a bin/lib name clash on Windows
-name = "sailor_lib"
+name = "zeiler_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -19,9 +19,9 @@ tauri-build = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-deep-link = { workspace = true }
-sailor-addon = { workspace = true }
-sailor-engine = { workspace = true }
-sailor-player = { workspace = true }
+zeiler-addon = { workspace = true }
+zeiler-engine = { workspace = true }
+zeiler-player = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -45,4 +45,4 @@ windows = { workspace = true, optional = true }
 # vendor libmpv first: `node scripts/fetch-libmpv.mjs`. Without this feature
 # (or when libmpv-2.dll is missing at runtime) playback falls back to the
 # external mpv backend.
-embedded = ["sailor-player/embedded", "dep:webview2-com", "dep:windows"]
+embedded = ["zeiler-player/embedded", "dep:webview2-com", "dep:windows"]

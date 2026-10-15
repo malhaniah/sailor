@@ -8,9 +8,9 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_EMBEDDED").is_some() {
         let libmpv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("libmpv");
         println!("cargo:rerun-if-changed={}", libmpv.display());
-        println!("cargo:rerun-if-env-changed=SAILOR_SKIP_LIBMPV_CHECK");
+        println!("cargo:rerun-if-env-changed=ZEILER_SKIP_LIBMPV_CHECK");
         // escape hatch for `cargo check`/clippy runs that never link
-        let skip_check = std::env::var_os("SAILOR_SKIP_LIBMPV_CHECK").is_some();
+        let skip_check = std::env::var_os("ZEILER_SKIP_LIBMPV_CHECK").is_some();
         if !skip_check && !libmpv.join("mpv.lib").exists() {
             panic!(
                 "building with `embedded` but {} is missing.\n\

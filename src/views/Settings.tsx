@@ -41,7 +41,7 @@ const SECTIONS: {
         id: "player",
         label: "Player & quality",
         icon: MonitorPlay,
-        sub: "How Sailor plays what your addons find.",
+        sub: "How Zeiler plays what your addons find.",
       },
       {
         id: "engine",
@@ -58,7 +58,7 @@ const SECTIONS: {
         id: "theme",
         label: "Theme & appearance",
         icon: Palette,
-        sub: "Color presets Sailor renders in.",
+        sub: "Color presets Zeiler renders in.",
       },
       {
         id: "content",
@@ -75,7 +75,7 @@ const SECTIONS: {
         id: "integrations",
         label: "Integrations",
         icon: PlugZap,
-        sub: "Debrid, Trakt and friends — not in Sailor yet.",
+        sub: "Debrid, Trakt and friends — not in Zeiler yet.",
       },
     ],
   },
@@ -86,7 +86,7 @@ const SECTIONS: {
         id: "about",
         label: "About",
         icon: Info,
-        sub: "Version, license, and what Sailor is (not).",
+        sub: "Version, license, and what Zeiler is (not).",
       },
     ],
   },
@@ -175,7 +175,7 @@ function PlayerSection() {
     <>
       <SectionCard
         title="mpv"
-        description="Sailor plays through mpv. Until the embedded player lands, a system-installed mpv window is used."
+        description="Zeiler plays through mpv. Until the embedded player lands, a system-installed mpv window is used."
       >
         <div className="flex items-center gap-2 text-[13.5px]">
           <span className="text-ink-muted">Status:</span>
@@ -352,7 +352,7 @@ function ContentSection() {
     <>
       <SectionCard
         title="Built-in metadata"
-        description="Catalogs, details, cast and episode lists. Metadata only: Sailor still ships no stream addon, so add your own on the Addons page to play anything."
+        description="Catalogs, details, cast and episode lists. Metadata only: Zeiler still ships no stream addon, so add your own on the Addons page to play anything."
       >
         <ToggleRow
           label="Cinemeta"
@@ -387,7 +387,7 @@ function IntegrationsSection() {
     <>
       <SectionCard
         title="Debrid services"
-        description="Real-Debrid, TorBox, AllDebrid, Premiumize — planned, not in Sailor yet."
+        description="Real-Debrid, TorBox, AllDebrid, Premiumize — planned, not in Zeiler yet."
       >
         <ComingLaterBlock>
           <div className="flex flex-col gap-2">
@@ -426,7 +426,7 @@ function AboutSection() {
   }, []);
   return (
     <>
-      <SectionCard title="Sailor">
+      <SectionCard title="Zeiler">
         <dl className="flex flex-col gap-3">
           {[
             ["Version", version],
@@ -448,10 +448,10 @@ function AboutSection() {
           Legal
         </div>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-          Sailor hosts no media, indexes no media, and ships no content addon. Streams come
+          Zeiler hosts no media, indexes no media, and ships no content addon. Streams come
           only from third-party addons you choose to install. Catalogs and metadata come from
           those addons and from the built-in Cinemeta metadata addon, which you can turn off in
-          Settings → Content. Sailor is an independent project and is not affiliated with or
+          Settings → Content. Zeiler is an independent project and is not affiliated with or
           endorsed by Stremio (Smart Code Ltd).
         </p>
       </div>
@@ -478,10 +478,10 @@ function UpdatesCard() {
   if (!settings) return null;
 
   return (
-    <SectionCard title="Updates" description="Signed updates from GitHub releases. Installs happen when you open Sailor, never mid-movie.">
+    <SectionCard title="Updates" description="Signed updates from GitHub releases. Installs happen when you open Zeiler, never mid-movie.">
       <ToggleRow
         label="Install updates automatically"
-        sub="Checks at launch and every few hours; a downloaded update installs the next time you open Sailor."
+        sub="Checks at launch and every few hours; a downloaded update installs the next time you open Zeiler."
         on={settings.autoUpdate}
         onChange={(on) => void save({ autoUpdate: on })}
       />

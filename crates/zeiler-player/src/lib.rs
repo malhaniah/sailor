@@ -1,4 +1,4 @@
-//! Playback for Sailor.
+//! Playback for Zeiler.
 //!
 //! v0 drives an external `mpv` process (system-installed, or a user-configured binary).
 //! The embedded libmpv surface — video rendered under a transparent webview via the
@@ -214,13 +214,13 @@ mod tests {
             url: "https://user:secret@127.0.0.1:9999/v.mp4".into(),
             title: Some("Big Buck Bunny".into()),
             headers: vec![("Referer".into(), "https://site.example".into())],
-            user_agent: Some("Sailor".into()),
+            user_agent: Some("Zeiler".into()),
             referrer: None,
             start_at_sec: Some(42.5),
         });
         assert!(args.contains(&"--playlist=-".to_string()));
         assert!(args.contains(&"--force-media-title=Big Buck Bunny".to_string()));
-        assert!(args.contains(&"--user-agent=Sailor".to_string()));
+        assert!(args.contains(&"--user-agent=Zeiler".to_string()));
         assert!(
             args.contains(&"--http-header-fields-append=Referer: https://site.example".to_string())
         );

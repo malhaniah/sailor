@@ -1,6 +1,6 @@
 [package]
-name = "sailor-engine"
-description = "Embedded BitTorrent streaming engine (librqbit) for Sailor"
+name = "zeiler-engine"
+description = "Embedded BitTorrent streaming engine (librqbit) for Zeiler"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,4 +1,4 @@
-//! Stremio addon-protocol client for Sailor.
+//! Stremio addon-protocol client for Zeiler.
 //!
 //! The protocol is a stateless, GET-only, JSON-over-HTTP(S) protocol. An addon is
 //! identified by a *transport URL* ending in `/manifest.json`; every resource is fetched

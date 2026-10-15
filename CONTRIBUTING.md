@@ -1,19 +1,19 @@
-# Contributing to Sailor
+# Contributing to Zeiler
 
-Thanks for considering a contribution! Sailor is a free, open-source (GPL-3.0-or-later)
+Thanks for considering a contribution! Zeiler is a free, open-source (GPL-3.0-or-later)
 desktop client for the Stremio addon ecosystem, and it stays healthy through small,
 well-tested changes.
 
 ## The one rule that is not negotiable
 
-**Sailor hosts no media, indexes no media, and ships no content addon.**
+**Zeiler hosts no media, indexes no media, and ships no content addon.**
 
 Pull requests that add bundled/seeded stream addons, hardcoded stream or tracker hosts,
-default content sources, scrapers, or anything that turns Sailor itself into a content
+default content sources, scrapers, or anything that turns Zeiler itself into a content
 source will be declined regardless of code quality. Features that help users manage
 addons *they* choose to install are always welcome.
 
-The single exception is metadata: Sailor builds in the Cinemeta metadata addon
+The single exception is metadata: Zeiler builds in the Cinemeta metadata addon
 (catalogs, details, episode lists — it serves no streams), and users can turn it off in
 Settings. Any further built-in source must likewise be metadata-only and switchable.
 
@@ -38,9 +38,9 @@ librsvg, patchelf — see `.github/workflows/ci.yml` for the exact list).
 
 | Path | What it is |
 | --- | --- |
-| `crates/sailor-addon` | Stremio addon-protocol client (types, URL building, fan-out) |
-| `crates/sailor-engine` | Embedded librqbit torrent engine + loopback stream endpoint |
-| `crates/sailor-player` | Playback (external mpv backend; embedded libmpv behind the `embedded` feature) |
+| `crates/zeiler-addon` | Stremio addon-protocol client (types, URL building, fan-out) |
+| `crates/zeiler-engine` | Embedded librqbit torrent engine + loopback stream endpoint |
+| `crates/zeiler-player` | Playback (external mpv backend; embedded libmpv behind the `embedded` feature) |
 | `src-tauri` | Tauri shell: typed IPC commands, state, capabilities, config |
 | `src/` | React/TypeScript UI (design system mirrors Harbor's tokens — see `docs/ARCHITECTURE.md`) |
 | `docs/ARCHITECTURE.md` | Load-bearing decisions; read this first |
@@ -60,14 +60,14 @@ npm run build
 Network integration tests against live public addons are opt-in:
 
 ```bash
-cargo test -p sailor-addon --test live -- --ignored
+cargo test -p zeiler-addon --test live -- --ignored
 ```
 
 ## Guidelines
 
 - **Small PRs.** One change per PR; refactors separate from behavior changes.
 - **Tests ride along.** Protocol/engine changes need unit tests; parsing changes need a
-  fixture that mirrors real addon output (see `crates/sailor-addon/src/*` test modules).
+  fixture that mirrors real addon output (see `crates/zeiler-addon/src/*` test modules).
 - **Lenient in, strict out.** Addon responses are untrusted, messy JSON — parsing must
   degrade gracefully, never panic, and unknown fields must be ignored. Anything we emit
   (IPC payloads, URLs) is exact.

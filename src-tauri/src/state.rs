@@ -1,12 +1,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use sailor_addon::{AddonClient, Descriptor};
-use sailor_engine::{Engine, EngineConfig};
-use sailor_player::Player;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OnceCell, RwLock};
 use tracing::warn;
+use zeiler_addon::{AddonClient, Descriptor};
+use zeiler_engine::{Engine, EngineConfig};
+use zeiler_player::Player;
 
 use crate::error::IpcError;
 
@@ -68,7 +68,7 @@ fn builtin_cinemeta() -> Descriptor {
     Descriptor {
         manifest,
         transport_url: url::Url::parse(CINEMETA_TRANSPORT_URL).expect("valid URL"),
-        flags: sailor_addon::DescriptorFlags {
+        flags: zeiler_addon::DescriptorFlags {
             official: true,
             protected: true,
         },
@@ -217,9 +217,9 @@ mod tests {
         assert_eq!(cinemeta.manifest.id, "com.linvo.cinemeta");
         assert!(cinemeta.flags.protected);
         assert!(!cinemeta.manifest.catalogs.is_empty());
-        let meta = sailor_addon::ResourcePath::new("meta", "series", "tt0108778");
+        let meta = zeiler_addon::ResourcePath::new("meta", "series", "tt0108778");
         assert!(cinemeta.manifest.is_resource_supported(&meta));
-        let stream = sailor_addon::ResourcePath::new("stream", "movie", "tt0111161");
+        let stream = zeiler_addon::ResourcePath::new("stream", "movie", "tt0111161");
         assert!(
             !cinemeta.manifest.is_resource_supported(&stream),
             "metadata only"

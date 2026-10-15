@@ -48,7 +48,7 @@ pub fn run() {
             #[allow(clippy::default_constructed_unit_structs)]
             app.manage(commands::mpv::PlayerState::default());
             updater::start(app.handle().clone());
-            info!("sailor started");
+            info!("zeiler started");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

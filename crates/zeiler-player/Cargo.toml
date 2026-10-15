@@ -1,6 +1,6 @@
 [package]
-name = "sailor-player"
-description = "Playback control for Sailor: external mpv backend (embedded libmpv planned)"
+name = "zeiler-player"
+description = "Playback control for Zeiler: external mpv backend (embedded libmpv planned)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

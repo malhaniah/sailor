@@ -12,7 +12,7 @@
 //! the UI falls back to the external-mpv backend (`player_play`).
 //!
 //! Events flow UI-ward as the `player://event` Tauri event (time-pos throttled
-//! to 200 ms in sailor-player). Property writes and commands from the UI go
+//! to 200 ms in zeiler-player). Property writes and commands from the UI go
 //! through allow-lists — the webview is our own code, but addon-controlled
 //! strings pass through it, and mpv properties reach the filesystem and
 //! network.
@@ -21,7 +21,7 @@ use serde::Deserialize;
 use tauri::AppHandle;
 
 use crate::error::IpcError;
-use sailor_player::PlaybackRequest;
+use zeiler_player::PlaybackRequest;
 
 /// Target rectangle for the video child window, in physical pixels relative to
 /// the main window's client area (the UI computes getBoundingClientRect() ×
@@ -140,10 +140,10 @@ mod imp {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use sailor_player::PlaybackRequest;
-    use sailor_player::embedded::EmbeddedPlayer;
     use tauri::{AppHandle, Emitter, Manager};
     use tracing::{info, warn};
+    use zeiler_player::PlaybackRequest;
+    use zeiler_player::embedded::EmbeddedPlayer;
 
     use super::Geometry;
     use crate::error::IpcError;
@@ -492,8 +492,8 @@ mod imp {
 
 #[cfg(not(all(windows, feature = "embedded")))]
 mod imp {
-    use sailor_player::PlaybackRequest;
     use tauri::AppHandle;
+    use zeiler_player::PlaybackRequest;
 
     use super::Geometry;
     use crate::error::IpcError;

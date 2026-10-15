@@ -17,10 +17,10 @@ pub enum IpcError {
     Storage(String),
 }
 
-impl From<sailor_addon::AddonError> for IpcError {
-    fn from(error: sailor_addon::AddonError) -> Self {
+impl From<zeiler_addon::AddonError> for IpcError {
+    fn from(error: zeiler_addon::AddonError) -> Self {
         match error {
-            sailor_addon::AddonError::InvalidTransportUrl(message) => {
+            zeiler_addon::AddonError::InvalidTransportUrl(message) => {
                 IpcError::InvalidInput(message)
             }
             other => IpcError::Addon(other.to_string()),
@@ -28,8 +28,8 @@ impl From<sailor_addon::AddonError> for IpcError {
     }
 }
 
-impl From<sailor_player::PlayerError> for IpcError {
-    fn from(error: sailor_player::PlayerError) -> Self {
+impl From<zeiler_player::PlayerError> for IpcError {
+    fn from(error: zeiler_player::PlayerError) -> Self {
         IpcError::Player(error.to_string())
     }
 }

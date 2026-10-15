@@ -9,7 +9,7 @@ pub const MANIFEST_PATH: &str = "/manifest.json";
 
 /// JavaScript `encodeURIComponent` character set: every non-alphanumeric byte is
 /// percent-encoded except `- _ . ! ~ * ' ( )`. This matches stremio-core's
-/// URI_COMPONENT_ENCODE_SET, so Sailor produces byte-identical resource URLs.
+/// URI_COMPONENT_ENCODE_SET, so Zeiler produces byte-identical resource URLs.
 const URI_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')

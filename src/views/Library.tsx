@@ -13,7 +13,7 @@ export function LibraryView() {
       </header>
       <EmptyState title="Nothing here yet">
         Watchlist and continue-watching land together with the embedded player milestone —
-        Sailor will remember what you play and where you stopped.
+        Zeiler will remember what you play and where you stopped.
       </EmptyState>
     </main>
   );

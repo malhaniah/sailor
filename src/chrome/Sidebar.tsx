@@ -47,7 +47,7 @@ export function Sidebar() {
       >
         <span className="pointer-events-none text-[30px] leading-none lg:text-[32px]">⛵</span>
         <span className="pointer-events-none hidden font-display text-[30px] font-medium tracking-tight lg:inline">
-          Sailor
+          Zeiler
         </span>
       </div>
 
@@ -69,7 +69,7 @@ export function Sidebar() {
       </div>
 
       <div className="hidden px-6 pb-5 text-[11px] leading-relaxed text-ink-subtle/70 lg:block">
-        Sailor hosts no media, indexes no media, and ships no content addon.
+        Zeiler hosts no media, indexes no media, and ships no content addon.
       </div>
     </aside>
   );

@@ -1,5 +1,5 @@
-use sailor_addon::{Descriptor, normalize_transport_input};
 use tauri::State;
+use zeiler_addon::{Descriptor, normalize_transport_input};
 
 use crate::error::IpcError;
 use crate::state::AppState;
