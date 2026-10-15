@@ -31,6 +31,11 @@ pub struct Settings {
     pub hide_anime: bool,
     /// Hide the (placeholder) Live TV entry from navigation.
     pub hide_live_tv: bool,
+    /// Use the built-in Cinemeta metadata addon (catalogs, details, episode lists).
+    /// Metadata only — it serves no streams.
+    pub builtin_cinemeta: bool,
+    /// Download updates in the background and install them on the next launch.
+    pub auto_update: bool,
 }
 
 impl Default for Settings {
@@ -46,7 +51,27 @@ impl Default for Settings {
             instant_play: false,
             hide_anime: false,
             hide_live_tv: false,
+            builtin_cinemeta: true,
+            auto_update: true,
         }
+    }
+}
+
+const CINEMETA_TRANSPORT_URL: &str = "https://v3-cinemeta.strem.io/manifest.json";
+
+/// The built-in Cinemeta descriptor, from a manifest snapshot compiled into the app so
+/// startup never depends on the network. Flagged `official` + `protected` so the UI
+/// shows it as built-in (turned off in Settings rather than removed).
+fn builtin_cinemeta() -> Descriptor {
+    let manifest = serde_json::from_str(include_str!("../builtin/cinemeta-manifest.json"))
+        .expect("bundled Cinemeta manifest is valid");
+    Descriptor {
+        manifest,
+        transport_url: url::Url::parse(CINEMETA_TRANSPORT_URL).expect("valid URL"),
+        flags: sailor_addon::DescriptorFlags {
+            official: true,
+            protected: true,
+        },
     }
 }
 
@@ -82,6 +107,24 @@ impl AppState {
             data_dir,
             cache_dir,
         })
+    }
+
+    /// The addons in effect: built-in Cinemeta first (when enabled and not also
+    /// installed by the user), then the user's addons in install order.
+    pub async fn effective_addons(&self) -> Vec<Descriptor> {
+        let user = self.addons.read().await.clone();
+        let enabled = self.settings.read().await.builtin_cinemeta;
+        let user_has_it = user
+            .iter()
+            .any(|d| d.transport_url.as_str() == CINEMETA_TRANSPORT_URL);
+        if enabled && !user_has_it {
+            let mut all = Vec::with_capacity(user.len() + 1);
+            all.push(builtin_cinemeta());
+            all.extend(user);
+            all
+        } else {
+            user
+        }
     }
 
     /// The torrent engine, started on first use (avoids a firewall prompt at app launch).
@@ -162,4 +205,24 @@ async fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<(
         .await
         .map_err(|e| IpcError::Storage(format!("failed to replace {}: {e}", path.display())))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_cinemeta_manifest_parses_and_serves_meta_for_imdb_ids() {
+        let cinemeta = builtin_cinemeta();
+        assert_eq!(cinemeta.manifest.id, "com.linvo.cinemeta");
+        assert!(cinemeta.flags.protected);
+        assert!(!cinemeta.manifest.catalogs.is_empty());
+        let meta = sailor_addon::ResourcePath::new("meta", "series", "tt0108778");
+        assert!(cinemeta.manifest.is_resource_supported(&meta));
+        let stream = sailor_addon::ResourcePath::new("stream", "movie", "tt0111161");
+        assert!(
+            !cinemeta.manifest.is_resource_supported(&stream),
+            "metadata only"
+        );
+    }
 }

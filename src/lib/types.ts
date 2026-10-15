@@ -188,6 +188,8 @@ export interface Settings {
   instantPlay: boolean;
   hideAnime: boolean;
   hideLiveTv: boolean;
+  builtinCinemeta: boolean;
+  autoUpdate: boolean;
 }
 
 export interface PlayerStatus {

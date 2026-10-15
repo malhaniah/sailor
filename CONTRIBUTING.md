@@ -8,10 +8,14 @@ well-tested changes.
 
 **Sailor hosts no media, indexes no media, and ships no content addon.**
 
-Pull requests that add bundled/seeded addons, hardcoded addon or tracker hosts, default
-content sources, scrapers, or anything that turns Sailor itself into a content source
-will be declined regardless of code quality. Features that help users manage addons
-*they* choose to install are always welcome.
+Pull requests that add bundled/seeded stream addons, hardcoded stream or tracker hosts,
+default content sources, scrapers, or anything that turns Sailor itself into a content
+source will be declined regardless of code quality. Features that help users manage
+addons *they* choose to install are always welcome.
+
+The single exception is metadata: Sailor builds in the Cinemeta metadata addon
+(catalogs, details, episode lists — it serves no streams), and users can turn it off in
+Settings. Any further built-in source must likewise be metadata-only and switchable.
 
 ## Getting set up
 

@@ -34,6 +34,7 @@ url = { workspace = true }
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { workspace = true }
 tauri-plugin-window-state = { workspace = true }
+tauri-plugin-updater = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = { workspace = true, optional = true }

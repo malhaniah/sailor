@@ -70,6 +70,16 @@ export const playerPlay = (request: {
 
 export const playerStop = () => invoke<void>("player_stop");
 
+export interface UpdateStatus {
+  current: string;
+  /** downloaded, installs on next launch */
+  ready?: string | null;
+}
+export const updateStatus = () => invoke<UpdateStatus>("update_status");
+/** checks and downloads; resolves to the new version, or null when up to date */
+export const updateCheck = () => invoke<string | null>("update_check");
+export const updateInstallNow = () => invoke<void>("update_install_now");
+
 export const settingsGet = () => invoke<Settings>("settings_get");
 export const settingsSet = (settings: Settings) =>
   invoke<Settings>("settings_set", { settings });

@@ -46,7 +46,7 @@ pub async fn meta_get(
     r#type: String,
     id: String,
 ) -> Result<MetaLookup, IpcError> {
-    let addons = state.addons.read().await.clone();
+    let addons = state.effective_addons().await;
     Ok(first_meta(&state.client, &addons, &r#type, &id, META_TIMEOUT).await)
 }
 
@@ -57,6 +57,6 @@ pub async fn streams_get(
     r#type: String,
     id: String,
 ) -> Result<Vec<AddonStreams>, IpcError> {
-    let addons = state.addons.read().await.clone();
+    let addons = state.effective_addons().await;
     Ok(aggregate_streams(&state.client, &addons, &r#type, &id, STREAMS_TIMEOUT).await)
 }

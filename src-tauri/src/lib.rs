@@ -1,6 +1,7 @@
 mod commands;
 mod error;
 mod state;
+mod updater;
 
 use tauri::Manager;
 use tracing::{error, info};
@@ -32,8 +33,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             #[cfg(desktop)]
-            app.handle()
-                .plugin(tauri_plugin_window_state::Builder::default().build())?;
+            {
+                app.handle()
+                    .plugin(tauri_plugin_window_state::Builder::default().build())?;
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
 
             let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?;
@@ -42,6 +47,7 @@ pub fn run() {
             // a unit struct without the `embedded` feature, a real state holder with it
             #[allow(clippy::default_constructed_unit_structs)]
             app.manage(commands::mpv::PlayerState::default());
+            updater::start(app.handle().clone());
             info!("sailor started");
             Ok(())
         })
@@ -61,6 +67,9 @@ pub fn run() {
             commands::player::player_stop,
             commands::settings::settings_get,
             commands::settings::settings_set,
+            updater::update_status,
+            updater::update_check,
+            updater::update_install_now,
             commands::mpv::player_embedded_available,
             commands::mpv::player_embedded_start,
             commands::mpv::player_embedded_stop,

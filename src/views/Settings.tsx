@@ -17,8 +17,14 @@ import {
   Spinner,
   ToggleRow,
 } from "../components/ui";
-import { playerStatus } from "../lib/ipc";
-import { useSettings } from "../lib/store";
+import {
+  errorMessage,
+  playerStatus,
+  updateCheck,
+  updateInstallNow,
+  updateStatus,
+} from "../lib/ipc";
+import { useAddons, useSettings } from "../lib/store";
 import { THEME_PRESETS } from "../lib/theme";
 import type { PlayerStatus } from "../lib/types";
 
@@ -340,22 +346,39 @@ function ThemeSection() {
 
 function ContentSection() {
   const { settings, save } = useSettings();
+  const { reload } = useAddons();
   if (!settings) return <Spinner label="Loading…" />;
   return (
-    <SectionCard title="Rooms" description="Hide sidebar rooms you don't use.">
-      <ToggleRow
-        label="Hide Anime"
-        sub="Removes the Anime room from the sidebar."
-        on={settings.hideAnime}
-        onChange={(on) => void save({ hideAnime: on })}
-      />
-      <ToggleRow
-        label="Hide Live TV"
-        sub="Removes the (not-yet-functional) Live TV entry."
-        on={settings.hideLiveTv}
-        onChange={(on) => void save({ hideLiveTv: on })}
-      />
-    </SectionCard>
+    <>
+      <SectionCard
+        title="Built-in metadata"
+        description="Catalogs, details, cast and episode lists. Metadata only: Sailor still ships no stream addon, so add your own on the Addons page to play anything."
+      >
+        <ToggleRow
+          label="Cinemeta"
+          sub="Popular movies and series, plus details for IMDb titles from any catalog."
+          on={settings.builtinCinemeta}
+          onChange={async (on) => {
+            await save({ builtinCinemeta: on });
+            await reload();
+          }}
+        />
+      </SectionCard>
+      <SectionCard title="Rooms" description="Hide sidebar rooms you don't use.">
+        <ToggleRow
+          label="Hide Anime"
+          sub="Removes the Anime room from the sidebar."
+          on={settings.hideAnime}
+          onChange={(on) => void save({ hideAnime: on })}
+        />
+        <ToggleRow
+          label="Hide Live TV"
+          sub="Removes the (not-yet-functional) Live TV entry."
+          on={settings.hideLiveTv}
+          onChange={(on) => void save({ hideLiveTv: on })}
+        />
+      </SectionCard>
+    </>
   );
 }
 
@@ -419,17 +442,87 @@ function AboutSection() {
           ))}
         </dl>
       </SectionCard>
+      <UpdatesCard />
       <div className="rounded-2xl bg-canvas/30 p-5">
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-subtle">
           Legal
         </div>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
-          Sailor hosts no media, indexes no media, and ships no content addon. All catalogs,
-          metadata and streams come from third-party addons you choose to install. Sailor is an
-          independent project and is not affiliated with or endorsed by Stremio (Smart Code
-          Ltd).
+          Sailor hosts no media, indexes no media, and ships no content addon. Streams come
+          only from third-party addons you choose to install. Catalogs and metadata come from
+          those addons and from the built-in Cinemeta metadata addon, which you can turn off in
+          Settings → Content. Sailor is an independent project and is not affiliated with or
+          endorsed by Stremio (Smart Code Ltd).
         </p>
       </div>
     </>
+  );
+}
+
+function UpdatesCard() {
+  const { settings, save } = useSettings();
+  const [state, setState] = useState<
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "current" }
+    | { kind: "ready"; version: string }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+
+  useEffect(() => {
+    updateStatus()
+      .then((s) => s.ready && setState({ kind: "ready", version: s.ready }))
+      .catch(() => {});
+  }, []);
+
+  if (!settings) return null;
+
+  return (
+    <SectionCard title="Updates" description="Signed updates from GitHub releases. Installs happen when you open Sailor, never mid-movie.">
+      <ToggleRow
+        label="Install updates automatically"
+        sub="Checks at launch and every few hours; a downloaded update installs the next time you open Sailor."
+        on={settings.autoUpdate}
+        onChange={(on) => void save({ autoUpdate: on })}
+      />
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          disabled={state.kind === "checking"}
+          onClick={async () => {
+            setState({ kind: "checking" });
+            try {
+              const version = await updateCheck();
+              setState(version ? { kind: "ready", version } : { kind: "current" });
+            } catch (e) {
+              setState({ kind: "error", message: errorMessage(e) });
+            }
+          }}
+          className="flex h-10 items-center gap-2 rounded-xl border border-edge-soft px-4 text-[12.5px] font-medium text-ink-muted transition-colors hover:border-edge hover:text-ink disabled:opacity-50"
+        >
+          {state.kind === "checking" ? "Checking…" : "Check for updates"}
+        </button>
+        {state.kind === "current" && (
+          <span className="text-[13px] text-ink-muted">You're on the latest version.</span>
+        )}
+        {state.kind === "error" && (
+          <span className="text-[13px] text-[oklch(0.75_0.12_25)]">{state.message}</span>
+        )}
+        {state.kind === "ready" && (
+          <>
+            <span className="text-[13px] text-accent">v{state.version} is ready.</span>
+            <button
+              onClick={() =>
+                updateInstallNow().catch((e) =>
+                  setState({ kind: "error", message: errorMessage(e) }),
+                )
+              }
+              className="flex h-10 items-center rounded-xl bg-ink px-4 text-[12.5px] font-semibold text-canvas transition-transform hover:scale-[1.02] active:scale-[0.97]"
+            >
+              Restart and update now
+            </button>
+          </>
+        )}
+      </div>
+    </SectionCard>
   );
 }

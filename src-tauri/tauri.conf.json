@@ -70,6 +70,11 @@
   "plugins": {
     "deep-link": {
       "desktop": { "schemes": [] }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5QTIyRjQ1QkRDRTlDNTAKUldSUW5NNjlSUytpK1hmUXlPOFlKSFM5QkJCVmdwdmRhc1RWRGNFN2R1TkNkbkNvWmtOeFFQMVgK",
+      "endpoints": ["https://github.com/malhaniah/sailor/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
     }
   }
 }

@@ -201,6 +201,14 @@ function AddonCard({ addon, onRemove }: { addon: Descriptor; onRemove: () => Pro
         ))}
         {m.behaviorHints.p2p && <Badge tone="warn">p2p</Badge>}
       </div>
+      {addon.flags.protected ? (
+        <span
+          title="Metadata only. Turn it off in Settings → Content."
+          className="shrink-0 rounded-full bg-accent/15 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-accent"
+        >
+          Built-in
+        </span>
+      ) : (
       <button
         disabled={removing}
         onClick={async () => {
@@ -215,6 +223,7 @@ function AddonCard({ addon, onRemove }: { addon: Descriptor; onRemove: () => Pro
       >
         Remove
       </button>
+      )}
     </div>
   );
 }

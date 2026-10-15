@@ -10,7 +10,8 @@ Sailor is a self-contained media client that speaks the open [Stremio addon prot
 ## What it is
 
 - **Self-contained** — a built-in torrent streaming engine and mpv playback; no external streaming server, no browser, no Node runtime required.
-- **Bring your own addons** — paste any addon manifest URL. Sailor ships none and endorses none.
+- **Bring your own addons** — paste any addon manifest URL. Sailor ships no stream or content addon and endorses none. For browsing out of the box, the Cinemeta *metadata* addon (catalogs, details, episode lists; no streams) is built in and can be turned off in Settings.
+- **Updates itself** — signed updates install automatically the next time you open Sailor.
 - **Rust core** — the addon protocol client, streaming engine, and playback orchestration are Rust crates; the UI is a thin TypeScript layer in a Tauri 2 shell.
 - **Cross-platform** — Windows, macOS, Linux.
 

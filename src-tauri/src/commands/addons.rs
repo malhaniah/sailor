@@ -62,5 +62,5 @@ pub async fn addon_remove(
 
 #[tauri::command]
 pub async fn addon_list(state: State<'_, AppState>) -> Result<Vec<Descriptor>, IpcError> {
-    Ok(state.addons.read().await.clone())
+    Ok(state.effective_addons().await)
 }

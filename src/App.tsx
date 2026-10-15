@@ -1,6 +1,7 @@
 import { SearchOverlay } from "./chrome/SearchOverlay";
 import { Sidebar } from "./chrome/Sidebar";
 import { Topbar } from "./chrome/Topbar";
+import { UpdateBanner } from "./chrome/UpdateBanner";
 import { StoreProvider } from "./lib/store";
 import { type Frame, type RootView, ROOT_VIEWS, ViewProvider, useView } from "./lib/view";
 import { AddonsView } from "./views/Addons";
@@ -49,6 +50,7 @@ function Shell() {
       </div>
       <Topbar />
       <SearchOverlay />
+      <UpdateBanner />
     </div>
   );
 }

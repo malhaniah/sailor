@@ -43,13 +43,15 @@ jobs:
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # signs the updater packages; the matching public key is in tauri.conf.json
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: v__VERSION__
           releaseName: "Sailor v__VERSION__"
           releaseBody: |
-            Early preview of Sailor — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Sailor hosts no media, indexes no media, and ships no content addon: add your own addon URLs on the Addons page.
+            Sailor — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Sailor hosts no media, indexes no media, and ships no content addon: add your own stream addons on the Addons page.
 
-            **Playback needs mpv** (embedded playback is coming in a later release).
+            **Playback needs mpv** (embedded playback is coming in a later release). Installed copies update themselves automatically.
 
             ### Windows
             Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Install mpv with `winget install shinchiro.mpv`.
@@ -62,7 +64,8 @@ jobs:
             - Fedora/openSUSE: install the `.rpm`, plus mpv (Fedora: from RPM Fusion)
             - Anything else: make the `.AppImage` executable and run it; install mpv from your distro
           # not a draft: tauri-action must be able to attach assets to an already
-          # published release (e.g. one seeded with a locally built installer)
+          # published release (e.g. one seeded with a locally built installer).
+          # Not a pre-release: the updater reads releases/latest, which skips them.
           releaseDraft: false
-          prerelease: true
-          args: ${{ matrix.args }}
+          prerelease: false
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
