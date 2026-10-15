@@ -1,7 +1,9 @@
 //! Live integration tests against real public addons. Ignored by default (network);
 //! run explicitly with: cargo test -p sailor-addon --test live -- --ignored
 
-use sailor_addon::{AddonClient, ResourcePath};
+use std::time::Duration;
+
+use sailor_addon::{AddonClient, ResourcePath, aggregate_streams, first_meta};
 use url::Url;
 
 fn cinemeta() -> Url {
@@ -111,4 +113,49 @@ async fn opensubtitles_manifest_and_subtitles() {
         .unwrap();
     assert!(!response.subtitles.is_empty());
     assert!(response.subtitles.iter().all(|s| !s.url.is_empty()));
+}
+
+/// The common "catalog addon + stream addon, no metadata addon" setup: details are
+/// unavailable (nobody is asked), yet movie streams still resolve from the catalog id.
+#[tokio::test]
+#[ignore = "network"]
+async fn catalog_only_setup_has_no_meta_but_movie_streams_work() {
+    let client = AddonClient::new().unwrap();
+    let catalogs = client
+        .descriptor(
+            &Url::parse(
+                "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    let streams_addon = client
+        .descriptor(&Url::parse("https://torrentio.strem.fun/manifest.json").unwrap())
+        .await
+        .unwrap();
+    let addons = vec![catalogs.clone(), streams_addon];
+
+    let page = client
+        .catalog(
+            &catalogs.transport_url,
+            &ResourcePath::new("catalog", "movie", &catalogs.manifest.catalogs[0].id),
+        )
+        .await
+        .unwrap();
+    let item = &page.metas[0];
+    assert!(item.id.starts_with("tt"));
+
+    let lookup = first_meta(&client, &addons, "movie", &item.id, Duration::from_secs(15)).await;
+    assert!(lookup.meta.is_none());
+    assert!(lookup.asked.is_empty(), "no installed addon serves meta");
+
+    let groups =
+        aggregate_streams(&client, &addons, "movie", &item.id, Duration::from_secs(25)).await;
+    assert_eq!(groups.len(), 1, "only the stream addon is asked");
+    assert!(
+        groups[0].error.is_none(),
+        "stream addon failed: {:?}",
+        groups[0].error
+    );
 }

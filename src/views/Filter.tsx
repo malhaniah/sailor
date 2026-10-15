@@ -119,7 +119,7 @@ export function FilterView({ type, genre }: { type: string; genre: string }) {
             <PickCard
               key={`${meta.id}-${i}`}
               meta={meta}
-              onClick={() => openMeta(meta.type, meta.id)}
+              onClick={() => openMeta(meta)}
             />
           ))}
         </div>

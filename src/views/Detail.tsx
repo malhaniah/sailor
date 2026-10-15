@@ -1,29 +1,75 @@
-import { CalendarClock, ChevronDown, Play } from "lucide-react";
+import { CalendarClock, ChevronDown, Info, Play } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Poster, fallbackGradient } from "../components/Poster";
 import { ErrorNote, Spinner } from "../components/ui";
 import { errorMessage, metaGet } from "../lib/ipc";
 import { useView } from "../lib/view";
-import type { MetaItem, Video } from "../lib/types";
+import type { MetaItem, MetaLookup, MetaPreview, Video } from "../lib/types";
 
-export function DetailView({ type, id }: { type: string; id: string }) {
+/** A minimal meta object built from the catalog item that was clicked. */
+function metaFromPreview(preview: MetaPreview): MetaItem {
+  return {
+    id: preview.id,
+    type: preview.type,
+    name: preview.name,
+    poster: preview.poster,
+    background: preview.background,
+    logo: preview.logo,
+    posterShape: preview.posterShape,
+    description: preview.description,
+    releaseInfo: preview.releaseInfo,
+    imdbRating: preview.imdbRating,
+    genres: preview.genres,
+    links: [],
+    videos: [],
+    behaviorHints: { isLive: false, hasScheduledVideos: false },
+  };
+}
+
+/** Why the full details are missing, in words a user can act on. */
+function fallbackReason(lookup: MetaLookup): string {
+  if (lookup.asked.length === 0) {
+    return "None of your installed addons provides details for this title (some catalog addons rely on a separate metadata addon such as Cinemeta), so Sailor is showing what the catalog provided.";
+  }
+  return `Your metadata addons couldn't load this title (${lookup.errors.join("; ")}), so Sailor is showing what the catalog provided.`;
+}
+
+export function DetailView({
+  type,
+  id,
+  preview,
+}: {
+  type: string;
+  id: string;
+  preview: MetaPreview;
+}) {
   const { openPicker } = useView();
   const [meta, setMeta] = useState<MetaItem | null>(null);
+  const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logoOk, setLogoOk] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     setMeta(null);
+    setFallbackNote(null);
     setError(null);
     setLogoOk(true);
     metaGet(type, id)
-      .then((m) => !cancelled && setMeta(m))
+      .then((lookup) => {
+        if (cancelled) return;
+        if (lookup.meta) {
+          setMeta(lookup.meta);
+        } else {
+          setMeta(metaFromPreview(preview));
+          setFallbackNote(fallbackReason(lookup));
+        }
+      })
       .catch((e) => !cancelled && setError(errorMessage(e)));
     return () => {
       cancelled = true;
     };
-  }, [type, id]);
+  }, [type, id, preview]);
 
   if (error) {
     return (
@@ -46,6 +92,8 @@ export function DetailView({ type, id }: { type: string; id: string }) {
 
   const live = meta.behaviorHints.isLive || meta.type === "tv";
   const isSeries = meta.videos.length > 0 && !live;
+  // a series without an episode list (catalog-only fallback): episodes are picked by number
+  const needsManualEpisode = !live && meta.videos.length === 0 && meta.type === "series";
   const defaultVideo = isSeries
     ? (meta.videos.find((v) => v.id === meta.behaviorHints.defaultVideoId) ?? null)
     : null;
@@ -59,6 +107,8 @@ export function DetailView({ type, id }: { type: string; id: string }) {
           .sort((a, b) => (a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0))[0] ??
         meta.videos[0];
       openPicker(meta, firstEpisode);
+    } else if (needsManualEpisode) {
+      openPicker(meta, episodeVideo(meta, 1, 1));
     } else {
       openPicker(meta, null);
     }
@@ -136,11 +186,66 @@ export function DetailView({ type, id }: { type: string; id: string }) {
 
       {/* body */}
       <div className="flex flex-col gap-16 px-12 pb-24 pt-14">
+        {fallbackNote && (
+          <div className="flex max-w-3xl items-start gap-3 rounded-2xl border border-edge-soft bg-elevated/40 px-5 py-4 text-[13.5px] leading-relaxed text-ink-muted">
+            <Info size={17} className="mt-0.5 shrink-0 text-accent" />
+            <span>{fallbackNote}</span>
+          </div>
+        )}
         {meta.description && <Synopsis text={meta.description} />}
         {isSeries && <EpisodesSection meta={meta} onPick={(video) => openPicker(meta, video)} />}
+        {needsManualEpisode && (
+          <ManualEpisodePicker onPick={(s, e) => openPicker(meta, episodeVideo(meta, s, e))} />
+        )}
         <InfoBlock meta={meta} />
       </div>
     </main>
+  );
+}
+
+/** A video for a series episode chosen by number (no episode list available). */
+function episodeVideo(meta: MetaItem, season: number, episode: number): Video {
+  return {
+    id: `${meta.id}:${season}:${episode}`,
+    title: `Episode ${episode}`,
+    season,
+    episode,
+    streams: [],
+  };
+}
+
+function ManualEpisodePicker({ onPick }: { onPick: (season: number, episode: number) => void }) {
+  const [season, setSeason] = useState(1);
+  const [episode, setEpisode] = useState(1);
+  const field =
+    "h-11 w-20 rounded-xl border border-edge bg-canvas px-3 text-center font-mono text-[14px] text-ink outline-none focus:border-ink";
+  const clamp = (value: string) => Math.max(1, Math.min(999, Math.floor(Number(value)) || 1));
+  return (
+    <section className="flex flex-col gap-4">
+      <div>
+        <h3 className="text-[22px] font-medium tracking-tight text-ink">Episodes</h3>
+        <p className="mt-1 text-[13px] text-ink-subtle">
+          No episode list is available, so pick the episode by number.
+        </p>
+      </div>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="flex flex-col gap-1.5 text-[12px] font-medium uppercase tracking-[0.14em] text-ink-subtle">
+          Season
+          <input type="number" min={1} value={season} onChange={(e) => setSeason(clamp(e.target.value))} className={field} />
+        </label>
+        <label className="flex flex-col gap-1.5 text-[12px] font-medium uppercase tracking-[0.14em] text-ink-subtle">
+          Episode
+          <input type="number" min={1} value={episode} onChange={(e) => setEpisode(clamp(e.target.value))} className={field} />
+        </label>
+        <button
+          onClick={() => onPick(season, episode)}
+          className="flex h-11 items-center gap-2 rounded-xl bg-ink px-5 text-[13.5px] font-semibold text-canvas transition-transform hover:scale-[1.02] active:scale-[0.97]"
+        >
+          <Play size={15} fill="currentColor" />
+          Find streams for S{season}E{episode}
+        </button>
+      </div>
+    </section>
   );
 }
 

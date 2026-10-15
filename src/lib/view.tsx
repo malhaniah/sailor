@@ -9,7 +9,7 @@ import {
   useMemo,
   useState,
 } from "react";
-import type { MetaItem, Video } from "./types";
+import type { MetaItem, MetaPreview, Video } from "./types";
 
 export type RootView =
   | "home"
@@ -34,7 +34,9 @@ export const ROOT_VIEWS: RootView[] = [
 
 export type Frame =
   | { kind: RootView }
-  | { kind: "meta"; type: string; id: string }
+  // the catalog item that was clicked: the detail page falls back to it when no
+  // installed addon serves meta for this id
+  | { kind: "meta"; type: string; id: string; preview: MetaPreview }
   | { kind: "filter"; genre: string; type: string }
   | { kind: "picker"; meta: MetaItem; video: Video | null };
 
@@ -46,7 +48,7 @@ interface ViewCtx {
   view: RootView;
   canGoBack: boolean;
   setView: (view: RootView) => void;
-  openMeta: (type: string, id: string) => void;
+  openMeta: (preview: MetaPreview) => void;
   openFilter: (type: string, genre: string) => void;
   openPicker: (meta: MetaItem, video: Video | null) => void;
   goBack: () => void;
@@ -90,7 +92,8 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       canGoBack: stack.length > 1,
       setView,
       goBack,
-      openMeta: (type, id) => push({ kind: "meta", type, id }),
+      openMeta: (preview) =>
+        push({ kind: "meta", type: preview.type, id: preview.id, preview }),
       openFilter: (type, genre) => push({ kind: "filter", type, genre }),
       openPicker: (meta, video) => push({ kind: "picker", meta, video }),
     };

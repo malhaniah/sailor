@@ -150,6 +150,14 @@ export interface Stream {
   externalUrl?: string;
 }
 
+export interface MetaLookup {
+  meta: MetaItem | null;
+  /** addons that serve meta for this type/id; empty = none installed */
+  asked: string[];
+  /** "<addon>: <reason>" per failed addon */
+  errors: string[];
+}
+
 export interface CatalogResponse {
   metas: MetaPreview[];
 }

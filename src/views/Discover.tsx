@@ -48,7 +48,7 @@ export function DiscoverView() {
   return (
     <main className="flex-1 overflow-y-auto px-12 pb-20 pt-20">
       <div className="flex flex-col gap-14">
-        <FeaturedBanner items={featured} onOpen={(m) => openMeta(m.type, m.id)} />
+        <FeaturedBanner items={featured} onOpen={(m) => openMeta(m)} />
         {deduped.length === 0 && <RowSkeletons count={3} />}
         {deduped.slice(0, 1).map(({ key, state, items }) => (
           <DiscoverRail key={key} rowKey={key} state={state} items={items} loadMore={loadMore} openMeta={openMeta} />
@@ -73,7 +73,7 @@ function DiscoverRail({
   state: { ref: { addon: { manifest: { name: string } }; catalog: { type: string; id: string; name?: string | null } } };
   items: MetaPreview[];
   loadMore: (key: string) => void;
-  openMeta: (type: string, id: string) => void;
+  openMeta: (preview: MetaPreview) => void;
 }) {
   return (
     <Row
@@ -83,7 +83,7 @@ function DiscoverRail({
       onEndReached={() => loadMore(rowKey)}
     >
       {items.map((meta, i) => (
-        <PickCard key={`${meta.id}-${i}`} meta={meta} onClick={() => openMeta(meta.type, meta.id)} />
+        <PickCard key={`${meta.id}-${i}`} meta={meta} onClick={() => openMeta(meta)} />
       ))}
     </Row>
   );

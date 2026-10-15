@@ -59,6 +59,18 @@ pub async fn aggregate_streams(
     futures::future::join_all(tasks).await
 }
 
+/// Outcome of a meta lookup. `asked` is empty when no installed addon serves meta for
+/// this type/id — the common case of catalog-only + stream-only addon setups.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaLookup {
+    pub meta: Option<MetaItem>,
+    /// Names of the addons that were asked, in priority order.
+    pub asked: Vec<String>,
+    /// `"<addon>: <reason>"` for each asked addon that failed before a success.
+    pub errors: Vec<String>,
+}
+
 /// Ask every supporting addon for the meta object in parallel and return the first
 /// success in addon order (install order is the user's priority order). All requests
 /// start concurrently, but the result is taken as soon as the highest-priority addon
@@ -69,33 +81,111 @@ pub async fn first_meta(
     r#type: &str,
     id: &str,
     per_addon_timeout: Duration,
-) -> Option<MetaItem> {
+) -> MetaLookup {
     let path = ResourcePath::new("meta", r#type, id);
-    let handles: Vec<_> = addons
+    let supporting: Vec<_> = addons
         .iter()
         .filter(|d| d.manifest.is_resource_supported(&path))
+        .collect();
+    let mut handles: Vec<_> = supporting
+        .iter()
         .map(|d| {
             let client = client.clone();
             let transport_url = d.transport_url.clone();
             let path = path.clone();
             tokio::spawn(async move {
-                tokio::time::timeout(per_addon_timeout, client.meta(&transport_url, &path))
+                match tokio::time::timeout(per_addon_timeout, client.meta(&transport_url, &path))
                     .await
-                    .ok()
-                    .and_then(Result::ok)
-                    .map(|r| r.meta)
+                {
+                    Ok(Ok(response)) => Ok(response.meta),
+                    Ok(Err(e)) => Err(e.to_string()),
+                    Err(_) => Err("timed out".to_string()),
+                }
             })
         })
         .collect();
 
-    let mut handles = handles;
-    let mut found = None;
-    for handle in handles.iter_mut() {
-        if found.is_none() {
-            found = handle.await.ok().flatten();
-        } else {
+    let mut lookup = MetaLookup {
+        meta: None,
+        asked: supporting.iter().map(|d| d.manifest.name.clone()).collect(),
+        errors: Vec::new(),
+    };
+    for (handle, addon) in handles.iter_mut().zip(&supporting) {
+        if lookup.meta.is_some() {
             handle.abort();
+            continue;
+        }
+        match handle.await {
+            Ok(Ok(meta)) => lookup.meta = Some(meta),
+            Ok(Err(reason)) => lookup
+                .errors
+                .push(format!("{}: {reason}", addon.manifest.name)),
+            Err(_) => lookup
+                .errors
+                .push(format!("{}: request was cancelled", addon.manifest.name)),
         }
     }
-    found
+    lookup
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor(manifest: &str) -> Descriptor {
+        serde_json::from_str(&format!(
+            r#"{{ "manifest": {manifest}, "transportUrl": "https://addon.invalid/manifest.json" }}"#
+        ))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn meta_lookup_reports_when_no_addon_serves_meta() {
+        let addons = vec![
+            descriptor(
+                r#"{ "id": "catalogs", "name": "Catalogs", "types": ["movie"],
+                     "idPrefixes": ["tt"], "resources": ["catalog"],
+                     "catalogs": [{ "type": "movie", "id": "top" }] }"#,
+            ),
+            descriptor(
+                r#"{ "id": "streams", "name": "Streams", "types": ["movie"],
+                     "resources": [{ "name": "stream", "types": ["movie"], "idPrefixes": ["tt"] }],
+                     "catalogs": [] }"#,
+            ),
+        ];
+        let client = AddonClient::new().unwrap();
+        // no addon supports meta, so nothing is requested (the .invalid host is never hit)
+        let lookup = first_meta(
+            &client,
+            &addons,
+            "movie",
+            "tt0111161",
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(lookup.meta.is_none());
+        assert!(lookup.asked.is_empty());
+        assert!(lookup.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn meta_lookup_records_failures_of_asked_addons() {
+        let addons = vec![descriptor(
+            r#"{ "id": "meta", "name": "Broken Meta", "types": ["movie"],
+                 "idPrefixes": ["tt"], "resources": ["meta"], "catalogs": [] }"#,
+        )];
+        let client = AddonClient::new().unwrap();
+        let lookup = first_meta(
+            &client,
+            &addons,
+            "movie",
+            "tt0111161",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(lookup.meta.is_none());
+        assert_eq!(lookup.asked, vec!["Broken Meta"]);
+        assert_eq!(lookup.errors.len(), 1);
+        assert!(lookup.errors[0].starts_with("Broken Meta: "));
+    }
 }

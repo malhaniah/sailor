@@ -137,7 +137,7 @@ export function SearchOverlay() {
                     meta={meta}
                     onClick={() => {
                       setOpen(false);
-                      openMeta(meta.type, meta.id);
+                      openMeta(meta);
                     }}
                   />
                 ))}

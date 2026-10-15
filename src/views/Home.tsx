@@ -75,7 +75,7 @@ export function HomeView() {
         <HeroCarousel
           items={heroItems}
           typeLabel={firstTypeLabel}
-          onOpen={(meta) => openMeta(meta.type, meta.id)}
+          onOpen={(meta) => openMeta(meta)}
         />
 
         {rankItems.length >= 10 && (
@@ -85,7 +85,7 @@ export function HomeView() {
                 key={meta.id}
                 meta={meta}
                 rank={i + 1}
-                onClick={() => openMeta(meta.type, meta.id)}
+                onClick={() => openMeta(meta)}
               />
             ))}
           </Row>
@@ -105,7 +105,7 @@ export function HomeView() {
               <PickCard
                 key={`${meta.id}-${i}`}
                 meta={meta}
-                onClick={() => openMeta(meta.type, meta.id)}
+                onClick={() => openMeta(meta)}
               />
             ))}
           </Row>

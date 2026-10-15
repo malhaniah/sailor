@@ -77,7 +77,7 @@ function RootViewHost({ view }: { view: RootView }) {
 function OverlayFrame({ frame }: { frame: Frame }) {
   switch (frame.kind) {
     case "meta":
-      return <DetailView type={frame.type} id={frame.id} />;
+      return <DetailView type={frame.type} id={frame.id} preview={frame.preview} />;
     case "filter":
       return <FilterView type={frame.type} genre={frame.genre} />;
     case "picker":

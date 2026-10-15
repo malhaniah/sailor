@@ -83,7 +83,7 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
               key={meta.id}
               meta={meta}
               rank={i + 1}
-              onClick={() => openMeta(meta.type, meta.id)}
+              onClick={() => openMeta(meta)}
             />
           ))}
         </Row>
@@ -101,7 +101,7 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
             <PickCard
               key={`${meta.id}-${i}`}
               meta={meta}
-              onClick={() => openMeta(meta.type, meta.id)}
+              onClick={() => openMeta(meta)}
             />
           ))}
         </Row>
@@ -117,7 +117,7 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
           variant="bleed"
           typeLabel={config.label}
           autoMs={11000}
-          onOpen={(meta) => openMeta(meta.type, meta.id)}
+          onOpen={(meta) => openMeta(meta)}
         />
         <div className="relative mx-auto flex max-w-[1700px] flex-col gap-12 px-12 pb-32 pt-12">
           {rowsBlock}
@@ -142,7 +142,7 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
           <HeroCarousel
             items={heroItems}
             typeLabel={config.label}
-            onOpen={(meta) => openMeta(meta.type, meta.id)}
+            onOpen={(meta) => openMeta(meta)}
           />
         )}
         {rowsBlock}

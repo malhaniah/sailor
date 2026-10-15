@@ -4,7 +4,7 @@ import type {
   CatalogResponse,
   Descriptor,
   IpcError,
-  MetaItem,
+  MetaLookup,
   PlayerStatus,
   ResolvedStream,
   Settings,
@@ -38,7 +38,7 @@ export const catalogLoad = (args: {
 }) => invoke<CatalogResponse>("catalog_load", { args: { extra: [], ...args } });
 
 export const metaGet = (type: string, id: string) =>
-  invoke<MetaItem>("meta_get", { type, id });
+  invoke<MetaLookup>("meta_get", { type, id });
 
 export const streamsGet = (type: string, id: string) =>
   invoke<AddonStreams[]>("streams_get", { type, id });

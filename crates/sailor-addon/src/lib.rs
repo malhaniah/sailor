@@ -17,7 +17,7 @@ mod resource;
 
 pub use client::{AddonClient, MAX_RESPONSE_BYTES};
 pub use error::AddonError;
-pub use fanout::{AddonStreams, aggregate_streams, first_meta};
+pub use fanout::{AddonStreams, MetaLookup, aggregate_streams, first_meta};
 pub use manifest::{
     Descriptor, DescriptorFlags, ExtraProp, Manifest, ManifestBehaviorHints, ManifestCatalog,
     ManifestExtra, ManifestResource,

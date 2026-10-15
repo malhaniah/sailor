@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sailor_addon::{
-    AddonStreams, CatalogResponse, ExtraValue, MetaItem, ResourcePath, aggregate_streams,
+    AddonStreams, CatalogResponse, ExtraValue, MetaLookup, ResourcePath, aggregate_streams,
     first_meta,
 };
 use serde::Deserialize;
@@ -37,22 +37,17 @@ pub async fn catalog_load(
     Ok(state.client.catalog(&transport_url, &path).await?)
 }
 
-/// Fetch the meta object for an item: first success across supporting addons,
-/// in install order.
+/// Fetch the meta object for an item: first success across supporting addons, in
+/// install order. A missing meta is not an error — the UI falls back to the catalog
+/// preview — so the outcome says who was asked and what failed.
 #[tauri::command]
 pub async fn meta_get(
     state: State<'_, AppState>,
     r#type: String,
     id: String,
-) -> Result<MetaItem, IpcError> {
+) -> Result<MetaLookup, IpcError> {
     let addons = state.addons.read().await.clone();
-    first_meta(&state.client, &addons, &r#type, &id, META_TIMEOUT)
-        .await
-        .ok_or_else(|| {
-            IpcError::NotFound(
-                "No installed addon provides details for this item. Install a metadata addon that covers it.".into(),
-            )
-        })
+    Ok(first_meta(&state.client, &addons, &r#type, &id, META_TIMEOUT).await)
 }
 
 /// Fan out a stream request to every supporting addon; per-addon results, in install order.
