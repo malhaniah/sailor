@@ -1,0 +1,53 @@
+[workspace]
+resolver = "3"
+members = ["src-tauri", "crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-or-later"
+authors = ["Sailor contributors"]
+
+[workspace.dependencies]
+# shell
+tauri = { version = "2.12", features = [] }
+tauri-build = "2.7"
+tauri-plugin-opener = "2.7"
+tauri-plugin-deep-link = "2.6"
+tauri-plugin-single-instance = { version = "2.5", features = ["deep-link"] }
+tauri-plugin-window-state = "2.5"
+
+# shared
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_with = "3"
+thiserror = "2"
+anyhow = "1"
+url = { version = "2", features = ["serde"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+regex = "1"
+percent-encoding = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "gzip", "native-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+
+# torrent engine — pinned to a main rev carrying Windows fixes #681/#689/#690
+# (switch to crates.io once 9.0.2 is released)
+# tracing-subscriber-utils is required at this rev: the http-api feature's /stream_logs
+# route calls Api::api_log_lines_stream, which only exists with that feature enabled.
+librqbit = { git = "https://github.com/ikatson/rqbit", rev = "57e95d16c830863a1fde32d8fa98153b53a3d0b4", default-features = false, features = ["default-tls", "http-api", "tracing-subscriber-utils"] }
+
+# workspace crates
+sailor-addon = { path = "crates/sailor-addon" }
+sailor-engine = { path = "crates/sailor-engine" }
+sailor-player = { path = "crates/sailor-player" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
