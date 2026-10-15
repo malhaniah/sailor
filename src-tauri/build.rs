@@ -36,11 +36,11 @@ fn main() {
         }
     }
 
-    // tauri.windows.conf.json maps libmpv/libmpv-2.dll into the bundle, and
-    // tauri_build refuses to compile when a mapped resource is missing — even
-    // for feature-off builds that never load it. Drop in a placeholder so the
-    // workspace builds before `node scripts/fetch-libmpv.mjs` has run (the
-    // script replaces it; the runtime probe rejects it via LoadLibrary).
+    // tauri.embedded.conf.json (passed via --config for embedded builds) maps
+    // libmpv/libmpv-2.dll into the bundle, and tauri_build refuses to compile
+    // when a mapped resource is missing. Drop in a placeholder so such builds
+    // compile before `node scripts/fetch-libmpv.mjs` has run (the script
+    // replaces it; the runtime probe rejects it via LoadLibrary).
     #[cfg(windows)]
     {
         let dll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

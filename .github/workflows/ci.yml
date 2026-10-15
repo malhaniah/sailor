@@ -34,7 +34,8 @@ jobs:
       - run: npm ci
       # tauri::generate_context! needs ../dist to exist before clippy/test
       - run: npm run build
-      - uses: dtolnay/rust-toolchain@stable
+      # must match rust-toolchain.toml exactly
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy, rustfmt
       - uses: swatinem/rust-cache@v2

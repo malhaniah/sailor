@@ -91,10 +91,63 @@ pub fn locate_mpv(configured: Option<&Path>) -> Option<PathBuf> {
         return None;
     }
     let exe = if cfg!(windows) { "mpv.exe" } else { "mpv" };
-    let path_var = std::env::var_os("PATH")?;
-    std::env::split_paths(&path_var)
-        .map(|dir| dir.join(exe))
-        .find(|candidate| candidate.is_file())
+    let on_path = std::env::var_os("PATH").and_then(|path_var| {
+        std::env::split_paths(&path_var)
+            .map(|dir| dir.join(exe))
+            .find(|candidate| candidate.is_file())
+    });
+    // Apps launched from Finder / the Start Menu / a desktop launcher don't inherit the
+    // shell's PATH, so a Homebrew/winget/scoop mpv is invisible to them without this.
+    on_path.or_else(|| known_locations().into_iter().find(|p| p.is_file()))
+}
+
+/// Standard install locations of mpv per OS, most likely first.
+fn known_locations() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if cfg!(windows) {
+        let env_dir = |var: &str| std::env::var_os(var).map(PathBuf::from);
+        if let Some(local) = env_dir("LOCALAPPDATA") {
+            paths.push(local.join(r"Microsoft\WinGet\Links\mpv.exe"));
+            // winget portable packages live in a source-suffixed folder
+            if let Ok(entries) = std::fs::read_dir(local.join(r"Microsoft\WinGet\Packages")) {
+                paths.extend(
+                    entries
+                        .flatten()
+                        .filter(|e| e.file_name().to_string_lossy().starts_with("shinchiro.mpv"))
+                        .map(|e| e.path().join("mpv.exe")),
+                );
+            }
+        }
+        if let Some(home) = env_dir("USERPROFILE") {
+            paths.push(home.join(r"scoop\shims\mpv.exe"));
+            paths.push(home.join(r"scoop\apps\mpv\current\mpv.exe"));
+        }
+        if let Some(program_data) = env_dir("ProgramData") {
+            paths.push(program_data.join(r"chocolatey\bin\mpv.exe"));
+        }
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(dir) = env_dir(var) {
+                paths.push(dir.join(r"mpv\mpv.exe"));
+            }
+        }
+    } else if cfg!(target_os = "macos") {
+        for p in [
+            "/opt/homebrew/bin/mpv",
+            "/usr/local/bin/mpv",
+            "/opt/local/bin/mpv",
+            "/Applications/mpv.app/Contents/MacOS/mpv",
+        ] {
+            paths.push(PathBuf::from(p));
+        }
+    } else {
+        for p in ["/usr/bin/mpv", "/usr/local/bin/mpv", "/snap/bin/mpv"] {
+            paths.push(PathBuf::from(p));
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            paths.push(PathBuf::from(home).join(".local/bin/mpv"));
+        }
+    }
+    paths
 }
 
 /// External-mpv player. Keeps at most one child process; starting a new playback stops
@@ -189,5 +242,25 @@ mod tests {
     #[test]
     fn locate_with_bogus_configured_path_returns_none() {
         assert!(locate_mpv(Some(Path::new("Z:/definitely/not/mpv.exe"))).is_none());
+    }
+
+    #[test]
+    fn known_locations_cover_the_platform_package_managers() {
+        let paths: Vec<String> = known_locations()
+            .iter()
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .collect();
+        if cfg!(windows) {
+            assert!(
+                paths
+                    .iter()
+                    .any(|p| p.ends_with("Microsoft/WinGet/Links/mpv.exe"))
+            );
+            assert!(paths.iter().any(|p| p.ends_with("scoop/shims/mpv.exe")));
+        } else if cfg!(target_os = "macos") {
+            assert!(paths.iter().any(|p| p == "/opt/homebrew/bin/mpv"));
+        } else {
+            assert!(paths.iter().any(|p| p == "/usr/bin/mpv"));
+        }
     }
 }

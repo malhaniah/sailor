@@ -9,7 +9,7 @@ Sailor is a self-contained media client that speaks the open [Stremio addon prot
 
 ## What it is
 
-- **Self-contained** — native playback via libmpv and a built-in streaming engine; no external server, no browser, no Node runtime required.
+- **Self-contained** — a built-in torrent streaming engine and mpv playback; no external streaming server, no browser, no Node runtime required.
 - **Bring your own addons** — paste any addon manifest URL. Sailor ships none and endorses none.
 - **Rust core** — the addon protocol client, streaming engine, and playback orchestration are Rust crates; the UI is a thin TypeScript layer in a Tauri 2 shell.
 - **Cross-platform** — Windows, macOS, Linux.
@@ -20,15 +20,34 @@ Early development (v0.1 milestone): addon install/manage, catalog browsing, sear
 metadata/episodes, stream fan-out, built-in torrent engine, and playback through an
 external mpv. Embedded libmpv playback (video inside the app window) is the next milestone.
 
+## Install
+
+Grab the latest build from the [Releases page](https://github.com/malhaniah/sailor/releases).
+Playback needs [mpv](https://mpv.io) installed (Sailor finds it automatically in the usual
+places, or you can set its path in Settings).
+
+| Platform | Download | mpv |
+| --- | --- | --- |
+| Windows 10/11 | `Sailor_*_x64-setup.exe` (per-user, no admin) | `winget install shinchiro.mpv` |
+| macOS 12+ (Apple Silicon) | `Sailor_*_aarch64.dmg` | `brew install mpv` |
+| macOS 12+ (Intel) | `Sailor_*_x64.dmg` | `brew install mpv` |
+| Debian / Ubuntu | `Sailor_*_amd64.deb` | pulled in automatically |
+| Fedora / openSUSE | `Sailor-*.x86_64.rpm` | from your distro (Fedora: RPM Fusion) |
+| Other Linux | `Sailor_*_amd64.AppImage` | from your distro |
+
+Builds are not code-signed yet. On Windows, SmartScreen may warn — choose **More info →
+Run anyway**. On macOS, right-click Sailor → **Open** the first time (or allow it under
+System Settings → Privacy & Security).
+
 ## Architecture
 
 | Component | Role |
 | --- | --- |
 | `crates/sailor-addon` | Stremio addon-protocol client (manifests, catalogs, meta, streams, subtitles) |
 | `crates/sailor-engine` | Built-in BitTorrent streaming engine (librqbit) exposing local HTTP streams |
-| `crates/sailor-player` | libmpv playback orchestration |
+| `crates/sailor-player` | Playback: external mpv now, embedded libmpv in progress |
 | `src-tauri` | Tauri 2 shell wiring the core to the UI |
-| `ui/` | TypeScript/React frontend |
+| `src/` | TypeScript/React frontend |
 
 ## Building from source
 

@@ -59,9 +59,12 @@
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": { "installMode": "currentUser", "languages": ["English"] }
     },
-    "macOS": { "minimumSystemVersion": "12.0" },
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "-"
+    },
     "linux": {
-      "deb": { "depends": [] }
+      "deb": { "depends": ["mpv"] }
     }
   },
   "plugins": {

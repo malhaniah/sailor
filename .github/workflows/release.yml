@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest # arm64
+          - platform: macos-latest # arm64 (Apple Silicon)
             args: "--target aarch64-apple-darwin"
           - platform: macos-15-intel
             args: "--target x86_64-apple-darwin"
@@ -34,7 +34,8 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
+      # must match rust-toolchain.toml exactly, or the targets land on a different toolchain
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
@@ -45,7 +46,21 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Sailor v__VERSION__"
-          releaseBody: "See the assets to download and install. Unsigned builds will trip SmartScreen; checksums are published per release."
+          releaseBody: |
+            Early preview of Sailor — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Sailor hosts no media, indexes no media, and ships no content addon: add your own addon URLs on the Addons page.
+
+            **Playback needs mpv** (embedded playback is coming in a later release).
+
+            ### Windows
+            Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Install mpv with `winget install shinchiro.mpv`.
+
+            ### macOS
+            Download the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Sailor to Applications. Builds are not notarized: the first time, right-click Sailor → **Open**, or allow it under System Settings → Privacy & Security. Install mpv with `brew install mpv`.
+
+            ### Linux
+            - Debian/Ubuntu: `sudo apt install ./Sailor_*_amd64.deb` (pulls in mpv automatically)
+            - Fedora/openSUSE: install the `.rpm`, plus mpv (Fedora: from RPM Fusion)
+            - Anything else: make the `.AppImage` executable and run it; install mpv from your distro
           releaseDraft: true
           prerelease: true
           args: ${{ matrix.args }}

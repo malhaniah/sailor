@@ -2,7 +2,9 @@
 // src-tauri/libmpv/ for `cargo build --features embedded`:
 //
 //   libmpv-2.dll   runtime library (bundled beside sailor.exe, see
-//                  src-tauri/tauri.windows.conf.json)
+//                  src-tauri/tauri.embedded.conf.json — an opt-in overlay:
+//                  npm run tauri build -- --features embedded
+//                    --config src-tauri/tauri.embedded.conf.json)
 //   mpv.def        export list shipped in the archive
 //   mpv.lib        MSVC import library, generated here via `lib /def:`
 //   NOTICE.txt     provenance (URL + hashes) of the vendored binaries
