@@ -7,6 +7,7 @@
 
 #[cfg(feature = "embedded")]
 pub mod embedded;
+pub mod mpv_error;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

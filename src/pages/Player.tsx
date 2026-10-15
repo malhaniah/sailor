@@ -10,7 +10,7 @@
  * Route: #/player?… with either
  *   url=<http(s) stream>            direct / already-resolved stream
  *   infoHash=<40 hex>&sources=<json array>&fileIdx=<n>&filename=<name>
- *                                   torrent — resolved here via engine_resolve
+ *     &fileMustInclude=<json array> torrent — resolved here via engine_resolve
  * plus optional title, headers (JSON object), ua, referrer, startAt (seconds).
  *
  * If the embedded backend is unavailable (feature off / libmpv-2.dll missing),
@@ -46,6 +46,7 @@ interface PlayerParams {
   fileIdx: number | null;
   sources: string[];
   filename: string | null;
+  fileMustInclude: string[];
   headers: [string, string][];
   userAgent: string | null;
   referrer: string | null;
@@ -64,13 +65,14 @@ function parseParams(): PlayerParams {
   } catch {
     /* addon data is messy; ignore bad header blobs */
   }
-  let sources: string[] = [];
-  try {
-    const parsed: unknown = JSON.parse(p.get("sources") ?? "[]");
-    if (Array.isArray(parsed)) sources = parsed.map(String);
-  } catch {
-    /* ignore */
-  }
+  const stringList = (name: string) => {
+    try {
+      const parsed: unknown = JSON.parse(p.get(name) ?? "[]");
+      return Array.isArray(parsed) ? parsed.map(String) : [];
+    } catch {
+      return [];
+    }
+  };
   const num = (name: string) => {
     const v = p.get(name);
     const n = v === null ? NaN : Number(v);
@@ -81,8 +83,9 @@ function parseParams(): PlayerParams {
     title: p.get("title"),
     infoHash: p.get("infoHash"),
     fileIdx: num("fileIdx"),
-    sources,
+    sources: stringList("sources"),
     filename: p.get("filename"),
+    fileMustInclude: stringList("fileMustInclude"),
     headers,
     userAgent: p.get("ua"),
     referrer: p.get("referrer"),
@@ -250,6 +253,7 @@ export function PlayerPage() {
           fileIdx: params.fileIdx,
           sources: params.sources,
           filename: params.filename,
+          fileMustInclude: params.fileMustInclude,
         });
         if (cancelled) return;
         request.url = resolved.streamUrl;
