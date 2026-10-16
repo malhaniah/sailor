@@ -57,7 +57,11 @@
     "copyright": "Copyright (c) Zeiler contributors",
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
-      "nsis": { "installMode": "currentUser", "languages": ["English"] }
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English"],
+        "installerHooks": "./windows/hooks.nsh"
+      }
     },
     "macOS": {
       "minimumSystemVersion": "12.0",

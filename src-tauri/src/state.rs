@@ -1,9 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OnceCell, RwLock};
-use tracing::warn;
+use tracing::{info, warn};
 use zeiler_addon::{AddonClient, Descriptor};
 use zeiler_engine::{Engine, EngineConfig};
 use zeiler_player::Player;
@@ -75,6 +75,38 @@ fn builtin_cinemeta() -> Descriptor {
     }
 }
 
+/// Bundle identifier before the Sailor → Zeiler rename. Tauri keys the data dir on the
+/// identifier, so without a migration an updated install starts with no addons.
+const LEGACY_IDENTIFIER: &str = "app.sailor.desktop";
+const MIGRATED_FILES: [&str; 2] = ["settings.json", "addons.json"];
+
+/// One-time copy of settings and addons from the pre-rename data dir (a sibling of
+/// `data_dir`) when this install has neither yet. Copies rather than moves, so a
+/// still-installed Sailor keeps working. Best effort: failures only log.
+async fn migrate_legacy_data(data_dir: &Path) {
+    let Some(legacy) = data_dir.parent().map(|p| p.join(LEGACY_IDENTIFIER)) else {
+        return;
+    };
+    for name in MIGRATED_FILES {
+        if tokio::fs::try_exists(data_dir.join(name))
+            .await
+            .unwrap_or(true)
+        {
+            return;
+        }
+    }
+    for name in MIGRATED_FILES {
+        let from = legacy.join(name);
+        if !tokio::fs::try_exists(&from).await.unwrap_or(false) {
+            continue;
+        }
+        match tokio::fs::copy(&from, data_dir.join(name)).await {
+            Ok(_) => info!("migrated {name} from {}", legacy.display()),
+            Err(e) => warn!("could not migrate {}: {e}", from.display()),
+        }
+    }
+}
+
 pub struct AppState {
     pub client: AddonClient,
     pub addons: RwLock<Vec<Descriptor>>,
@@ -92,6 +124,7 @@ impl AppState {
     pub async fn load(data_dir: PathBuf, cache_dir: PathBuf) -> anyhow::Result<Self> {
         tokio::fs::create_dir_all(&data_dir).await?;
         tokio::fs::create_dir_all(&cache_dir).await?;
+        migrate_legacy_data(&data_dir).await;
 
         let settings: Settings = read_json(&data_dir.join("settings.json")).await?;
         let addons: Vec<Descriptor> = read_json(&data_dir.join("addons.json")).await?;
@@ -224,5 +257,46 @@ mod tests {
             !cinemeta.manifest.is_resource_supported(&stream),
             "metadata only"
         );
+    }
+
+    /// `<tmp>/<test>/{app.sailor.desktop,io.zeiler.desktop}`, mirroring the OS data dir.
+    fn data_dirs(test: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("zeiler-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let legacy = root.join(LEGACY_IDENTIFIER);
+        let current = root.join("io.zeiler.desktop");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        (legacy, current)
+    }
+
+    #[tokio::test]
+    async fn migrates_sailor_data_into_an_empty_install() {
+        let (legacy, current) = data_dirs("migrate-empty");
+        std::fs::write(legacy.join("settings.json"), r#"{"theme":"ocean"}"#).unwrap();
+        std::fs::write(legacy.join("addons.json"), "[]").unwrap();
+
+        migrate_legacy_data(&current).await;
+
+        let settings = std::fs::read_to_string(current.join("settings.json")).unwrap();
+        assert_eq!(settings, r#"{"theme":"ocean"}"#);
+        assert!(current.join("addons.json").exists());
+        assert!(legacy.join("addons.json").exists(), "copied, not moved");
+    }
+
+    #[tokio::test]
+    async fn leaves_an_existing_install_alone() {
+        let (legacy, current) = data_dirs("migrate-existing");
+        std::fs::write(legacy.join("settings.json"), r#"{"theme":"ocean"}"#).unwrap();
+        std::fs::write(legacy.join("addons.json"), "[]").unwrap();
+        std::fs::write(current.join("settings.json"), "{}").unwrap();
+
+        migrate_legacy_data(&current).await;
+
+        assert_eq!(
+            std::fs::read_to_string(current.join("settings.json")).unwrap(),
+            "{}"
+        );
+        assert!(!current.join("addons.json").exists());
     }
 }

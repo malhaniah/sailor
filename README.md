@@ -40,6 +40,11 @@ Builds are not code-signed yet. On Windows, SmartScreen may warn — choose **Mo
 Run anyway**. On macOS, right-click Zeiler → **Open** the first time (or allow it under
 System Settings → Privacy & Security).
 
+**Upgrading from Sailor.** Zeiler was called Sailor up to v0.1.2, and Sailor installs update
+to Zeiler on their own. Your addons and settings come along. On Windows the update also
+removes Sailor. On macOS the updated app keeps its old name in Applications: rename
+`Sailor.app` to `Zeiler.app`, or replace it with the new `.dmg`.
+
 ## Architecture
 
 | Component | Role |

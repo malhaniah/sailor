@@ -53,6 +53,8 @@ jobs:
 
             **Playback needs mpv** (embedded playback is coming in a later release). Installed copies update themselves automatically.
 
+            **Sailor is now Zeiler.** Sailor installs update to Zeiler on their own and keep your addons and settings. On Windows the update also removes Sailor. On macOS the app keeps the name `Sailor.app` in Applications: rename it to `Zeiler.app`, or replace it with the new `.dmg`.
+
             ### Windows
             Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Install mpv with `winget install shinchiro.mpv`.
 
