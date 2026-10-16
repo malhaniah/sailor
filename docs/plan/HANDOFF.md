@@ -171,8 +171,15 @@ purpose; see the comment in `Cargo.toml`.
 1. Bump the version in `Cargo.toml`, `package.json` and both lockfiles (`npm version
    X --no-git-tag-version`, `cargo update --workspace`).
 2. Merge to `main`.
-3. Push a `vX.Y.Z` tag, or run `release.yml` by hand on `main`. tauri-action then creates
-   the tag and release from the version.
+3. Push a `vX.Y.Z` tag, or run `release.yml` by hand on `main`. Its `draft` job creates
+   the version's release as a draft, the four builds upload into it, and `publish` makes
+   it public (and creates the tag) only once every build succeeded and `latest.json` has
+   all ten platform entries. Until then `releases/latest`, where the updater looks, stays
+   on the previous release.
+4. If a build fails, the release stays a draft: re-run the failed jobs, and `publish`
+   runs again after them. If you bump the version instead, delete the stale draft by
+   hand. To seed a release with a locally built installer, seed it as a draft. If the
+   bundle targets change, update the list of platform keys in `publish` too.
 
 Keep the same updater signing key (`TAURI_SIGNING_PRIVATE_KEY`); rotating it would cut
 every installed copy off from updates.
