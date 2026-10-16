@@ -8,6 +8,7 @@ import type {
   InstallPreview,
   MarketDetail,
   MarketPage,
+  ProfilesState,
   CatalogResponse,
   Descriptor,
   IpcError,
@@ -113,3 +114,32 @@ export const settingsSet = (settings: Settings) =>
 
 /** Emitted by Rust with the full new settings after every successful change. */
 export const SETTINGS_CHANGED = "settings://changed";
+
+// ---- local profiles -------------------------------------------------------------------
+
+export const profileList = () => invoke<ProfilesState>("profile_list");
+export const profileCreate = (name: string, color: string) =>
+  invoke<ProfilesState>("profile_create", { name, color });
+export const profileUpdate = (
+  id: string,
+  change: { name?: string; color?: string },
+  pin?: string | null,
+) =>
+  invoke<ProfilesState>("profile_update", {
+    id,
+    name: change.name ?? null,
+    color: change.color ?? null,
+    pin: pin ?? null,
+  });
+/** `newPin: null` removes the PIN; a profile with one needs `currentPin`. */
+export const profileSetPin = (id: string, currentPin: string | null, newPin: string | null) =>
+  invoke<ProfilesState>("profile_set_pin", { id, currentPin, newPin });
+export const profileSetAvatar = (id: string, dataUrl: string | null, pin?: string | null) =>
+  invoke<ProfilesState>("profile_set_avatar", { id, dataUrl, pin: pin ?? null });
+/** Rejects with kind "locked" for a wrong or missing PIN, "conflict" while playing. */
+export const profileSelect = (id: string, pin?: string | null) =>
+  invoke<ProfilesState>("profile_select", { id, pin: pin ?? null });
+export const profileDelete = (id: string, pin?: string | null) =>
+  invoke<ProfilesState>("profile_delete", { id, pin: pin ?? null });
+/** Emitted by Rust with the new ProfilesState after every profile change. */
+export const PROFILES_CHANGED = "profiles://changed";

@@ -88,6 +88,8 @@ Adapted files:
 - `src-tauri/src/deeplink.rs` — runtime `stremio://` registration
   (`deeplink_set_stremio`); `src/views/addons/*` — install match kinds, the facts table
   and masked addresses (`install-modal.tsx`, `addon-detail.tsx`)
+- `src/views/profiles/*` — the "Who's watching?" picker layout and the avatar resize to
+  a small WebP (`picker-modal`, `avatar-utils.ts`)
 
 ```text
 MIT License

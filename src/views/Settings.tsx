@@ -1,4 +1,5 @@
 import {
+  Users,
   Captions,
   Check,
   Compass,
@@ -27,10 +28,11 @@ import { AdultContentSetting } from "./AdultContentSetting";
 import { SkipAndNextCards } from "./SkipSettings";
 import { SubtitlesSection } from "./SubtitleSettings";
 import { AddonDirectorySettings } from "./addons/DirectorySettings";
+import { ProfilesSettings } from "./profiles/ProfilesSettings";
 
 /** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
  * section shows only once it has a SECTIONS entry, so these stay hidden until then. */
-type ReservedSectionId = "account" | "playback";
+type ReservedSectionId = "playback";
 
 type SectionId =
   | "player"
@@ -40,12 +42,30 @@ type SectionId =
   | "content"
   | "integrations"
   | "about"
+  | "account"
   | ReservedSectionId;
+
+// the section the next Settings view opens on (the sidebar's profile chip asks for one)
+let requestedSection: SectionId | null = null;
+export function openSettingsSection(id: SectionId) {
+  requestedSection = id;
+}
 
 const SECTIONS: {
   group: string;
   items: { id: SectionId; label: string; icon: typeof MonitorPlay; sub: string }[];
 }[] = [
+  {
+    group: "You",
+    items: [
+      {
+        id: "account",
+        label: "Profiles & account",
+        icon: Users,
+        sub: "Who's watching: profiles, pictures and PINs.",
+      },
+    ],
+  },
   {
     group: "Playback",
     items: [
@@ -111,7 +131,11 @@ const SECTIONS: {
 ];
 
 export function SettingsView() {
-  const [active, setActive] = useState<SectionId>("player");
+  const [active, setActive] = useState<SectionId>(() => {
+    const requested = requestedSection;
+    requestedSection = null;
+    return requested ?? "player";
+  });
   const meta = SECTIONS.flatMap((g) => g.items).find((i) => i.id === active)!;
 
   return (
@@ -161,6 +185,7 @@ export function SettingsView() {
             <p className="text-[15px] text-ink-muted">{meta.sub}</p>
           </header>
 
+          {active === "account" && <ProfilesSettings />}
           {active === "player" && <PlayerSection />}
           {active === "subtitles" && <SubtitlesSection />}
           {active === "engine" && <EngineSection />}

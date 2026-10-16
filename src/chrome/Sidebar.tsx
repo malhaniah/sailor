@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useSettings } from "../lib/store";
 import { type RootView, useView } from "../lib/view";
+import { ProfileChip } from "../views/profiles/ProfileChip";
 
 interface NavEntry {
   view: RootView;
@@ -65,6 +66,7 @@ export function Sidebar() {
         <div data-tauri-drag-region className="min-h-8" />
       </div>
 
+      <ProfileChip />
       <div className="hidden px-6 pb-5 text-[11px] leading-relaxed text-ink-subtle/70 lg:block">
         Zeiler hosts no media, indexes no media, and ships no content addon.
       </div>
