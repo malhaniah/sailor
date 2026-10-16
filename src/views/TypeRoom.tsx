@@ -7,7 +7,7 @@ import { HeroCarousel } from "../components/Hero";
 import { Row } from "../components/Row";
 import { EmptyState } from "../components/ui";
 import { catalogDisplayName, catalogTitle, looksAnime } from "../lib/catalogs";
-import { ROOM_TYPES, roomCatalogs, spotlightCatalogs, spotlightGenre } from "../lib/rooms";
+import { roomCatalogs, roomTypes, spotlightCatalogs, spotlightGenre } from "../lib/rooms";
 import { type RowState, leadRow, useCatalogRows } from "../lib/rows";
 import { useAddons, useSettings } from "../lib/store";
 import { useView } from "../lib/view";
@@ -43,16 +43,17 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
   const { openMeta, openBrowse, setView } = useView();
   const hideAnime = settings?.hideAnime ?? false;
   const showAdult = settings?.showAdult ?? false;
+  const hideLiveTv = settings?.hideLiveTv ?? false;
   // the room's catalogs, then a row per spotlight genre of its first genre catalog
   const catalogs = useMemo(() => {
-    const own = roomCatalogs(addons, room, { hideAnime, showAdult });
+    const own = roomCatalogs(addons, room, { hideAnime, showAdult, hideLiveTv });
     return [...own, ...spotlightCatalogs(own, room)];
-  }, [addons, room, hideAnime, showAdult]);
+  }, [addons, room, hideAnime, showAdult, hideLiveTv]);
   const { rows, loadMore, request, version } = useCatalogRows(catalogs);
   // the room's own type when it has catalogs of it (the Anime room may also hold
   // anime catalogs filed under series, whose genres are Cinemeta's)
-  const ownType = ROOM_TYPES[room].find((t) => catalogs.some((c) => c.catalog.type === t));
-  const browseType = ownType ?? catalogs[0]?.catalog.type ?? ROOM_TYPES[room][0];
+  const ownType = roomTypes(room, !hideLiveTv).find((t) => catalogs.some((c) => c.catalog.type === t));
+  const browseType = ownType ?? catalogs[0]?.catalog.type ?? roomTypes(room, !hideLiveTv)[0];
 
   if (catalogs.length === 0) {
     // the built-in Anime Kitsu fills the Anime room; point at its switch when it is off

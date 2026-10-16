@@ -1,9 +1,10 @@
+import { useEffect } from "react";
 import { SearchOverlay } from "./chrome/SearchOverlay";
 import { Sidebar } from "./chrome/Sidebar";
 import { Topbar } from "./chrome/Topbar";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { LibraryProvider } from "./lib/library";
-import { StoreProvider } from "./lib/store";
+import { StoreProvider, useSettings } from "./lib/store";
 import { EmptyState } from "./components/ui";
 import {
   type Frame,
@@ -19,6 +20,7 @@ import { DetailView } from "./views/Detail";
 import { DiscoverView } from "./views/Discover";
 import { HomeView } from "./views/Home";
 import { LibraryView } from "./views/Library";
+import { LiveView } from "./views/Live";
 import { PlayPickerView } from "./views/PlayPicker";
 import { SettingsView } from "./views/Settings";
 import { TypeRoomView } from "./views/TypeRoom";
@@ -36,12 +38,20 @@ export default function App() {
 }
 
 function Shell() {
-  const { stack, top } = useView();
+  const { stack, top, setView } = useView();
+  const { settings } = useSettings();
   // Harbor rule: side chrome hides when the picker or settings sit on top.
   const hideSidebar = top.kind === "picker" || top.kind === "settings";
   const rootFrame = stack.find((f) => ROOT_VIEWS.includes(f.kind as RootView));
   const root = (rootFrame?.kind ?? "home") as RootView;
   const overlays = stack.filter(isOverlay);
+
+  // a room hidden in Settings while it was open: back to Home once Settings closes
+  const hidden =
+    (root === "live" && settings?.hideLiveTv) || (root === "anime" && settings?.hideAnime);
+  useEffect(() => {
+    if (hidden && top.kind !== "settings") setView("home");
+  }, [hidden, top.kind, setView]);
 
   return (
     <div className="relative flex h-full">
@@ -83,7 +93,7 @@ function RootViewHost({ view }: { view: RootView }) {
     case "settings":
       return <SettingsView />;
     case "live":
-      return <ReservedView title="Live TV" />;
+      return <LiveView />;
     default:
       return unreachable(view);
   }

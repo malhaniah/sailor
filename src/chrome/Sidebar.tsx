@@ -16,7 +16,6 @@ interface NavEntry {
   view: RootView;
   label: string;
   icon: typeof Home;
-  disabled?: boolean;
 }
 
 export function Sidebar() {
@@ -29,9 +28,7 @@ export function Sidebar() {
     { view: "movies", label: "Movies", icon: Film },
     { view: "shows", label: "Shows", icon: Tv },
     settings?.hideAnime ? null : { view: "anime", label: "Anime", icon: Sparkles },
-    settings?.hideLiveTv
-      ? null
-      : { view: "home", label: "Live TV", icon: Radio, disabled: true },
+    settings?.hideLiveTv ? null : { view: "live", label: "Live TV", icon: Radio },
   ];
   const collections: NavEntry[] = [
     { view: "library", label: "My Library", icon: Library },
@@ -54,7 +51,7 @@ export function Sidebar() {
       <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-6 pt-3">
         <nav className="flex flex-col gap-1.5">
           {primary.filter(Boolean).map((entry) => (
-            <NavItem key={entry!.label} entry={entry!} active={!entry!.disabled && view === entry!.view} onSelect={setView} />
+            <NavItem key={entry!.label} entry={entry!} active={view === entry!.view} onSelect={setView} />
           ))}
         </nav>
         <div data-tauri-drag-region className="py-2.5">
@@ -87,24 +84,14 @@ function NavItem({
   const Icon = entry.icon;
   return (
     <button
-      disabled={entry.disabled}
-      title={entry.disabled ? `${entry.label} — coming later` : entry.label}
+      title={entry.label}
       onClick={() => onSelect(entry.view)}
       className={`relative flex h-14 items-center justify-center gap-4 rounded-xl text-[16px] transition-colors duration-150 lg:justify-start lg:px-4 ${
-        entry.disabled
-          ? "cursor-not-allowed text-ink-subtle/50"
-          : active
-            ? "bg-elevated text-ink"
-            : "text-ink-muted hover:bg-elevated/50 hover:text-ink"
+        active ? "bg-elevated text-ink" : "text-ink-muted hover:bg-elevated/50 hover:text-ink"
       }`}
     >
       <Icon size={20} strokeWidth={1.7} />
       <span className="hidden flex-1 text-left lg:inline">{entry.label}</span>
-      {entry.disabled && (
-        <span className="hidden rounded-full bg-raised px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-ink-subtle lg:inline">
-          soon
-        </span>
-      )}
     </button>
   );
 }

@@ -21,6 +21,7 @@ export function CatalogRows<R extends CatalogRef>({
   title = catalogTitle,
   kicker = (ref) => ref.addon.manifest.name,
   keep,
+  dedup = true,
 }: {
   refs: R[];
   rows: Map<string, RowState>;
@@ -35,12 +36,19 @@ export function CatalogRows<R extends CatalogRef>({
   kicker?: (ref: R) => string;
   /** whether a loaded row belongs here (e.g. not mostly anime in Movies) */
   keep?: (state: RowState) => boolean;
+  /** leave titles out of a row when an earlier row shows them (not for channel
+   * line-ups, whose categories overlap by design) */
+  dedup?: boolean;
 }) {
   const loaded = refs
     .map((ref) => ({ key: ref.key, state: rows.get(ref.key) }))
     .filter((r): r is { key: string; state: RowState } => !!r.state)
     .filter((r) => !keep || keep(r.state));
-  const shown = new Map(dedupRows(loaded, reserved).map((r) => [r.key, r.items]));
+  const shown = new Map(
+    dedup
+      ? dedupRows(loaded, reserved).map((r) => [r.key, r.items])
+      : loaded.filter((r) => r.state.items.length > 0).map((r) => [r.key, r.state.items]),
+  );
 
   return (
     <>
@@ -57,7 +65,8 @@ export function CatalogRows<R extends CatalogRef>({
             key={ref.key}
             title={title(ref)}
             kicker={kicker(ref)}
-            min={148}
+            // channel logos and stills are wide: fewer, larger cells
+            min={items[0]?.posterShape === "landscape" ? 240 : 148}
             onEndReached={() => loadMore(ref.key)}
           >
             {items.map((meta, i) => (
