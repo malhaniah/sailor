@@ -1,0 +1,266 @@
+{
+ "area": "Embedded playback backend: video rendered inside the Zeiler window, per OS (Windows, macOS, Linux), with libmpv vendoring and bundling, and fallback to external mpv",
+ "harbor_approach": "HARBOR v0.8.5 (paths are relative to the Harbor checkout at /tmp/claude-0/-home-user-sailor/3ec38e8b-1ace-545e-a82a-ac4418d8c2a1/scratchpad/ref/harbor)\n\n1) Rust core, src-tauri/src/mpv.rs (1061 lines). There is one global MpvState holding a tokio Mutex<Option<MpvSession{mpv: Arc<Mpv>, embedded}>>, and a new Mpv core is created on every start.\n- IPC commands:\n  - mpv_probe: Mpv::new() succeeds \u2192 {available, binary, version, error}.\n  - mpv_start{args:{url, startAtSec, subtitles:[{url,lang}], anime4k, hdrToSdr, embed, anime4kShaders}}\n  - mpv_command{cmd: Value[]} and mpv_set_property{name, value}. Neither has an allow-list; values are stringified.\n  - mpv_set_geometry{geom:{screenX, screenY, w, h}}\n  - mpv_set_clip_rects is a no-op.\n  - mpv_force_below, mpv_sub_add, sub_download, mpv_screenshot_data_url, mpv_save_screenshot, mpv_on_pip_changed, mpv_stop.\n- Events go out on \"mpv://event\" as {event:\"property-change\",name,data} | end-file | file-loaded | playback-restart | seek | shutdown | log. time-pos is throttled to 200 ms.\n- Observed properties (mpv.rs:94-110): time-pos, duration, pause, eof-reached, track-list(Node), volume, mute, chapter-list, sub-delay, audio-delay, sub-text, sub-start, af, dwidth, dheight.\n- apply_pre_init (mpv.rs:168-234) is OS-specific:\n  - macOS embed: hwdec=videotoolbox-copy, force-window=no.\n  - Linux: hwdec=auto-safe, force-window=yes.\n  - Windows: hwdec=auto, force-window=immediate. `wid` is set only on Windows; non-embedded mode sets ontop=yes.\n- force_c_numeric_locale (mpv.rs:133-141) calls setlocale(LC_NUMERIC,\"C\") on unix.\n- mpv_start (mpv.rs:236-391):\n  - Windows/Linux use vo=\"gpu-next,\" (the trailing comma lets mpv fall back through its default VO list). macOS embedding uses vo=libmpv plus the render API.\n  - Cache: cache-secs 60, demuxer 128/32 MiB, cache-on-disk in the app cache dir, reconnect lavf options.\n  - When embedded it sets sub-visibility=no, because the webview draws subtitles itself from sub-text.\n\n2) Windows surface\n- get_main_hwnd_str (mpv.rs:860-866) passes the main HWND as `wid`.\n- At startup, lib.rs:49-76 and :247 call make_main_transparent, which sets the WebView2 ICoreWebView2Controller2::SetDefaultBackgroundColor alpha to 0. webview_helpers.rs exposes webview_reapply_transparency.\n- position_embedded_mpv_child (mpv.rs:931-1061):\n  - EnumChildWindows finds windows with class \"mpv\" (or an empty class with a \"Harbor*\" title).\n  - It adds WS_EX_TRANSPARENT and a SetWindowSubclass proc that returns HTTRANSPARENT for WM_NCHITTEST, then SetWindowPos(HWND_BOTTOM, rect).\n  - Leftover children are moved to -32000 and hidden.\n- mpv_force_below (mpv.rs:575-628) re-pins the window to HWND_BOTTOM.\n- Frontend:\n  - src/lib/player/mpv.ts:272-325 polls getEmbedRect (CSS px \u00d7 dpr) every 250 ms, and on window resize, onResized/onMoved and a \"kick\" schedule.\n  - src/views/player/hooks/use-fullscreen.ts:46-95 calls window_fullscreen_enter/exit (fullscreen.rs), then re-applies transparency and force_below at 60\u20264200 ms, and every 2 s while fullscreen.\n- Unlike Zeiler, the DLL is linked normally with no DELAYLOAD (build.rs:6-16 only adds a link-search path and warns if it is missing), so libmpv-2.dll is a hard load-time dependency.\n\n3) macOS surface, src-tauri/src/mpv_render_mac.rs (320 lines)\n- install(mpv_handle, ns_window) runs on the main thread and does the following:\n  - Creates an NSOpenGLView (GL 3.2 core, double-buffered).\n  - Inserts it below the contentView's first subview. That subview is the WKWebView; this still holds in wry 0.57, where contentView is WryWebViewParent with the WKWebView as a subview (wry-0.57.0/src/wkwebview/mod.rs:665-690).\n  - Sets WKWebView \"drawsBackground\"=NO via KVC (a private key) and makes its layer non-opaque.\n  - Creates an mpv OpenGL render context with get_proc_address = dlsym(RTLD_DEFAULT).\n  - The update callback dispatch_async_f's to the main queue, and render_now draws to FBO 0 at bounds\u00d7backingScaleFactor, then flushBuffer.\n- resize_to flips y. uninstall restores webview opacity. A stale embed is deliberately leaked with mem::forget to avoid use-after-free.\n- mpv.rs:300-333 and :829-858 drive install, uninstall and quit through app.run_on_main_thread with 3 s and 4 s timeouts.\n- views/player.tsx:808-815 keeps the stage black until dwidth/dheight > 0.\n- Likely bug, needs verification: mpv_set_geometry's mac branch (mpv.rs:539-552) passes dpr-scaled pixels into resize_to, which expects NSView points.\n\n4) Linux: Harbor does NOT embed\n- get_main_hwnd_str returns None on Linux (mpv.rs:897-900).\n- views/player/player-utils.ts:48 returns the HTML5 bridge unconditionally on Linux, and use-player-bridge.ts:71 forces embed=false.\n- Playback therefore uses the WebKitGTK <video> element plus GStreamer (deb depends on gstreamer1.0-plugins-good/bad/libav, tauri.conf.json:49-58), with hls.js and mpegts.js.\n- The settings note LinuxEngineNote (views/settings/player-panel/engine-section.tsx) says mpv opens in its own window, which contradicts the code. The README lists Linux as \"in testing\".\n- build.rs:51-88 still panics if libmpv is missing on Linux and hard-links it. The deb depends on \"libmpv2 | libmpv1\".\n\n5) Fallback\n- pickBridge \"auto\" chooses mpv if mpv_probe succeeds, otherwise HTML5. use-player-bridge.ts:102-111 retries with mpv after HTML5 decode errors.\n- There is no external-mpv CLI fallback.\n- Settings: playerEngine auto|html5|mpv (default auto) and playerMpvEmbed (default true; the _mpvEmbedV3 migration forces it on, lib/settings.tsx:415).\n\n6) Vendoring and CI\n- Windows:\n  - scripts/fetch-libmpv.mjs downloads one libmpv-2.dll that Harbor re-hosts at github.com/harborstremio/harbor/releases/download/mpvdll/libmpv-2.dll, pinned to SHA-256 e9c87d19\u20260467. Its provenance is opaque.\n  - mpv.lib, libmpv.def, libmpv.dll.a and the headers are committed in src-tauri/libmpv/.\n  - The legacy src-tauri/setup-libmpv.ps1 pulls an unpinned nightly.link shinchiro x86_64-v3 (AVX2) zip.\n  - tauri.windows.conf.json maps libmpv/libmpv-2.dll so it lands beside the exe.\n- macOS:\n  - The workflow runs `brew install mpv pkg-config`. build.rs:13-46 adds Homebrew lib dirs and rpaths (@executable_path/../Frameworks, /opt/homebrew/lib, /usr/local/lib).\n  - Nothing in the repo copies dylibs into the .app, and there is no macOS.frameworks key. Judging from the public repo, the dmg depends on Homebrew libmpv at runtime, yet the README says libmpv is \"bundled\". The real release pipeline is not in the repo, so this is uncertain.\n- Linux: the workflow installs apt libmpv-dev.\n- .github/workflows/tauri-build.yml is workflow_dispatch only, uploads artifacts, and does not sign libraries.\n\n7) Legacy or unused pieces\n- modal_overlay.rs (a separate always-on-top webview for menus) is disabled (views/player.tsx:1071 useOverlayPopups={false}).\n- pip.rs window_pip_enter/exit shrinks the main window to 480x320 always-on-top, so the embedded video stays embedded in PiP.",
+ "zeiler_today": "ZEILER (/home/user/sailor)\n\nWhat exists:\n- crates/zeiler-player/src/embedded.rs (376 lines, feature `embedded` \u2192 libmpv2 6.0 + serde_json):\n  - An actor thread (mpsc Cmd: Load/SetProperty/Command/Quit) plus an mpv-events thread; the time-pos throttle is 200 ms.\n  - Locked-down options: config=no, load-scripts=no, ytdl=no, no input bindings, idle and keep-open, cache with demuxer 128/32 MiB, lavf reconnect, vo=gpu-next (with NO fallback list), hwdec=auto-safe. When given, wid is set together with force-window=immediate.\n  - It observes 15 properties; track-list and chapter-list are observed as JSON strings and re-parsed.\n  - PlayerEvent is {property | start-file | file-loaded | seek | playback-restart | end-file{reason} | error | shutdown}.\n  - Per-load headers are set via change-list clr/append; user-agent, referrer, start and force-media-title are also set per load.\n  - The unix LC_NUMERIC setlocale is still a TODO (lines 175-177).\n- src-tauri/src/commands/mpv.rs (540 lines):\n  - IPC commands: player_embedded_available, player_embedded_start{request}, player_embedded_stop, player_set_geometry{geometry:{x,y,width,height}} (physical px, client-relative), player_embedded_set_property{name,value}, player_embedded_command{args}.\n  - Allow-lists: PROPERTY_ALLOW (pause, volume, mute, speed, aid, sid, vid, sub-delay, audio-delay, sub-scale, sub-pos) and COMMAND_ALLOW (seek, cycle, stop, frame-step, frame-back-step). Only http(s) URLs are accepted.\n  - The real implementation exists only for cfg(all(windows, feature=\"embedded\")):\n    - ensure_libmpv tries LoadLibraryW on exe-dir\\libmpv-2.dll, then CARGO_MANIFEST_DIR\\libmpv, then the default search order, cached in a OnceLock.\n    - set_webview_transparent runs on every start and is never reverted.\n    - EmbeddedPlayer::spawn(Some(HWND)) emits \"player://event\".\n    - A pin thread polls 60\u00d750 ms. sync_child finds class \"mpv\", adds WS_EX_TRANSPARENT and an HTTRANSPARENT subclass, applies HWND_BOTTOM with the last rect, and parks leftover children.\n  - Every other OS or configuration gets a stub that reports available=false.\n- src-tauri/build.rs:\n  - Windows + embedded: requires src-tauri/libmpv/mpv.lib (escape hatch ZEILER_SKIP_LIBMPV_CHECK), links /DELAYLOAD:libmpv-2.dll + delayimp.lib, and copies the DLL beside the dev exe.\n  - It writes a placeholder libmpv-2.dll on every Windows build so the bundle resource mapping compiles.\n- scripts/fetch-libmpv.mjs (Windows only; a no-op elsewhere):\n  - Downloads zhongfly/mpv-winbuild tag 2026-10-15-5757d69708, asset mpv-dev-lgpl-x86_64-20261015-git-5757d69708.7z, SHA-256 5417be26\u2026eabd (an LGPL build, not the AVX2 one).\n  - Extracts with bsdtar or 7z, generates mpv.lib from mpv.def via lib.exe found with vswhere, and writes a NOTICE.txt stamp.\n- src-tauri/tauri.embedded.conf.json is an opt-in overlay: its beforeBuildCommand also runs the fetch, and it maps the resource libmpv/libmpv-2.dll to libmpv-2.dll (beside zeiler.exe on Windows).\n- src-tauri/src/lib.rs:47-49 and :73-78 register PlayerState and the commands.\n- src/pages/Player.tsx (780 lines) and src/lib/player-ipc.ts:\n  - A complete overlay UI: seek bar, volume, audio and subtitle track menus, buffering %, torrent stats, keyboard shortcuts, fullscreen via getCurrentWindow().setFullscreen.\n  - It sets document backgrounds transparent and keeps the video rect in sync via ResizeObserver \u00d7 devicePixelRatio.\n  - It resolves torrents via engine_resolve and falls back to player_play (external mpv) when embedded is unavailable.\n  - src/main.tsx:10-24 mounts it when location.hash starts with #/player, replacing <App/> and outside StrictMode.\n- External backend, crates/zeiler-player/src/lib.rs: spawns mpv with --playlist=- (URL on stdin, headers on argv) and searches known install locations. It has no IPC and no progress reporting.\n\nWhat is missing or broken:\n- Nothing in production navigates to #/player. src/views/PlayPicker.tsx:101-124 calls playerPlay (external mpv) directly; the page is only reachable through the dev hook VITE_ZEILER_AUTOPLAY (main.tsx:26-30).\n- ci.yml never compiles the embedded feature, and release.yml never passes --features embedded or the overlay. The release body says \"Playback needs mpv\".\n- tauri.conf.json: Linux deb depends [\"mpv\"]; macOS minimumSystemVersion 12.0 with ad-hoc signing.\n- Settings (src-tauri/src/state.rs:13-39) only has mpv_path, with no backend choice. The UI copy says embedded \"hasn't landed\" (src/views/Settings.tsx:178).\n- docs/ARCHITECTURE.md:16 and :110-123 plan v0.2 Windows wid, v0.3 macOS NSOpenGLView render API and Linux GtkGLArea. THIRD-PARTY-NOTICES.md says libmpv is not bundled yet.\n\nStatus per OS:\n- Windows: implemented, but unreachable from the UI and not shipped.\n- macOS: nothing beyond the stub.\n- Linux: nothing beyond the stub.",
+ "gaps": [
+  "Embedded page is unreachable: PlayPicker.play() (src/views/PlayPicker.tsx:86-140) calls player_play (external) for both url and infoHash streams; no code sets #/player outside the dev hook, so even an `embedded` build never plays in-window.",
+  "Entering the player destroys app navigation: src/main.tsx swaps <App/> for <PlayerPage/>, and the frame stack lives in React state (src/lib/view.tsx ViewProvider), so Back from the player lands on Home instead of the stream picker or detail page.",
+  "Route contract: Player.tsx engineResolve omits fileMustInclude (PlayPicker passes it), and direct stream URLs plus proxy headers (possibly debrid tokens) would ride in location.hash and history. A one-shot in-memory handoff is needed instead.",
+  "Windows release does not ship embedded: release.yml has no fetch step, no --features embedded and no tauri.embedded.conf.json; CI never compiles the cfg(all(windows, feature=\"embedded\")) code, so it can bitrot; embedded.rs has zero tests.",
+  "Robustness vs Harbor: vo=gpu-next has no fallback list (Harbor uses \"gpu-next,\"); a libmpv init or VO failure ends in an error screen instead of falling back to external mpv (the fallback only triggers when the DLL is missing); there is no re-assertion of WebView2 transparency or HWND_BOTTOM after fullscreen or DPI changes (Harbor: webview_reapply_transparency + mpv_force_below on a kick schedule); the webview stays transparent after stop; keyboard focus after mpv child-window creation is unverified.",
+  "No backend preference setting (auto/built-in/external), and no status in Settings showing whether libmpv loaded or why not.",
+  "macOS: no surface at all. Missing: render-API NSOpenGLView path, main-thread install/teardown ordering, LC_NUMERIC=C, dwidth/dheight observation for stage transparency, points-vs-pixels geometry, libmpv dylib vendoring (install names @rpath, Frameworks bundling, codesign) and a minimumSystemVersion consistent with the bundled dylibs. libmpv2 6.0's RenderContext<'_> borrows &Mpv, which differs from the libmpv2 4.x API Harbor used.",
+  "Linux: no surface at all, and Harbor offers no precedent (it uses HTML5 on Linux). libmpv2 6.0 requires client API 2.x, i.e. mpv >= 0.35 / libmpv.so.2 (libmpv2-6.0.0/src/mpv.rs:329-333 returns VersionMismatch otherwise). The release runner ubuntu-22.04 only has mpv 0.34 / libmpv1, and a hard DT_NEEDED on libmpv.so.2 would stop the app from starting where libmpv is absent.",
+  "Licensing and packaging: no source offer or provenance in THIRD-PARTY-NOTICES for a bundled LGPL (Windows) or GPL (Homebrew-derived macOS) libmpv/FFmpeg; NOTICE.txt is not shipped in the installer; README, release notes and Settings copy still say mpv is required.",
+  "Events the UI will need are not observed: dwidth/dheight (macOS transparency gate, aspect), demuxer-cache-state (buffer bar), sub-text (only if the subtitle area chooses webview-rendered subs as Harbor does)."
+ ],
+ "implementation_plan": [
+  {
+   "step": "1. Make the in-app Player page the only playback entry point (all OSes)",
+   "details": "Add src/lib/playback-handoff.ts with stashPlayback(launch) returning a crypto.randomUUID() id and takePlayback(id) as a one-shot. PlayerLaunch = PlaybackRequest plus {infoHash, fileIdx, sources, filename, fileMustInclude, title}.\n\nPlayPicker.play(): for stream.url and stream.infoHash, stash the launch and set location.hash = `#/player?h=${id}`. Do not call engineResolve or playerPlay here; Player resolves torrents and shows TorrentStats. Leave the externalUrl and ytId paths unchanged.\n\nPlayer.tsx: read `h` first. Keep the legacy query parsing only for the VITE_ZEILER_AUTOPLAY dev hook. Pass fileMustInclude to engineResolve.\n\nmain.tsx: keep <App/> mounted but display:none while the player is active (wrap it in a div with the hidden attribute), and render <PlayerPage/> next to it, outside StrictMode. The view stack then survives, and Back (history.back) returns to the picker. Because Player.tsx already sets html/body/#root backgrounds to transparent, the hidden App paints nothing.",
+   "files": [
+    "src/lib/playback-handoff.ts",
+    "src/views/PlayPicker.tsx",
+    "src/pages/Player.tsx",
+    "src/main.tsx",
+    "src/lib/player-ipc.ts"
+   ]
+  },
+  {
+   "step": "2. Backend preference and fallback chain",
+   "details": "state.rs Settings: add player_backend: PlayerBackend {Auto, Embedded, External}, serialized as camelCase \"playerBackend\", default Auto.\n\nReplace player_embedded_available with player_backends() returning {embedded:{available, reason?: string, libmpvVersion?: string}, external:{available, path?}}. Keep the old command for one release or update player-ipc.ts.\n\nPlayer.tsx decision:\n- Auto: embedded if available. If player_embedded_start rejects with kind \"player\" before file-loaded, fall back to player_play when external is available, and say so on screen.\n- Embedded: show the error with the reason.\n- External: always external.\n\nSettings.tsx PlayerSection: add a radio group (Auto / Built-in / External mpv), show embedded status and reason, keep the mpv path field for external, and update the copy.",
+   "files": [
+    "src-tauri/src/state.rs",
+    "src-tauri/src/commands/mpv.rs",
+    "src-tauri/src/commands/player.rs",
+    "src-tauri/src/lib.rs",
+    "src/lib/player-ipc.ts",
+    "src/lib/types.ts",
+    "src/views/Settings.tsx",
+    "src/pages/Player.tsx"
+   ]
+  },
+  {
+   "step": "3. Harden the Windows embedded path, adapting Harbor's proven tricks",
+   "details": "crates/zeiler-player embedded.rs:\n- Use vo=\"gpu-next,\" (trailing comma so mpv falls back through its default VO list).\n- Observe dwidth and dheight, plus demuxer-cache-state as JSON.\n- Replace `wid: Option<i64>` with an EmbeddedOptions{surface: Surface::{Wid(i64), RenderApi, Detached, Headless}, vo_override, ao_override}. Surface::RenderApi means vo=libmpv, force-window=no; Headless means vo=null, ao=null for tests.\n- On unix, call libc::setlocale(LC_NUMERIC, c\"C\") before Mpv::with_initializer, adding `libc` as an optional dependency under `embedded`.\n\ncommands/mpv.rs Windows:\n- New IPC player_surface_refresh. It re-applies SetDefaultBackgroundColor(A=0), re-runs sync_child (HWND_BOTTOM plus last geometry) and calls window.set_focus(). This adapts Harbor's webview_reapply_transparency + mpv_force_below.\n- Call set_focus once after the pin succeeds.\n- Restore an opaque default background on stop, or move transparency to app setup as Harbor does (lib.rs:247). Pick one and document it.\n\nPlayer.tsx: after toggleFullscreen, and on getCurrentWindow().onResized/onMoved/onScaleChanged, call sendGeometry plus player_surface_refresh on a kick schedule (0, 60, 200, 500, 1000, 2000 ms), as Harbor's use-fullscreen.ts does.\n\nRegister the new commands in lib.rs. Split commands/mpv.rs into commands/mpv/{mod.rs, windows.rs, macos.rs, linux.rs, stub.rs} so each OS imp is reviewable.",
+   "files": [
+    "crates/zeiler-player/src/embedded.rs",
+    "crates/zeiler-player/Cargo.toml",
+    "src-tauri/src/commands/mpv.rs",
+    "src-tauri/src/lib.rs",
+    "src/pages/Player.tsx",
+    "src/lib/player-ipc.ts"
+   ]
+  },
+  {
+   "step": "4. Ship embedded as the default on Windows releases",
+   "details": "release.yml, windows-latest entry:\n- Before tauri-action, add an actions/cache step for src-tauri/libmpv keyed on hashFiles('scripts/fetch-libmpv.mjs'), then run `node scripts/fetch-libmpv.mjs`.\n- Set args to `--features embedded --config src-tauri/tauri.embedded.conf.json --config src-tauri/tauri.release.conf.json`. Verify that @tauri-apps/cli 2.12 accepts a repeated --config. If not, rename the overlay to src-tauri/tauri.windows.conf.json, which Tauri auto-merges on Windows as Harbor does, and keep --features embedded in the args.\n- Leave the macOS and Linux entries unchanged until steps 6-8.\n\ntauri.embedded.conf.json: also map libmpv/NOTICE.txt to licenses/libmpv-NOTICE.txt.\n\nci.yml, Windows matrix only:\n- `cargo clippy -p zeiler -p zeiler-player --all-targets --features zeiler/embedded -- -D warnings` with env ZEILER_SKIP_LIBMPV_CHECK=1 (check mode never links).\n- `node scripts/fetch-libmpv.mjs` followed by `cargo test -p zeiler-player --features embedded`.\n\nUpdate the release body and README (Windows: playback built in, mpv optional), CONTRIBUTING (feature flag plus fetch script) and THIRD-PARTY-NOTICES (exact zhongfly tag and archive SHA, LGPL-2.1+, a link to the mpv/FFmpeg sources and build scripts as the source offer, and a list of Harbor-adapted files with the MIT notice).",
+   "files": [
+    ".github/workflows/release.yml",
+    ".github/workflows/ci.yml",
+    "src-tauri/tauri.embedded.conf.json",
+    "README.md",
+    "CONTRIBUTING.md",
+    "THIRD-PARTY-NOTICES.md",
+    "docs/ARCHITECTURE.md"
+   ]
+  },
+  {
+   "step": "5. Headless tests for the mpv actor (run in the Linux container and on Windows CI)",
+   "details": "Add crates/zeiler-player/tests/embedded.rs, gated with #![cfg(feature = \"embedded\")]. Spawn with Surface::Headless (vo=null, ao=null) and collect events through an mpsc sink. Cases:\n- (a) Load `av://lavfi:sine=frequency=440:duration=1`. Expect StartFile, then FileLoaded, a duration property of about 1.0 and EndFile{eof}. The scheme guard lives in the IPC layer, so lavfi URLs are fine in the crate.\n- (b) `av://lavfi:testsrc=duration=2`: track-list arrives as a JSON array containing a video track.\n- (c) set_property pause=true produces a pause=true property event; command [seek, 1, absolute] produces Seek or PlaybackRestart.\n- (d) Run a std TcpListener HTTP server on 127.0.0.1 that serves a tiny WAV or MKV. Assert that a custom header from request.headers, the user-agent and the referrer arrived (this validates change-list append), and that a second load without headers does not resend them.\n- (e) quit() produces Shutdown.\n\nIn the ci.yml ubuntu job, add `libmpv-dev` to apt (Ubuntu 24.04 ships mpv 0.37, i.e. libmpv.so.2) and run `cargo test -p zeiler-player --features embedded`.",
+   "files": [
+    "crates/zeiler-player/tests/embedded.rs",
+    "crates/zeiler-player/Cargo.toml",
+    ".github/workflows/ci.yml"
+   ]
+  },
+  {
+   "step": "6. macOS embedded surface via the libmpv render API (adapt Harbor mpv_render_mac.rs, keeping its MIT notice)",
+   "details": "New src-tauri/src/commands/mpv/macos.rs ported from Harbor mpv_render_mac.rs:\n- install: create the NSOpenGLView (3.2 core), add it below the first subview of contentView (the WKWebView inside WryWebViewParent), set the WKWebView drawsBackground=NO and its layer non-opaque, and create the render context.\n- The update callback does dispatch_async_f to the main queue; render_now uses bounds\u00d7backingScaleFactor; resize_to flips y; uninstall restores opacity.\n- All of it runs through app.run_on_main_thread with timeouts, as in Harbor mpv.rs:300-333 and :829-858.\n\nzeiler-player: Surface::RenderApi sets vo=libmpv, force-window=no, hwdec=videotoolbox-copy. Expose the core to the shell: spawn returns the Arc<Mpv> through the init channel, or add EmbeddedPlayer::render_core().\n\nlibmpv2 6.0's Mpv::create_render_context returns RenderContext<'_> tied to &Mpv. Keep the render context and the Arc<Mpv> in one holder (unsafe 'static extension with a documented drop order), or call libmpv2_sys::mpv_render_context_create directly as Harbor effectively did with libmpv2 4.x.\n\nTeardown order: on the main thread with the GL context current, free the render context, then quit the core. Never drop the core while the GL view is installed.\n\nGeometry: send logical CSS px on macOS (NSView points) and keep physical px on Windows. Add an OS flag or a scale divisor in set_geometry. Do not copy Harbor's dpr-scaled values; that likely breaks on Retina, so verify.\n\nPlayer.tsx: on macOS keep the stage black until dwidth>0 && dheight>0, as Harbor views/player.tsx:808-815 does.\n\nsrc-tauri/Cargo.toml: under [target.'cfg(target_os=\"macos\")'.dependencies] add optional objc2 0.6, objc2-foundation 0.3 (NSString, NSValue, NSGeometry) and objc2-app-kit 0.3 (NSOpenGL, NSOpenGLView, NSView, NSWindow, NSResponder), matching the 0.6.5 and 0.3.2 versions already in Cargo.lock via wry, and add them to the `embedded` feature.",
+   "files": [
+    "src-tauri/src/commands/mpv/macos.rs",
+    "src-tauri/src/commands/mpv/mod.rs",
+    "crates/zeiler-player/src/embedded.rs",
+    "src-tauri/Cargo.toml",
+    "Cargo.toml",
+    "src/pages/Player.tsx",
+    "THIRD-PARTY-NOTICES.md"
+   ]
+  },
+  {
+   "step": "7. Vendor and bundle a self-contained libmpv for macOS",
+   "details": "Produce the bundle once with a new workflow .github/workflows/libmpv-macos.yml (workflow_dispatch; macos-latest arm64 and macos-15-intel), using one of:\n- (a) Build mpv + FFmpeg from source with MACOSX_DEPLOYMENT_TARGET=12.0. Preferred, because it keeps minimumSystemVersion 12.0 honest.\n- (b) `brew install mpv dylibbundler`, then `dylibbundler -cd -of -b -x $(brew --prefix mpv)/lib/libmpv.2.dylib -d out -p @rpath/`, set the libmpv id to @rpath/libmpv.2.dylib, run `codesign --force -s -` on every dylib, and raise bundle.macOS.minimumSystemVersion to the runner's macOS. Homebrew bottles carry minos equal to the runner OS.\n\nIn both cases, check `ffmpeg -buildconf` for no --enable-nonfree, then tar and upload to a Zeiler release tag such as libmpv-macos-<mpvver>-<arch>. This follows Harbor's re-hosted-binary idea, but with recorded provenance.\n\nscripts/fetch-libmpv.mjs, darwin branch: pick the archive by process.arch, verify a pinned SHA-256 per arch, and extract into src-tauri/libmpv-macos/ with a libmpv.dylib symlink so `-lmpv` resolves and NOTICE.txt. Generate src-tauri/tauri.macos.embedded.conf.json listing every dylib under bundle.macOS.frameworks (paths to .dylib), or under bundle.macOS.files as \"Frameworks/<name>\".\n\nbuild.rs (macOS + CARGO_FEATURE_EMBEDDED):\n- cargo:rustc-link-search=native=src-tauri/libmpv-macos.\n- cargo:rustc-link-arg=-Wl,-rpath,@executable_path/../Frameworks.\n- A dev rpath to the vendor dir.\n- Panic with a fetch hint when the dylib is missing, unless ZEILER_SKIP_LIBMPV_CHECK is set.\n\nrelease.yml, macOS entries: fetch step plus `--features embedded --config src-tauri/tauri.macos.embedded.conf.json`. After the build, run `otool -L` on the binary and assert no /opt/homebrew or /usr/local paths, then `codesign --verify --deep --strict` on the .app. Add .gitignore entries for src-tauri/libmpv-macos/ and the generated conf.",
+   "files": [
+    ".github/workflows/libmpv-macos.yml",
+    "scripts/fetch-libmpv.mjs",
+    "src-tauri/build.rs",
+    "src-tauri/tauri.macos.embedded.conf.json",
+    ".github/workflows/release.yml",
+    "src-tauri/tauri.conf.json",
+    ".gitignore",
+    "THIRD-PARTY-NOTICES.md"
+   ]
+  },
+  {
+   "step": "8. Linux: external mpv stays the default now; embedded is a later phase",
+   "details": "Phase A, ship now:\n- Keep external mpv as the Linux default, with deb depends [\"mpv\"] as today. Linux still goes through the in-app Player page from step 1, which shows the external state.\n- Optional, and requires no libmpv linking: have the external backend add `--input-ipc-server=$XDG_RUNTIME_DIR/zeiler-mpv-<pid>.sock` and read mpv JSON IPC (observe_property time-pos/duration/track-list). The UI then gets progress and tracks for continue-watching on Linux.\n\nPhase B, embedded, in commands/mpv/linux.rs:\n- Take window.default_vbox() (a gtk::Box holding the WebKitWebView), remove the webview and add a gtk::Overlay. Its main child is a gtk::GLArea and its overlay child is the webview, with webview.set_background_color(&gdk::RGBA::new(0.,0.,0.,0.)).\n- On GLArea realize: make_current, then create the mpv render context (OpenGL; get_proc_address via dlsym of eglGetProcAddress or glXGetProcAddressARB; pass RenderParam::X11Display or WaylandDisplay for hwdec interop).\n- On render: glGetIntegerv(GL_FRAMEBUFFER_BINDING), then render with flip_y. The mpv update callback calls glib::MainContext::default().invoke(move || area.queue_render()).\n- Position the GLArea with margins in logical px. Set LC_NUMERIC=C after GTK init. gtk 0.18, gdk 0.18 and webkit2gtk 2.0 are already in Cargo.lock through tauri.\n\nPhase B packaging:\n- Build the Linux release on debian:12 (container job: glibc 2.36, libmpv-dev 0.35.1, libwebkit2gtk-4.1-dev) or on ubuntu-24.04, not 22.04.\n- deb: depends [\"libmpv2\"] and recommends [\"mpv\"] (Tauri DebConfig has recommends). rpm: depends on mpv-libs from RPM Fusion; verify the exact name.\n- AppImage: linuxdeploy will bundle libmpv.so.2 and its FFmpeg deps because of DT_NEEDED. Check size and libva/driver interop, or keep AppImage on external mpv.\n- Alternative: replace libmpv2 with a libloading-based binding of roughly 20 functions (mpv_create, initialize, set_option_string, set_property, command, observe_property, wait_event, terminate_destroy, render_context_*). One binary built on 22.04 would then start everywhere and fall back to external when libmpv.so.2 is absent.",
+   "files": [
+    "src-tauri/src/commands/mpv/linux.rs",
+    "crates/zeiler-player/src/lib.rs",
+    "src-tauri/tauri.conf.json",
+    ".github/workflows/release.yml",
+    "src-tauri/Cargo.toml"
+   ]
+  },
+  {
+   "step": "9. Docs and notices sweep",
+   "details": "- docs/ARCHITECTURE.md: Playback row, IPC list (player_backends, player_surface_refresh, player://event), milestones per OS.\n- README platform table: Windows has built-in playback; macOS and Linux show their status.\n- CONTRIBUTING: fetch-libmpv per OS, `--features embedded`, ZEILER_SKIP_LIBMPV_CHECK, how to run the headless tests.\n- Update the crate description in crates/zeiler-player/Cargo.toml and the lib.rs module docs.\n- THIRD-PARTY-NOTICES: per-OS libmpv build provenance and source offers, plus a list of files adapted from Harbor (MIT).",
+   "files": [
+    "docs/ARCHITECTURE.md",
+    "README.md",
+    "CONTRIBUTING.md",
+    "THIRD-PARTY-NOTICES.md",
+    "crates/zeiler-player/Cargo.toml",
+    "crates/zeiler-player/src/lib.rs"
+   ]
+  }
+ ],
+ "risks": [
+  "WebView2 composition quirks: transparency and the HWND_BOTTOM pinning can be lost after fullscreen, DPI changes, monitor moves or minimize/restore. Harbor works around this with repeated re-assertion; only real Windows testing proves it.",
+  "VO/GPU failures (RDP sessions, old GPUs, VMs) when vo=gpu-next has no fallback list. Use \"gpu-next,\" and surface a fallback to external mpv.",
+  "The mpv child window may steal keyboard focus on creation, breaking Space/arrow shortcuts. Re-focus the main window after pinning and verify.",
+  "DELAYLOAD: any libmpv symbol call before ensure_libmpv succeeds raises a structured exception (crash). Keep every mpv call behind the probe. The placeholder DLL that build.rs writes must never pass as real (LoadLibrary rejects it).",
+  "macOS render API: NSOpenGL is deprecated (it still works via GL-on-Metal but could be removed); KVC drawsBackground is a private key; the render-context lifetime and teardown order (free on the main thread with GL current, before destroying the core) are easy to get wrong. Harbor leaks stale contexts to dodge use-after-free. libmpv2 6.0's lifetime-bound RenderContext needs unsafe plumbing.",
+  "Harbor's macOS geometry appears to pass dpr-scaled pixels as NSView points; copying it verbatim would misplace or crop video on Retina.",
+  "macOS dylib bundling: absolute Homebrew install names left in the binary or libs (the app works only on machines with Homebrew mpv, which seems to be Harbor's state per its public repo), codesign invalidated by install_name_tool, Homebrew bottle minos above minimumSystemVersion 12.0, roughly 50-100 MB larger dmg, and GPL source-offer obligations for Homebrew FFmpeg (acceptable under GPL-3.0, but nonfree must be excluded).",
+  "Linux: libmpv2 6.0 rejects libmpv API 1.x (Ubuntu 22.04's mpv 0.34). A hard DT_NEEDED on libmpv.so.2 prevents the app from launching without it, and moving the build host to Debian 12 or Ubuntu 24.04 raises the glibc floor. WebKitGTK transparency over a GtkGLArea in a GtkOverlay is unproven (DMABUF renderer, compositing mode, NVIDIA/Wayland), so prototype it before committing.",
+  "Security: mpv can reach the filesystem and network. Keep the PROPERTY_ALLOW/COMMAND_ALLOW allow-lists and the http(s)-only check; any future sub-add must accept only app-downloaded temp files or http(s). Do not let stream URLs or headers (debrid tokens) persist in location.hash or webview history.",
+  "Supply chain: the pinned zhongfly tag and SHA could not be verified from this container. Never adopt Harbor's re-hosted libmpv-2.dll (opaque provenance) or setup-libmpv.ps1 (unpinned nightly, AVX2-only).",
+  "CI cost and flakiness: the roughly 30 MB Windows 7z download on every run (cache it); bsdtar 7z support on runner images (7z.exe fallback exists); lib.exe discovery via vswhere."
+ ],
+ "effort": "XL",
+ "external_services": [
+  {
+   "name": "zhongfly/mpv-winbuild (Windows libmpv, current Zeiler pin)",
+   "url": "https://github.com/zhongfly/mpv-winbuild/releases/download/2026-10-15-5757d69708/mpv-dev-lgpl-x86_64-20261015-git-5757d69708.7z",
+   "auth": "none (public GitHub release)",
+   "shapes": ".7z dev archive containing libmpv-2.dll, mpv.def and include/mpv/*.h; each release publishes a sha256.txt manifest",
+   "notes": "LGPL flavor, plain x86_64 (not -v3 AVX2). Pinned SHA-256 5417be2641c31e2c5e676bb7cce90244edb43758936193c6c36dfcf5ea35eabd in scripts/fetch-libmpv.mjs; not re-verified from this container."
+  },
+  {
+   "name": "Harbor re-hosted libmpv-2.dll (reference only, do NOT use)",
+   "url": "https://github.com/harborstremio/harbor/releases/download/mpvdll/libmpv-2.dll",
+   "auth": "none",
+   "shapes": "single DLL, SHA-256 e9c87d19055bc5a82771b2b48e9fbae047bd5180603f5a1aaae10c90ca690467",
+   "notes": "Opaque provenance (build flavor unknown); Harbor commits the matching mpv.lib and libmpv.def."
+  },
+  {
+   "name": "shinchiro/mpv-winbuild-cmake (Harbor's legacy setup-libmpv.ps1)",
+   "url": "https://github.com/shinchiro/mpv-winbuild-cmake",
+   "auth": "none",
+   "shapes": "mpv-dev-x86_64-v3.zip via nightly.link (unpinned)",
+   "notes": "AVX2 (-v3) builds crash on older CPUs; unpinned. Avoid."
+  },
+  {
+   "name": "Homebrew mpv formula (macOS source for a dylibbundler-based vendor bundle)",
+   "url": "https://formulae.brew.sh/formula/mpv",
+   "auth": "none",
+   "shapes": "libmpv.2.dylib plus about 50 dependency dylibs with absolute /opt/homebrew or /usr/local install names",
+   "notes": "GPL FFmpeg; bottle minos equals the runner's macOS. Needs dylibbundler + codesign, or build from source with MACOSX_DEPLOYMENT_TARGET=12.0."
+  },
+  {
+   "name": "Debian/Ubuntu libmpv packages (Linux runtime and build deps)",
+   "url": "https://packages.debian.org/bookworm/libmpv2",
+   "auth": "none",
+   "shapes": "libmpv2 (libmpv.so.2, mpv >= 0.35) and libmpv-dev",
+   "notes": "Ubuntu 22.04 ships only libmpv1 (mpv 0.34, API 1.x), which libmpv2 6.0 rejects. Ubuntu 24.04 has mpv 0.37 and Debian 12 has 0.35.1."
+  },
+  {
+   "name": "RPM Fusion mpv libs (Fedora rpm dependency)",
+   "url": "https://rpmfusion.org/",
+   "auth": "none",
+   "shapes": "mpv-libs package (libmpv.so.2)",
+   "notes": "Exact package name for rpm depends must be verified."
+  },
+  {
+   "name": "mpv client and render API headers (reference)",
+   "url": "https://github.com/mpv-player/mpv/blob/master/include/mpv/render_gl.h",
+   "auth": "none",
+   "shapes": "C API: mpv_render_context_create, mpv_render_context_render, mpv_render_context_set_update_callback, MPV_RENDER_PARAM_*",
+   "notes": "Needed for the macOS NSOpenGLView and Linux GtkGLArea surfaces."
+  }
+ ],
+ "harbor_files_to_adapt": [
+  {
+   "path": "src-tauri/src/mpv_render_mac.rs",
+   "why": "Complete macOS embedding: NSOpenGLView below the WKWebView, webview drawsBackground=NO, OpenGL render context, main-queue redraw, resize_to and uninstall. Port it to libmpv2 6.0 and fix points vs pixels. Keep the MIT header."
+  },
+  {
+   "path": "src-tauri/src/mpv.rs (lines 133-141, 168-234, 300-333, 575-628, 829-858, 871-895)",
+   "why": "LC_NUMERIC setlocale; per-OS pre-init (hwdec, force-window, vo list \"gpu-next,\"); main-thread install/teardown sequencing with timeouts on macOS; mpv_force_below z-order re-assertion; NSView capture."
+  },
+  {
+   "path": "src-tauri/src/webview_helpers.rs",
+   "why": "webview_reapply_transparency (WebView2 SetDefaultBackgroundColor alpha 0) to call after fullscreen and DPI changes."
+  },
+  {
+   "path": "src-tauri/src/lib.rs (lines 49-76, 247)",
+   "why": "Startup-time WebView2 transparency, as an alternative to Zeiler's per-start, never-reverted approach."
+  },
+  {
+   "path": "src-tauri/src/fullscreen.rs",
+   "why": "window_fullscreen_enter/exit with set_focus and fs://entered/exited events, so the UI knows when to re-sync the surface."
+  },
+  {
+   "path": "src/views/player/hooks/use-fullscreen.ts",
+   "why": "Kick schedule (60\u20264200 ms, then every 2 s while fullscreen) re-applying geometry, transparency and force-below."
+  },
+  {
+   "path": "src/lib/player/mpv.ts (lines 272-325)",
+   "why": "Geometry sync strategy: diffing, plus window onResized/onMoved and the refresh-geom event in addition to ResizeObserver."
+  },
+  {
+   "path": "src/views/player.tsx (lines 808-815)",
+   "why": "On macOS, keep the stage black until dwidth/dheight > 0 so an empty GL view never shows."
+  },
+  {
+   "path": "src-tauri/src/pip.rs (window_pip_enter/exit)",
+   "why": "Later: PiP by shrinking the main window to an always-on-top size, so the embedded video needs no second surface."
+  },
+  {
+   "path": "src-tauri/build.rs (macOS block, lines 13-46)",
+   "why": "Starting point for rpath flags only. Replace the Homebrew link-search with a vendored @rpath bundle."
+  }
+ ],
+ "shared_files_touched": [
+  "src-tauri/src/lib.rs",
+  "src-tauri/src/state.rs",
+  "src-tauri/src/commands/mpv.rs",
+  "src-tauri/src/commands/player.rs",
+  "src-tauri/Cargo.toml",
+  "Cargo.toml",
+  "Cargo.lock",
+  "src-tauri/build.rs",
+  "src-tauri/tauri.conf.json",
+  "src-tauri/tauri.embedded.conf.json",
+  ".github/workflows/ci.yml",
+  ".github/workflows/release.yml",
+  "scripts/fetch-libmpv.mjs",
+  "src/main.tsx",
+  "src/pages/Player.tsx",
+  "src/lib/player-ipc.ts",
+  "src/views/PlayPicker.tsx",
+  "src/views/Settings.tsx",
+  "src/lib/types.ts",
+  "src/lib/ipc.ts",
+  "crates/zeiler-player/src/embedded.rs",
+  "crates/zeiler-player/src/lib.rs",
+  "crates/zeiler-player/Cargo.toml",
+  ".gitignore",
+  "README.md",
+  "CONTRIBUTING.md",
+  "docs/ARCHITECTURE.md",
+  "THIRD-PARTY-NOTICES.md"
+ ],
+ "verifiable_in_linux_container": "This container is Ubuntu 24.04 with gtk3 and webkit2gtk-4.1, Xvfb/xvfb-run, node 22 and cargo; it has no libmpv and no display.\n\nVerifiable here:\n- (1) `cargo clippy -p zeiler-player --features embedded --all-targets` works even without libmpv. libmpv2-sys uses pregenerated bindings and check mode never links, so embedded.rs changes (Surface enum, setlocale, vo list, new observed properties) can be linted.\n- (2) After `apt-get install libmpv-dev` (mpv 0.37, libmpv.so.2), the headless actor tests from step 5 run fully: vo=null/ao=null with av://lavfi sources, events, track-list JSON, pause/seek, header injection through a local TCP server, and Shutdown.\n- (3) The whole workspace with the stub imp (fmt/clippy/test), and the frontend via `npm run typecheck`. The handoff, routing and backend-decision logic could get unit tests if a test runner is added.\n- (4) The Linux Phase B GtkGLArea prototype could be smoke-tested under xvfb-run with Mesa llvmpipe, taking an xwd screenshot to confirm video renders under a transparent WebKitWebView. This is a partial check only; it says nothing about vaapi or Wayland.\n- (5) Packaging metadata (deb Depends/Recommends via dpkg-deb -I, AppImage ldd for libmpv.so.2) could be inspected if the implementer builds bundles.\n\nWindows CI or real Windows only:\n- DELAYLOAD behavior and the LoadLibraryW probe order; the fetch script (7z extraction, lib.exe via vswhere).\n- WebView2 transparency and HWND_BOTTOM pinning, hit-testing, focus, fullscreen, DPI and multi-monitor behavior.\n- The NSIS installer placing libmpv-2.dll beside zeiler.exe, and the updater.\n- Clippy of the cfg(all(windows, feature=\"embedded\")) code. A cross `cargo check --target x86_64-pc-windows-msvc` from Linux may be possible with cargo-xwin, but C build scripts in the dependency tree make that uncertain.\n\nmacOS CI or a real Mac only:\n- NSOpenGLView render API, main-thread dispatch and teardown, Retina scaling.\n- dylib install names (otool -L), codesign --verify --deep, Gatekeeper, and minimumSystemVersion against the bundled libs."
+}

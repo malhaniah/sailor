@@ -1,0 +1,329 @@
+{
+ "area": "In-player experience: skip intro/recap/credits, next episode (binge), subtitle sources/switching/customization, audio track and quality controls. These must work on both Zeiler playback backends: external mpv driven over JSON IPC, and embedded libmpv.",
+ "harbor_approach": "Harbor root is /tmp/claude-0/-home-user-sailor/3ec38e8b-1ace-545e-a82a-ac4418d8c2a1/scratchpad/ref/harbor (v0.8.5, MIT). The paths below are relative to that root.\n\nPLAYER ARCHITECTURE\n- src/views/player.tsx (1323 lines) composes about 28 hooks from src/views/player/hooks/ on top of a PlayerBridge.\n- PlayerBridge is defined in src/lib/player/bridge.ts:53-78. Methods: load, play, pause, seek, setVolume, setMuted, setRate, setAudioTrack, setSubtitleTrack, setSubDelay, setAudioDelay, addSubtitle(url, lang, title, select), setAudioNormalize, screenshot, setAbLoop, subscribe. Its PlayerSnapshot carries audioTracks, subtitleTracks, chapters, subDelaySec, audioDelaySec, subText, subStartSec, videoWidth and videoHeight.\n- The mpv bridge is src/lib/player/mpv.ts. It invokes commands in src-tauri/src/mpv.rs, which always uses libmpv in-process:\n  - mpv_start{args:{url, startAtSec, subtitles:[{url,lang}], anime4k, hdrToSdr, embed, anime4kShaders}}\n  - mpv_command{cmd:[...]} \u2014 raw argv, no allow-list\n  - mpv_set_property{name, value} \u2014 raw, no allow-list\n  - mpv_sub_add{url, lang, title, select}\n  - sub_download{url} returns a local path\n  - mpv_set_geometry, mpv_stop\n- Events arrive on Tauri event \"mpv://event\": {event:\"property-change\", name, data} | end-file{reason} | file-loaded | playback-restart | seek | log.\n- Observed properties (mpv.rs:92-108): time-pos (throttled to 200 ms), duration, pause, eof-reached, track-list, volume, mute, chapter-list, sub-delay, audio-delay, sub-text, sub-start, af, dwidth, dheight.\n- Playback position lives outside React state in src/lib/player/playback-clock.ts (useSyncExternalStore), so 200 ms ticks do not re-render menus.\n- Harbor has no external-process mpv. Its non-embed mode is libmpv in its own window with ontop=yes.\n\n(a) SKIP INTRO / RECAP / CREDITS \u2014 src/lib/skip-intro/\n- aniskip.ts:\n  - Converts kitsu:<id> to a MAL id via GET https://kitsu.io/api/edge/anime/{kitsuId}/mappings. It picks the data[] entry where attributes.externalSite == \"myanimelist/anime\" and takes attributes.externalId.\n  - Then calls GET https://api.aniskip.com/v2/skip-times/{malId}/{episode}?types=op&types=ed&types=mixed-op&types=mixed-ed&types=recap&episodeLength={durationSec.toFixed(3)}.\n  - Response: {found, results:[{interval:{startTime, endTime}, skipType}]}.\n  - Mapping: op and mixed-op become intro, ed and mixed-ed become outro, recap becomes recap.\n  - In-memory caches, including negative results.\n- theintrodb.ts:\n  - GET https://api.theintrodb.org/v2/media?tmdb_id=N or imdb_id=ttN, plus &season=S&episode=E.\n  - Response: {tmdb_id, type, intro[], recap[], credits[], preview[]}, each entry {start_ms, end_ms}. A null start means 0; a null end means the duration.\n  - credits and preview both map to outro. Used for tt and tmdb: ids, preferring episode.imdbId.\n- chapters.ts classifies mpv chapter-list titles by regex:\n  - recap: recap|previously\n  - intro: opening|op|intro|opening credits|theme song\n  - outro: ending|ed|outro|end/closing credits|credits\n  - A segment ends at the next chapter's start (or at the duration, or start+90 s).\n- index.ts:\n  - useSkipSegments fetches only after durationSec > 0.\n  - Priority is AniSkip, then IntroDB, then chapters. The first non-empty source wins; sources are not merged.\n  - activeSegment matches when start <= pos < end - 0.75.\n- UI: src/views/player/skip-pill-container.tsx and src/components/player/skip-pill.tsx.\n  - A pill sits bottom-right (right-7, bottom-44) with a 200 ms fade and slide. Labels: Skip Intro / Skip Recap / Skip Credits.\n  - An outro with a next episode shows \"Next Episode\".\n  - In the last 15 s (UP_NEXT_WINDOW_SEC) an UpNextCard appears: still image, S/E label, \"Up next in Ns\", progress bar, Play now, and an X that cancels autoplay.\n  - Synthetic outro: when a next episode exists and there is no real outro, the last 90 s count as an outro.\n  - Skip seeks to endSec. The pill stays visible for the whole segment, but is hidden in PiP, draw mode and the resume prompt (player.tsx:1046-1059).\n  - Harbor has NO auto-skip setting and NO skip hotkey (src/lib/hotkeys.ts).\n\n(b) NEXT EPISODE\n- src/views/player/hooks/use-episode-navigation.ts gets prev/next from src/lib/series-episodes.ts fetchAdjacentEpisodes (meta videos, the Kitsu addon for anime, TMDB seasons).\n- It preloads both neighbours by re-running the whole stream pipeline in build-episode-player-src.ts: runPipeline, then resolve the top 6 candidates, then preflight. It swaps in the result with replacePlayerSrc, or falls back to openPicker(meta, ep, {autoPlay:true}).\n- use-auto-next-episode.ts fires once per src.url when:\n  - status is ended, or\n  - there is an error within 2 s of the end, or\n  - playback stopped within 1 s of the end,\n  - and the user has not cancelled.\n- Harbor does NOT use Stremio's behaviorHints.bingeGroup for this. bingeGroup is parsed only for debrid cache flags (src/lib/streams/parser/parser-cache-flags.ts).\n- Hotkeys: n/p and MediaTrackNext/MediaTrackPrevious.\n\n(c) SUBTITLE CUSTOMIZATION AND PERSISTENCE\n- Settings live in localStorage (src/lib/settings.tsx:87-106, defaults 260-279):\n\n  | Key | Default |\n  |---|---|\n  | subFontSize | 32 |\n  | subFontColor | #FFFFFF |\n  | subBorderColor | #000000 |\n  | subBorderSize | 0 |\n  | subMarginY | 12 (%) |\n  | subAlignX | center |\n  | subAssOverride | \"force\" |\n  | subStyle | shadow (or outline, box) |\n  | subFontFamily | inter |\n  | customFonts | [] |\n  | subBoxOpacity | 0.6 |\n  | subBoxColor | (black) |\n  | subOpacity | 1 |\n  | subShowInPip | (boolean) |\n  | preferredSubLangs | [\"en\"] |\n  | preferredAudioLangs | [\"en\",\"ja\"] |\n  | subProvidersEnabled | {wyzie:false, opensubtitles:true, jimaku:false, addons:true} |\n  | audioNormalize | false |\n\n- Settings UI: src/views/settings/player-panel/subtitle-section.tsx (preview, style cards, sliders, colour pickers, fonts, reset).\n- Rendering:\n  - In embed mode (the default) Harbor turns off mpv's own subtitle rendering: sub-visibility=no and secondary-sub-visibility=no (mpv.rs:352-356, mpv.ts:272-274).\n  - It then draws the observed plain-text sub-text in an HTML overlay (src/components/player/subtitle-overlay.tsx), styled with CSS. ASS typesetting is lost.\n  - For the separate window, src/lib/player/sub-style.ts applySubStyle sets sub-font-size, sub-color, sub-border-color, sub-border-size, sub-margin-y, sub-align-x and sub-ass-override.\n- Per-show prefs (src/lib/player-prefs.ts):\n  - localStorage key \"harbor.player.prefs.v1\": {rate, subDelaySec, audioLang, subLang, updatedAt}, LRU of 200.\n  - Written in player.tsx:1104-1125 (onAudio, onSubtitle, onSubDelay, onRate). Re-applied in use-track-autoload.ts.\n- Sync control: delay-row.tsx offers -0.5/-0.1/+0.1/+0.5 and reset; hotkeys z/x.\n\n(d) SUBTITLE SOURCES AND SWITCHING\n- Stream-attached subtitles are added at load via sub_download + mpv_sub_add with select:false (mpv.ts:233-252).\n- Providers in src/lib/subtitles/providers/:\n  - opensubtitles-v3.ts: three hard-coded endpoints \u2014 opensubtitles.stremio.homes, opensubtitles-v3.strem.io, opensubtitles.strem.io. Request: GET {base}/subtitles/{movie|series}/{tt[:s:e]}.json. Response: {subtitles:[{id, url, lang, m?, SubFormat?, fps?, encoding?}]}, titled \"OpenSubtitles V3 #n\".\n  - addons.ts: the user's addons that accept \"subtitles\". Request: GET {base}/subtitles/{type}/{id}[/videoHash=..&videoSize=..&filename=..].json.\n  - wyzie.ts: https://sub.wyzie.io/search.\n- search.ts:\n  - Runs all providers with Promise.allSettled, then dedups by normalizeLang(lang)|url.\n  - Buckets results per source. Within a bucket it sorts by:\n    1. language preference rank\n    2. streamMatchScore: release group +120, source token (bluray/web-dl/hdtv) +40, resolution +8, hearing-impaired -25\n    3. downloads\n    4. title\n  - Buckets are then interleaved round-robin by source priority: opensubtitles 3, wyzie/jimaku 2, addon 1.\n- language.ts: small ISO 639-2 to 639-1 table, normalizeLang, langScore, and pickBestTrack (skips forced tracks, prefers default).\n- Autoload (src/views/player/hooks/use-track-autoload.ts):\n  - Runs once tracks or duration are known.\n  - Resolves the IMDb id and searches the preferred subtitle languages (Japanese is removed for non-anime).\n  - Adds up to 6 subtitles per language (PER_LANG_MAX) with labels like \"OpenSubtitles \u00b7 release\".\n  - Selects the first one only if no preferred-language track is already selected.\n  - Then picks the best audio and subtitle tracks by preference, with per-show prefs first.\n- Download (mpv.rs:766-826 sub_download):\n  - reqwest with a browser UA and a 15 s timeout; gunzip on the 1f8b magic bytes; extension from URL or content type.\n  - Written to %TEMP%/harbor-subs/<uuid>.<ext>.\n  - No size cap, no charset conversion, never cleaned up.\n- mpv_sub_add (mpv.rs:719-764) runs: sub-add <path> select|auto <title> [<lang>].\n- Menu (subtitle-menu.tsx, subtitle-menu/menu-body.tsx):\n  - Off/On toggle and a language rail with flags and counts.\n  - Tabs All / Embedded / External, HI and Forced chips, tags Forced / HI-SDH / Default / codec.\n  - \"Find more subtitles\" search (search-section.tsx), a \"Movie's too new\" empty state (release under 14 days), and the DelayRow.\n  - No local-file loading and no secondary subtitles.\n\n(e) AUDIO AND QUALITY\n- audio-menu.tsx lists audio tracks (language flag, title, codec, channels) and has an audio-delay row; selecting sets `aid`.\n- Normalize toggles `af set dynaudnorm=f=200:g=15:m=10:r=0.6` (mpv.ts:398-403). volume-max is 600.\n- \"Quality\" is stream switching, not mpv ABR:\n  - stream-switcher.tsx groups cached picker results by 4K / 1080p / 720p / 480p / SD / telecine / telesync / cam.\n  - use-stream-switcher.ts reloads with startAtSec set to the current position when it is over 5 s.\n  - A stream-check pill offers \"Pick another\".\n- stats-overlay.tsx polls video-bitrate, audio-bitrate, frame-drop-count, vo-drop-frame-count, estimated-vf-fps, video-codec, audio-codec, hwdec-current, container-fps and cache-buffering-state.\n- There is a speed menu. Chapters are used only for skip detection; no chapter ticks are drawn.",
+ "zeiler_today": "BACKENDS\n1) External mpv\n- crates/zeiler-player/src/lib.rs Player::play (198-219) spawns mpv with build_mpv_args (69-92):\n  - --force-window=immediate, --keep-open=yes, --playlist=-\n  - plus --title, --force-media-title, --user-agent, --referrer, --http-header-fields-append, --start\n- It writes the URL on stdin. There is no --input-ipc-server, so after launch Zeiler has no control and no telemetry: no position, tracks, subtitles or end-of-file.\n- Called through src-tauri/src/commands/player.rs player_play (http/https check).\n- This is what src/views/PlayPicker.tsx play() (about lines 86-138) calls for both URL and torrent streams. PlayPicker never routes to the in-app player.\n\n2) Embedded libmpv (cargo feature \"embedded\", Windows only)\n- crates/zeiler-player/src/embedded.rs is an EmbeddedPlayer actor with commands Cmd::Load, SetProperty, Command, Quit.\n- Init options: config=no, load-scripts=no, ytdl=no, osc=no, input-default-bindings=no, idle, keep-open, vo=gpu-next, hwdec=auto-safe, wid.\n- OBSERVED (34-50): time-pos, duration, pause, paused-for-cache, cache-buffering-state, eof-reached, seeking, volume, mute, media-title, track-list, chapter-list, aid, sid, vid. track-list and chapter-list are observed as JSON strings, because libmpv2 6 has no node format.\n- Events go out as \"player://event\": {type: property | start-file | file-loaded | seek | playback-restart | end-file{reason} | error | shutdown}.\n- load() (292-318) sets headers via change-list, user-agent, referrer, start, force-media-title, then loadfile replace and pause=false. It does nothing with subtitles.\n- Shell src-tauri/src/commands/mpv.rs:\n  - player_embedded_available, player_embedded_start (always respawns the core), player_embedded_stop, player_set_geometry\n  - player_embedded_set_property with PROPERTY_ALLOW (lines 93-105): pause, volume, mute, speed, aid, sid, vid, sub-delay, audio-delay, sub-scale, sub-pos\n  - player_embedded_command with COMMAND_ALLOW (line 108): seek, cycle, stop, frame-step, frame-back-step\n  - No get-property and no load-in-place.\n- The WebView2 is made transparent and the mpv child window is pinned at HWND_BOTTOM with WS_EX_TRANSPARENT. So unlike Harbor's HTML-overlay choice, libass-rendered subtitles are already visible under the React chrome.\n- Without the feature, or off Windows, a stub returns \"not available\".\n\nUI\n- src/pages/Player.tsx (780 lines), mounted outside App by src/main.tsx on #/player.\n- Route params are only: url or infoHash, sources, fileIdx, filename, title, headers, ua, referrer, startAt. There is no meta id, type, video id, season/episode, addon transportUrl, bingeGroup or stream subtitles.\n- mpvReducer handles the observed properties.\n- Chrome: back, title, torrent stats, seek bar, play/pause, time, volume, and TrackMenu for audio and subtitles (lines 650-712: \"title \u00b7 LANG \u00b7 Np\", Off option, sets aid/sid).\n- Keys: space, left/right (5 s), up/down, m, f, Esc.\n- When embedded is unavailable it calls playerExternalPlay and shows a static \"Playing in external mpv\" card (260-264, 455-466).\n- None of these exist yet: skip, next episode, subtitle search/download/local file, delay UI, style, audio delay/normalize, speed, chapters, stream switcher, resume.\n- src/lib/player-ipc.ts: the MpvTrack type lacks external, external-filename, forced, hearing-impaired, codec-desc and demux-channels.\n\nADDON CRATE\n- crates/zeiler-addon/src/resource.rs has:\n  - Subtitle {id?, url, lang, label?} (319-329)\n  - Stream.subtitles\n  - StreamBehaviorHints {bingeGroup, filename, videoHash, videoSize, proxyHeaders}\n  - SubtitlesResponse (355-361)\n- client.rs AddonClient::subtitles() (116-122) exists, and request.rs builds subtitle extras (test at 200-206: /subtitles/series/tt1%3A1%3A1/filename=...json).\n- But nothing calls it: fanout.rs has only aggregate_streams and first_meta, there is no Tauri command, and stream-attached subtitles are dropped.\n\nSETTINGS AND POLICY\n- src-tauri/src/state.rs Settings: mpvPath, engine*, deleteOnStop, theme, instantPlay, hideAnime, hideLiveTv, builtinCinemeta, autoUpdate. Persisted to settings.json. No player or subtitle preferences.\n- effective_addons() prepends Cinemeta only.\n- The CSP connect-src is \"'self' ipc: http://ipc.localhost\", so the webview cannot call AniSkip or OpenSubtitles directly. All HTTP must be in Rust (docs/ARCHITECTURE.md).\n- CONTRIBUTING.md says built-ins must be \"metadata-only and switchable\".\n- ARCHITECTURE milestones: subtitles (addon + local) in v0.2; binge/next-episode (bingeGroup) in v0.3.\n\nDEPENDENCIES\n- The workspace tokio lacks the \"net\" feature, which named pipes and Unix sockets need.\n- chardetng 1.0.0, encoding_rs 0.8.42 and flate2 1.1.10 are already in Cargo.lock (transitive).\n- No tauri-plugin-dialog.\n- The engine already re-targets a known infoHash to a new fileIdx (crates/zeiler-engine/src/engine.rs:265 update_only_files).",
+ "gaps": [
+  "The external-mpv backend has no JSON IPC. Every in-player feature (tracks, subtitles, skip, next episode, delays, style) is impossible on the default path, and on Linux/macOS (where embedded is stubbed) it is the only path.",
+  "PlayPicker calls player_play (external, fire-and-forget) and never opens the #/player route. The route carries no meta/video/stream context (type, metaId, videoId, season/episode, transportUrl, bingeGroup, filename, videoHash/videoSize, stream.subtitles).",
+  "The embedded shell cannot load into a running core: player_embedded_start always respawns. Next episode and stream switch need a load-in-place command.",
+  "There is no get-property path in either backend, so a stats overlay or probing mpv capabilities is impossible.",
+  "Observed properties lack sub-delay, audio-delay, speed, secondary-sid and chapter. MpvTrack lacks external, external-filename, forced, hearing-impaired, codec-desc and demux-channels.",
+  "Subtitles: no subtitles_get fan-out or command; stream-attached subtitles are dropped; no download, size cap, gunzip or charset normalization; no sub-add path; no local-file loading; no addon or embedded language ranking or dedup; no auto-select by language preference.",
+  "No built-in subtitle addon. CONTRIBUTING.md currently permits metadata-only built-ins, so shipping OpenSubtitles v3 needs a policy wording change.",
+  "No subtitle style settings, no live in-player style panel, no delay UI or hotkeys, no encoding override (matters for Arabic windows-1256, Cyrillic windows-1251, etc.).",
+  "No skip-segment sources (AniSkip, TheIntroDB, chapter titles), no Rust command (CSP blocks webview fetch), no skip pill or Up Next card, no auto-skip settings. Harbor has no auto-skip either.",
+  "No next-episode computation from meta.videos, no bingeGroup matching, no prefetch, no auto-advance or countdown, no handoff back to PlayPicker for the next video.",
+  "Audio: no delay, normalization, volume above 100% or speed control. Track labels are minimal (no channel layout or default/forced flags).",
+  "Quality: no in-player stream switcher (reload at the current position), no HLS variant exposure, no stats overlay, no chapter ticks.",
+  "No per-show preferences (audio language, subtitle language, subtitle delay, rate).",
+  "Player.tsx re-renders the whole page on every 200 ms time-pos event, so there is no isolated position store like Harbor's playback-clock."
+ ],
+ "implementation_plan": [
+  {
+   "step": "1. Shared backend abstraction in zeiler-player",
+   "details": "Move PlayerEvent out of embedded.rs into lib.rs (not feature-gated) so both backends emit the same shape, and add a variant ClientMessage { args: Vec<String> }.\n\nAdd one backend-neutral session type: `enum Session { Embedded(EmbeddedPlayer), External(ExternalIpcPlayer) }`. Its methods:\n- load(PlaybackRequest)\n- set_property(name, Value)\n- command(Vec<String>)\n- get_property(name) -> oneshot Result<Value>\n- quit()\n\nIn the embedded actor, add Cmd::GetProperty(String, oneshot::Sender<Result<Value, String>>): read with mpv.get_property::<String> and parse JSON for list props, or f64/bool by a type table.\n\nExtend OBSERVED in both backends with: sub-delay, audio-delay, speed, secondary-sid, chapter, demuxer-cache-time, dwidth, dheight.\n\nExtend PlaybackRequest with `options: Vec<(String,String)>`. These are validated pre-load options set by the shell from settings (alang, slang, volume-max), never by the UI.",
+   "files": [
+    "crates/zeiler-player/src/lib.rs",
+    "crates/zeiler-player/src/embedded.rs",
+    "crates/zeiler-player/Cargo.toml"
+   ]
+  },
+  {
+   "step": "2. External mpv JSON-IPC backend",
+   "details": "New file crates/zeiler-player/src/external_ipc.rs.\n\nSpawn the located binary with:\n- `--input-ipc-server=<endpoint>`. On Windows: \\\\.\\pipe\\zeiler-mpv-<uuid v4>. On Unix: <cache_dir>/ipc/mpv-<uuid>.sock inside a 0700 directory.\n- `--idle=yes --keep-open=yes --force-window=immediate --title=Zeiler`.\n- Keep the user's mpv config (unlike embedded config=no), but never pass the URL or headers on argv.\n\nConnect with retry, up to 50 attempts every 100 ms:\n- Windows: tokio::net::windows::named_pipe::ClientOptions::open; retry on NotFound or ERROR_PIPE_BUSY.\n- Unix: tokio::net::UnixStream::connect.\n- Requires adding \"net\" to the workspace tokio features.\n\nWriter task sends newline-delimited `{\"command\":[...],\"request_id\":n}`.\n\nReader task parses each line as serde_json::Value:\n- A `request_id` resolves a pending oneshot. error == \"success\" gives Ok(data); anything else gives Err(error).\n- An `event` maps to PlayerEvent:\n  - property-change{name,data} becomes Property. data is real JSON, so track-list arrives as an array.\n  - start-file, file-loaded, seek, playback-restart and shutdown map one-to-one.\n  - end-file{reason, file_error?} becomes EndFile, plus Error when reason is error.\n  - client-message{args} becomes ClientMessage.\n- Throttle time-pos to 200 ms, as in embedded.\n\nAfter connecting:\n- Send observe_property for every OBSERVED entry, using the index as the id.\n- Set headers via [\"change-list\",\"http-header-fields\",\"clr\",\"\"] and then append. This removes the documented argv-headers limitation.\n- Send user-agent and referrer, then [\"loadfile\", url, \"replace\"].\n- To start at an offset, set the `start` property first and use plain loadfile replace. The per-file option syntax of loadfile changed across mpv versions (the index argument).\n\nWatch the child process and emit Shutdown on exit. Keep the old stdin-launch Player::play as a fallback only if the IPC connection never comes up.\n\nAdd unit tests for line framing and event mapping, using fixture strings that run on Linux.",
+   "files": [
+    "crates/zeiler-player/src/external_ipc.rs",
+    "crates/zeiler-player/src/lib.rs",
+    "Cargo.toml"
+   ]
+  },
+  {
+   "step": "3. Unified, validated player IPC in the Tauri shell",
+   "details": "Replace the embedded-only commands with backend-neutral ones in src-tauri/src/commands/mpv.rs or a new playback.rs. Keep the old player_embedded_* names as thin aliases until Player.tsx migrates.\n\nCommands, all emitting \"player://event\":\n- player_start{request, backend:\"auto\"|\"embedded\"|\"external\"}: auto means embedded if available, otherwise external IPC.\n- player_load{request}: load into the same core.\n- player_stop\n- player_set_property{name,value}\n- player_command{args}\n- player_get_property{name}: read allow-list only: video-codec, audio-codec, hwdec-current, estimated-vf-fps, container-fps, video-bitrate, audio-bitrate, frame-drop-count, vo-drop-frame-count, demuxer-cache-duration, cache-speed, mpv-version.\n\nUse a table-driven validate_property(name, &Value):\n- Booleans: pause, mute, sub-visibility, secondary-sub-visibility, sub-bold.\n- Numeric ranges:\n  - sub-delay and audio-delay: -600..600\n  - speed: 0.25..4\n  - sub-pos: 0..150\n  - sub-scale: 0.3..3\n  - sub-font-size: 10..120\n  - sub-margin-y: 0..200\n  - sub-border-size, sub-outline-size, sub-shadow-offset: 0..10\n  - volume: 0..volume-max\n- Colors must match ^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$.\n- Enums:\n  - sub-ass-override: no|yes|scale|force|strip\n  - sub-align-x: left|center|right\n  - sub-align-y: top|center|bottom\n  - sub-border-style: outline-and-shadow|opaque-box|background-box\n- Track ids (aid, sid, vid, secondary-sid) must be an integer or no/auto.\n- sub-font must come from a fixed list.\n\nAdd to COMMAND_ALLOW only sub-remove <int> and sub-reload <int>.\n\nNever expose raw sub-add, loadfile, af, vf, glsl-shaders, run, script-message, keybind or define-section to the UI. Those are issued only by the dedicated commands in steps 4, 10 and 12.",
+   "files": [
+    "src-tauri/src/commands/mpv.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/state.rs",
+    "src/lib/player-ipc.ts"
+   ]
+  },
+  {
+   "step": "4. Subtitle data pipeline (Rust)",
+   "details": "(a) Fan-out. Add aggregate_subtitles(client, addons, type, video_id, extra, timeout) -> Vec<AddonSubtitles{transportUrl, addonName, subtitles, error}> in zeiler-addon/src/fanout.rs, mirroring aggregate_streams. Expose command subtitles_get{type, id, videoHash?, videoSize?, filename?} in commands/content.rs with a 10 s per-addon timeout. Extras use the existing ExtraValue/request.rs encoding: /subtitles/{type}/{videoId}/videoHash=..&videoSize=..&filename=...json.\n\n(b) Fetch and normalize. New zeiler-addon/src/subfile.rs with fetch_subtitle(client, url, encoding_override) -> SubtitleFile{utf8_bytes, format: Srt|Vtt|Ass, detected_encoding}:\n- http/https only.\n- Streamed size cap of 10 MiB, like get_json.\n- Gunzip on the 1f8b magic bytes (flate2).\n- Reject zip and rar (PK\\x03\\x04, Rar!) with a clear error.\n- Strip UTF-8 BOM and decode UTF-16 by BOM.\n- If the bytes are not valid UTF-8, detect with chardetng::EncodingDetector (guess(None, true)) and decode with encoding_rs. encoding_override comes from encoding_rs::Encoding::for_label.\n- Sniff format: WEBVTT means vtt, [Script Info] means ass, otherwise srt.\n\n(c) Add to player. player_subtitle_add{url, lang?, label?, select, encoding?}:\n- Fetch, then write <cache_dir>/subs/<uuid>.<ext>.\n- Run sub-add <path> select|auto <title> <lang> on the active backend.\n- Return {path, format, encoding}. The UI maps this to the new track via track-list external-filename.\n- Purge <cache_dir>/subs on player_stop and at startup.\n\n(d) Local files.\n- player_subtitle_pick_local opens a file dialog from Rust with tauri-plugin-dialog (blocking_pick_file, filters srt/ass/ssa/vtt). Grant no JS permission. Read up to 10 MiB, apply the same normalization, then sub-add select.\n- Also handle WindowEvent::DragDrop in Rust while a session is active, with an extension allow-list.\n\n(e) Built-in subtitle addon. This depends on the built-in essential addons area. Snapshot the official https://opensubtitles-v3.strem.io/manifest.json into src-tauri/builtin/ like Cinemeta, flag it official+protected, add setting builtinOpensubtitles (default true), and prepend it in effective_addons(). Do NOT copy Harbor's mirror list (opensubtitles.stremio.homes) or Wyzie.\n\n(f) Phase 2: compute the OpenSubtitles hash in Rust when the stream lacks one. The hash is file size plus the wrapping sum of 64-bit little-endian words over the first and last 64 KiB, fetched with two Range GETs (works against the engine loopback URL).",
+   "files": [
+    "crates/zeiler-addon/src/fanout.rs",
+    "crates/zeiler-addon/src/subfile.rs",
+    "crates/zeiler-addon/src/lib.rs",
+    "crates/zeiler-addon/Cargo.toml",
+    "src-tauri/src/commands/content.rs",
+    "src-tauri/src/commands/mpv.rs",
+    "src-tauri/src/state.rs",
+    "src-tauri/builtin/opensubtitles-v3-manifest.json",
+    "src-tauri/Cargo.toml"
+   ]
+  },
+  {
+   "step": "5. Subtitle ranking and auto-select (TS)",
+   "details": "Create src/lib/subtitles.ts, adapted from Harbor src/lib/subtitles/search.ts and language.ts with an MIT header.\n\nLanguage handling:\n- normalizeLang with a full ISO 639-1 / 639-2 B and T table, plus OpenSubtitles specials (pob or pt-br map to pt-BR) and BCP-47 heads.\n- languageName via Intl.DisplayNames.\n\nCandidates:\n- stream.subtitles, with source \"stream\"\n- per-addon groups from subtitles_get\n\nDedup by normLang|url, then by id.\n\nRanking, in order:\n1. Language preference rank.\n2. Source priority: stream, then built-in OSv3, then other addons.\n3. Release match against behaviorHints.filename, using Harbor's streamMatchScore: release group +120, source token +40, resolution +8, hearing-impaired -25.\n\nLabel each entry as `${label ?? addonName} #n`.\n\nAuto-load at file-loaded:\n- If mpv already selected a non-forced embedded track in a preferred language, keep it.\n- Otherwise download and select the top candidate of the first preferred language.\n- Pre-add autoAddPerLang (default 2; Harbor uses 6) unselected per preferred language.\n- Everything else stays a lazy menu entry, downloaded on click.\n- Fetch the subtitle list in parallel with loading, but call sub-add only after file-loaded. sub-add needs a loaded file, and external subtitles are dropped on the next loadfile.\n\nAnime:\n- Detect via kitsu:/mal: ids, type anime, or genre Anime.\n- Use animeAudioLangs and keep Japanese in the lists. For non-anime, strip Japanese as Harbor does.",
+   "files": [
+    "src/lib/subtitles.ts",
+    "src/pages/player/useSubtitles.ts"
+   ]
+  },
+  {
+   "step": "6. Subtitle menu UI",
+   "details": "Create src/pages/player/SubtitleMenu.tsx, adapting Harbor subtitle-menu.tsx and subtitle-menu/{menu-body,delay-row,utils}.tsx to Zeiler tokens with an MIT header.\n\nContents:\n- Off/On toggle.\n- Language rail with preferred languages first and counts.\n- Variant list with tabs All / Embedded / Addons / Local and HI / Forced chips.\n- Tags: Forced, SDH, Default, codec, source addon.\n- Lazy entries show a download spinner.\n- \"Load from file...\" calls player_subtitle_pick_local.\n- \"Encoding\" re-adds the same URL with an override: Auto, UTF-8, windows-1256, windows-1251, windows-1252, ISO-8859-2/7/8/9, GB18030, Big5, Shift_JIS, EUC-KR.\n- DelayRow: -0.5 / -0.1 / +0.1 / +0.5 / reset, plus hotkeys z/x.\n- Optional secondary subtitle picker setting secondary-sid.\n- Quick style panel (size, position, background) that calls player_set_sub_style live and persists.\n\nHotkeys: s and c run `cycle sub`.\n\nThe menu works identically for both backends because every action goes through IPC.",
+   "files": [
+    "src/pages/player/SubtitleMenu.tsx",
+    "src/pages/player/DelayRow.tsx",
+    "src/pages/Player.tsx"
+   ]
+  },
+  {
+   "step": "7. Subtitle style, preferences and persistence",
+   "details": "Rust Settings (TS mirror in src/lib/types.ts) gains:\n- `subtitles: { langs: Vec<String> (default derived from OS locale, else [\"en\"]), autoLoad: true, autoAddPerLang: 2, style: SubtitleStyle }`\n- `audio: { langs: [], animeLangs: [\"ja\"], normalize: false, volumeMax: 200 }`\n\nSubtitleStyle fields are all Option, so unset means mpv's default: fontSize, scale, color, outlineColor, outlineSize, backColor, borderStyle, shadowOffset, shadowColor, marginY, pos, alignX, alignY, bold, font, assOverride.\n\nplayer_apply_preferences runs in Rust after every session start:\n- Sets alang and slang, passing both 2- and 3-letter forms.\n- Sets only the style fields that are Some. Failures are logged, not fatal.\n- For outline, tries sub-outline-* first, then falls back to sub-border-*.\n- Sets volume-max.\n\nKeep mpv/libass rendering. Do NOT copy Harbor's sub-visibility=no plus HTML overlay: it cannot work for the external window and it destroys ASS typesetting. Leave assOverride unset by default, with a \"Force my style on styled (ASS) subtitles\" toggle that sets force.\n\nSettings view gets a \"Subtitles\" card in the Player section with a preview, modeled on Harbor subtitle-section.tsx.\n\nPer-show prefs:\n- New data/player-prefs.json, LRU of 200 (Harbor player-prefs.ts semantics), held in AppState.\n- Commands: player_prefs_get{metaId}, player_prefs_set{metaId, patch:{audioLang, subLang, subSource, subDelaySec, rate}}.\n- Applied after file-loaded; written when the user picks something.",
+   "files": [
+    "src-tauri/src/state.rs",
+    "src-tauri/src/commands/settings.rs",
+    "src-tauri/src/commands/mpv.rs",
+    "src/lib/types.ts",
+    "src/views/Settings.tsx"
+   ]
+  },
+  {
+   "step": "8. Play context and routing",
+   "details": "Create src/lib/play-context.ts as a module-level store. PlayPicker sets it before navigating to `#/player?type=..&metaId=..&videoId=..`. It holds:\n- meta: type, id, name, poster, videos\n- video: id, season, episode, title, thumbnail\n- stream: behaviorHints including bingeGroup, filename, videoHash, videoSize; plus subtitles\n- transportUrl and addonName\n- pendingPicker, used by App on remount for the no-binge-match fallback\n\nThe hash keeps a minimal fallback for reloads and dev autoplay.\n\nPlayPicker.play() switches from playerPlay to the player route for URL and torrent streams. Keep \"Open in external mpv\" as an explicit secondary action.\n\nThe embedded-player rollout itself belongs to the built-in player area; this step is the minimum the in-player features need.",
+   "files": [
+    "src/lib/play-context.ts",
+    "src/views/PlayPicker.tsx",
+    "src/main.tsx",
+    "src/App.tsx",
+    "src/pages/Player.tsx"
+   ]
+  },
+  {
+   "step": "9. Skip-segment sources (Rust domain crate)",
+   "details": "New crate crates/zeiler-skip, with no tauri dependency, using reqwest + serde with JSON-fixture tests. It ports Harbor src/lib/skip-intro/aniskip.ts and theintrodb.ts (MIT notice).\n\nAPI: SkipClient::segments(SkipQuery{meta_id, video_id, season, episode, duration_sec}) -> Vec<SkipSegment{kind: Intro|Recap|Outro, start_sec, end_sec, source: AniSkip|IntroDb}>.\n\nID routing:\n- kitsu:<id>[:<ep>]: Kitsu mappings, then MAL id, then AniSkip with episode = ep.\n- mal:<id>: AniSkip directly.\n- tt<id>, with season/episode parsed from the video id tt..:S:E: TheIntroDB imdb_id.\n- tmdb:...: TheIntroDB tmdb_id.\n\nUse AniSkip first, and TheIntroDB only if AniSkip is empty.\n\nValidation:\n- Drop segments where end <= start or start >= duration; clamp to the duration.\n- An IntroDB null start becomes 0; a null end becomes the duration.\n\nLRU caches, including negative results. 8 s timeouts. UA Zeiler/<version>.\n\nCommand skip_segments_get{type, metaId, videoId, season?, episode?, durationSec} in src-tauri/src/commands/skip.rs, gated by settings.skip.onlineLookup.\n\nOn the TS side, src/lib/skip.ts holds the chapter classifier and activeSegment (start <= pos < end - 0.75), ported from Harbor chapters.ts/index.ts, plus the priority order aniskip, introdb, chapters. Call the command once per file when duration > 0 first arrives.",
+   "files": [
+    "crates/zeiler-skip/Cargo.toml",
+    "crates/zeiler-skip/src/lib.rs",
+    "crates/zeiler-skip/src/aniskip.rs",
+    "crates/zeiler-skip/src/introdb.rs",
+    "Cargo.toml",
+    "src-tauri/src/commands/skip.rs",
+    "src-tauri/src/commands/mod.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/state.rs",
+    "src/lib/skip.ts"
+   ]
+  },
+  {
+   "step": "10. Skip pill, Up Next card and auto-skip",
+   "details": "Create src/pages/player/SkipPill.tsx and UpNextCard.tsx, adapted from Harbor skip-pill.tsx and skip-pill-container.tsx:\n- Same labels.\n- 15 s Up Next window with countdown, progress bar, Play now and cancel.\n- Synthetic 90 s outro only when a next episode exists and there is no real outro.\n- Skip seeks to endSec. Enter triggers the visible pill when no menu is open.\n\nNew settings: `skip: { showButton: true, autoSkipIntro: false, autoSkipRecap: false, autoSkipCredits: false, onlineLookup: true }`.\n\nAuto-skip rules:\n- Fires once per segment per file.\n- Only when position enters [start, start+2s) during normal playback, not after a user seek into the segment.\n- Only for AniSkip/IntroDB segments or exact chapter matches, never for the synthetic outro.\n- Shows a \"Skipped intro - Undo\" toast for 5 s. Undo seeks back and suppresses that segment.\n- Auto-skipping credits goes to the next episode when one exists.\n\nExternal backend:\n- Same logic, driven by IPC events.\n- Also prompt inside the mpv window via a dedicated Rust command player_osd_prompt{kind}. It sends `show-text \"Skip intro - press Enter\" 3000` and a temporary binding: `keybind ENTER \"script-message zeiler-skip\"` on mpv versions that have keybind, else `define-section zeiler-skip \"ENTER script-message zeiler-skip\" force` plus `enable-section`.\n- The binding fires a client-message event, which maps to the skip action. Remove the binding when the segment ends.",
+   "files": [
+    "src/pages/player/SkipPill.tsx",
+    "src/pages/player/UpNextCard.tsx",
+    "src/pages/player/useSkip.ts",
+    "src-tauri/src/commands/mpv.rs",
+    "src-tauri/src/state.rs",
+    "src/lib/types.ts"
+   ]
+  },
+  {
+   "step": "11. Next episode / binge via Stremio bingeGroup",
+   "details": "Create src/lib/next-video.ts.\n\nComputing the next video:\n- Sort meta.videos by (season, episode, released) and take the one after the current id.\n- Skip season 0 specials unless the current video is itself a special.\n\nPrefetch at remaining <= 90 s or at outro start:\n- Call streams_get(type, next.id).\n- The candidate is a stream from the same transportUrl whose behaviorHints.bingeGroup equals the current, non-empty bingeGroup.\n\nOn Next, or auto-advance (eof per Harbor's use-auto-next-episode rule, or the countdown ending):\n- URL candidate: call player_load in the same core.\n- Torrent candidate: call engine_resolve, then load. The engine already re-targets the same infoHash via update_only_files.\n- If the infoHash changed, call engine_remove on the previous one when deleteOnStop is set.\n- Reset per-file state: subtitles, skip, prefs.\n- No candidate: leave the player and open PlayPicker for the next video through play-context.pendingPicker. This matches Stremio's behavior.\n\nSettings: bingeWatching (auto-play next, default true), upNextSeconds (15).\n\nHotkeys: n/p and MediaTrackNext/MediaTrackPrevious.",
+   "files": [
+    "src/lib/next-video.ts",
+    "src/pages/player/useNextEpisode.ts",
+    "src/lib/play-context.ts",
+    "src-tauri/src/state.rs",
+    "src/lib/types.ts"
+   ]
+  },
+  {
+   "step": "12. Audio, speed, quality, stats, chapters",
+   "details": "Audio: src/pages/player/AudioMenu.tsx, adapted from Harbor audio-menu.tsx.\n- Labels from track-list: language via Intl.DisplayNames, title, codec, demux-channel-count mapped to Stereo / 5.1 / 7.1, and Default / External flags.\n- Audio-delay row.\n- \"Normalize volume\" calls player_set_audio_normalize{on}. Rust sets a fixed `af` value (lavfi dynaudnorm=f=200:g=15:m=10:r=0.6), never a UI-supplied filter.\n- volume-max 200, so the slider reaches 200%.\n\nSpeed menu: 0.5x to 2x via `speed`.\n\nQuality means switching streams:\n- An in-player Streams panel reuses PlayPicker rows from the cached streams_get result.\n- Choosing one calls player_load with startAtSec = the current position when it is over 5 s (Harbor's use-stream-switcher rule).\n- HLS variants: when track-list has more than one video track, show a Video/Quality menu on vid with demux-h. Verify per stream how mpv's demuxer exposes variants.\n\nStats overlay (key i) uses the player_get_property read allow-list.\n\nChapter ticks on the SeekBar come from chapter-list.",
+   "files": [
+    "src/pages/player/AudioMenu.tsx",
+    "src/pages/player/StreamsPanel.tsx",
+    "src/pages/player/StatsOverlay.tsx",
+    "src/pages/player/SeekBar.tsx",
+    "src-tauri/src/commands/mpv.rs"
+   ]
+  },
+  {
+   "step": "13. Player page refactor",
+   "details": "Split src/pages/Player.tsx into src/pages/player/*:\n- usePlayerSession: backend selection, event subscription, reducer extended with the new properties and track fields.\n- A playback-clock store adapted from Harbor src/lib/player/playback-clock.ts, so 200 ms time-pos updates only re-render the seek bar, pill and countdown.\n- Menus.\n\nThe \"external\" phase becomes a full remote-control UI: all menus, skip and next work over IPC. A note says the video is in the mpv window, and a \"Bring mpv to front\" action is available.\n\nExtend the MpvTrack type in src/lib/player-ipc.ts with external, external-filename, forced, hearing-impaired, codec-desc and demux-channels.",
+   "files": [
+    "src/pages/Player.tsx",
+    "src/pages/player/usePlayerSession.ts",
+    "src/pages/player/playback-clock.ts",
+    "src/lib/player-ipc.ts"
+   ]
+  },
+  {
+   "step": "14. Docs, policy and attribution",
+   "details": "Update docs/ARCHITECTURE.md:\n- IPC surface: player_start/load/stop/set_property/command/get_property, player_subtitle_add, player_subtitle_pick_local, subtitles_get, skip_segments_get, player_prefs_*.\n- Security: allow-lists, external IPC endpoint, subtitle download caps.\n- Milestones.\n\nCONTRIBUTING.md: change the wording to \"metadata or subtitles only, switchable\" built-ins.\n\nTHIRD-PARTY-NOTICES.md: list the Harbor-adapted files (skip-intro, subtitle ranking, menus, playback-clock), each keeping Harbor's MIT notice in its header.\n\nREADME: feature list, and privacy disclosure for the AniSkip / TheIntroDB / Kitsu lookups.",
+   "files": [
+    "docs/ARCHITECTURE.md",
+    "CONTRIBUTING.md",
+    "THIRD-PARTY-NOTICES.md",
+    "README.md"
+   ]
+  }
+ ],
+ "risks": [
+  "External mpv JSON IPC varies by mpv version and by the user's config/scripts:\n- keybind may be absent on older builds (needs a define-section fallback).\n- sub-outline-* vs sub-border-* and sub-border-style differ by version.\n- loadfile per-file option syntax changed.\nTreat every property set as non-fatal and probe mpv-version before using version-specific commands. These version boundaries are from memory and should be verified against the bundled libmpv and common distro mpv builds.",
+  "IPC endpoint exposure:\n- mpv JSON IPC accepts `run` (arbitrary process launch) from any client that can write to the pipe/socket.\n- Mitigations: random names, a 0700 socket directory on Unix, and never observing path or stream-open-filename (loopback engine credentials and debrid URLs).\n- Windows named-pipe default DACLs may grant read access more broadly. Verify, and consider having Zeiler create the pipe policy or connect immediately.",
+  "Expanding the property/command allow-lists widens the attack surface for addon-controlled strings:\n- sub-add, loadfile, af, vf and glsl-shaders must stay behind dedicated Rust commands with validated inputs.\n- Subtitle titles and labels from addons go through argv only, never a shell.",
+  "Content-neutral policy:\n- A built-in OpenSubtitles v3 addon contradicts the current CONTRIBUTING.md wording (metadata-only) until it is amended.\n- Do not copy Harbor's hard-coded OSv3 mirror (opensubtitles.stremio.homes) or the Wyzie aggregator.",
+  "Third-party skip services (AniSkip, Kitsu, TheIntroDB):\n- Availability, rate limits and terms are unverified. Kitsu may have moved hosts (kitsu.io vs kitsu.app; the client follows redirects).\n- Requests reveal what the user watches, so a settings toggle and disclosure are needed.\n- Never block playback on these lookups; cache negatives.\n- None of the API shapes could be live-verified here (the container proxy returned 403). They come from Harbor's parsers.",
+  "Auto-skip false positives:\n- Chapter regexes such as \\bop\\b, \\bed\\b and 'credits' can misfire, and AniSkip segments can be submitted for a different cut.\n- Mitigations: auto-skip off by default, only on high-confidence sources, and an Undo toast.",
+  "bingeGroup coverage is inconsistent across addons, and many set none. The fallback to the picker must be smooth.\n- Torrent season packs rely on engine update_only_files.\n- The deleteOnStop semantics when switching infoHash must not delete the next episode's data.",
+  "Encoding detection on short or ambiguous subtitle files can guess wrong. The manual encoding override in the menu is the escape hatch.\n- Right-to-left scripts (Arabic) depend on the libmpv build having fribidi/harfbuzz, and on fonts with Arabic coverage.",
+  "Forcing ASS style overrides (Harbor's default 'force') breaks anime typesetting. Zeiler should keep mpv's default and make force opt-in.",
+  "Scope dependency on the built-in player area:\n- The in-player features need PlayPicker to route into #/player with a play context.\n- The embedded backend is Windows-only today, so on Linux/macOS everything depends on the new external IPC backend.\n- Route handoff back to App (pendingPicker) crosses the separate React roots in main.tsx.",
+  "Performance: time-pos at 200 ms re-rendering the full Player page. Mitigate with a playback-clock store."
+ ],
+ "effort": "XL",
+ "external_services": [
+  {
+   "name": "AniSkip API v2",
+   "url": "https://api.aniskip.com/v2/skip-times/{malId}/{episode}?types=op&types=ed&types=mixed-op&types=mixed-ed&types=recap&episodeLength={seconds.3f}",
+   "auth": "none",
+   "shapes": "{ found: boolean, results: [ { interval: { startTime: number, endTime: number }, skipType: 'op'|'ed'|'mixed-op'|'mixed-ed'|'recap', ... } ] }. Mapping: op/mixed-op to intro, ed/mixed-ed to outro, recap to recap.",
+   "notes": "Shape taken from Harbor src/lib/skip-intro/aniskip.ts; not live-verified (proxy 403). Needs a MAL id. Call only after duration is known. Treat non-2xx or found:false as empty and cache it."
+  },
+  {
+   "name": "Kitsu mappings (kitsu to MAL)",
+   "url": "https://kitsu.io/api/edge/anime/{kitsuId}/mappings",
+   "auth": "none",
+   "shapes": "{ data: [ { attributes: { externalSite: 'myanimelist/anime', externalId: '1535' } } ] }",
+   "notes": "Used only to turn kitsu: ids (anime-kitsu addon) into MAL ids. Cache permanently. Host may redirect to kitsu.app (unverified)."
+  },
+  {
+   "name": "TheIntroDB v2",
+   "url": "https://api.theintrodb.org/v2/media?imdb_id=tt...|tmdb_id=N[&season=S&episode=E]",
+   "auth": "none (as used by Harbor)",
+   "shapes": "{ tmdb_id, type, intro: [{start_ms|null, end_ms|null}], recap: [...], credits: [...], preview: [...] }. A null start becomes 0; a null end becomes the duration. credits and preview map to outro.",
+   "notes": "Shape taken from Harbor src/lib/skip-intro/theintrodb.ts; not live-verified. Terms and rate limits unknown, so check before shipping."
+  },
+  {
+   "name": "OpenSubtitles v3 Stremio addon (official)",
+   "url": "https://opensubtitles-v3.strem.io/manifest.json ; /subtitles/{movie|series}/{videoId}[/videoHash=..&videoSize=..&filename=..].json",
+   "auth": "none",
+   "shapes": "{ subtitles: [ { id, url, lang (ISO 639-2, e.g. 'eng'), m?, SubFormat?, fps?, encoding? } ] }. Zeiler's Subtitle struct keeps id/url/lang/label and ignores the rest.",
+   "notes": "Standard Stremio subtitles resource, so it goes through the existing AddonClient::subtitles plus a new aggregate_subtitles fan-out. Built in as a switchable subtitle-only addon (built-in addons area). Do not use Harbor's extra mirrors."
+  }
+ ],
+ "harbor_files_to_adapt": [
+  {
+   "path": "src/lib/skip-intro/aniskip.ts",
+   "why": "Port to Rust (crates/zeiler-skip/src/aniskip.rs): Kitsu-to-MAL mapping, AniSkip request params, skipType mapping, negative caching."
+  },
+  {
+   "path": "src/lib/skip-intro/theintrodb.ts",
+   "why": "Port to Rust (crates/zeiler-skip/src/introdb.rs): id routing, null start/end handling, credits/preview mapped to outro."
+  },
+  {
+   "path": "src/lib/skip-intro/chapters.ts",
+   "why": "Chapter-title classifier regexes, reused in src/lib/skip.ts."
+  },
+  {
+   "path": "src/lib/skip-intro/index.ts",
+   "why": "Source priority (aniskip > introdb > chapters), fetch-after-duration rule, activeSegment end guard of 0.75 s."
+  },
+  {
+   "path": "src/components/player/skip-pill.tsx",
+   "why": "Skip pill and UpNextCard layout, labels, 15 s countdown, cancel-autoplay, transitions."
+  },
+  {
+   "path": "src/views/player/skip-pill-container.tsx",
+   "why": "Synthetic 90 s outro rule and remaining-time wiring."
+  },
+  {
+   "path": "src/views/player/hooks/use-auto-next-episode.ts",
+   "why": "End-of-episode detection (ended, error near end, stopped near end; once per URL)."
+  },
+  {
+   "path": "src/lib/subtitles/search.ts",
+   "why": "Dedup key, per-source buckets, language rank, streamMatchScore and interleaving, ported to src/lib/subtitles.ts."
+  },
+  {
+   "path": "src/lib/subtitles/language.ts",
+   "why": "normalizeLang/langScore/pickBestTrack semantics; extend to the full ISO table."
+  },
+  {
+   "path": "src/lib/subtitles/providers/addons.ts",
+   "why": "Stremio subtitles URL shape with videoHash/videoSize/filename extras. Implement in the Rust fan-out instead."
+  },
+  {
+   "path": "src/views/player/hooks/use-track-autoload.ts",
+   "why": "Autoload policy: keep a selected preferred-language track, per-language cap, labels, per-show prefs first, Japanese stripped for non-anime."
+  },
+  {
+   "path": "src/components/player/subtitle-menu/menu-body.tsx",
+   "why": "Menu structure: Off/On, language rail, Embedded/External tabs, HI/Forced chips, tags, empty states."
+  },
+  {
+   "path": "src/components/player/subtitle-menu/delay-row.tsx",
+   "why": "Delay stepper UX (\u00b10.1/\u00b10.5/reset)."
+  },
+  {
+   "path": "src/components/player/audio-menu.tsx",
+   "why": "Audio track rows (language, codec, channels) and audio-delay row."
+  },
+  {
+   "path": "src/lib/player-prefs.ts",
+   "why": "Per-show prefs fields and LRU-200 semantics, moved to a Rust-persisted player-prefs.json."
+  },
+  {
+   "path": "src/lib/player/sub-style.ts",
+   "why": "Mapping of style settings to mpv sub-* properties (extend with back-color, shadow, align-y, bold, font)."
+  },
+  {
+   "path": "src/views/settings/player-panel/subtitle-section.tsx",
+   "why": "Settings card layout with live preview, reset-to-defaults and colour pickers."
+  },
+  {
+   "path": "src-tauri/src/mpv.rs",
+   "why": "sub_download (766-826) and mpv_sub_add (719-764) as the starting point for Zeiler's player_subtitle_add. Add http(s) check, size cap, charset normalization and a cache-dir cleanup."
+  },
+  {
+   "path": "src/lib/player/playback-clock.ts",
+   "why": "useSyncExternalStore position store so 200 ms ticks do not re-render the whole player."
+  },
+  {
+   "path": "src/views/player/hooks/use-stream-switcher.ts",
+   "why": "Stream switching that resumes at the current position (>5 s rule)."
+  },
+  {
+   "path": "src/components/player/stats-overlay.tsx",
+   "why": "List of read-only mpv properties for the stats overlay allow-list."
+  }
+ ],
+ "shared_files_touched": [
+  "Cargo.toml",
+  "src-tauri/Cargo.toml",
+  "crates/zeiler-player/Cargo.toml",
+  "crates/zeiler-addon/Cargo.toml",
+  "src-tauri/src/lib.rs",
+  "src-tauri/src/state.rs",
+  "src-tauri/src/commands/mod.rs",
+  "src-tauri/src/commands/mpv.rs",
+  "src-tauri/src/commands/content.rs",
+  "src-tauri/src/commands/settings.rs",
+  "src/lib/types.ts",
+  "src/lib/player-ipc.ts",
+  "src/pages/Player.tsx",
+  "src/views/PlayPicker.tsx",
+  "src/views/Settings.tsx",
+  "src/main.tsx",
+  "src/App.tsx",
+  "docs/ARCHITECTURE.md",
+  "CONTRIBUTING.md",
+  "THIRD-PARTY-NOTICES.md",
+  "README.md"
+ ],
+ "verifiable_in_linux_container": "Partially.\n\nCan be verified with cargo test on Linux:\n- crates/zeiler-skip parsers, using recorded JSON fixtures for AniSkip, Kitsu and TheIntroDB.\n- zeiler-addon subfile.rs: gzip, BOM/UTF-16, chardetng/encoding_rs normalization on windows-1256/1251 samples, format sniffing, size cap.\n- aggregate_subtitles against a local mock HTTP server.\n- External-IPC line codec and event mapping, using fixture lines.\n- The validate_property allow-list tables.\n\nTS logic (subtitle ranking/dedup, next-video selection, chapter classifier, activeSegment, auto-skip state machine) can be type-checked with npm run typecheck and unit-tested if a test runner is added.\n\nAn end-to-end test of the external backend over a Unix socket is possible only if an mpv binary is installed in the container, and it would need a local test media file.\n\nNot verifiable here:\n- The embedded backend (cfg(windows) + libmpv-2.dll), Windows named pipes and the mpv OSD/keybind prompt.\n- Visual UI.\n- Live AniSkip / TheIntroDB / Kitsu / OpenSubtitles responses: outbound HTTPS to these hosts got CONNECT 403 from the container proxy."
+}

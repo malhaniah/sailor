@@ -1,0 +1,2127 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 18a9e27..f9d6886 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -6886,6 +6886,19 @@ dependencies = [
+  "zeiler-player",
+ ]
+ 
++[[package]]
++name = "zeiler-account"
++version = "0.1.3"
++dependencies = [
++ "base64 0.22.1",
++ "chrono",
++ "flate2",
++ "serde",
++ "serde_json",
++ "thiserror 2.0.21",
++ "url",
++]
++
+ [[package]]
+ name = "zeiler-addon"
+ version = "0.1.3"
+diff --git a/Cargo.toml b/Cargo.toml
+index 4d0f0d4..b89cc17 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -39,6 +39,10 @@ tracing = "0.1"
+ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ uuid = { version = "1", features = ["v4"] }
+ libc = "0.2"
++# the watched-episodes bitfield of library items (zeiler-account): zlib + base64, both
++# already in Cargo.lock (flate2 via librqbit's compression, base64 via reqwest)
++flate2 = "1"
++base64 = "0.22"
+ 
+ # torrent engine — pinned to a main rev carrying Windows fixes #681/#689/#690
+ # (switch to crates.io once 9.0.2 is released)
+@@ -59,6 +63,7 @@ windows = { version = "0.62", features = [
+ ] }
+ 
+ # workspace crates
++zeiler-account = { path = "crates/zeiler-account" }
+ zeiler-addon = { path = "crates/zeiler-addon" }
+ zeiler-engine = { path = "crates/zeiler-engine" }
+ zeiler-player = { path = "crates/zeiler-player" }
+diff --git a/crates/zeiler-account/Cargo.toml b/crates/zeiler-account/Cargo.toml
+new file mode 100644
+index 0000000..c040474
+--- /dev/null
++++ b/crates/zeiler-account/Cargo.toml
+@@ -0,0 +1,19 @@
++[package]
++name = "zeiler-account"
++description = "Stremio-compatible library items, watch progress and the watched-episodes bitfield"
++version.workspace = true
++edition.workspace = true
++rust-version.workspace = true
++license.workspace = true
++authors.workspace = true
++
++[dependencies]
++serde = { workspace = true }
++serde_json = { workspace = true }
++thiserror = { workspace = true }
++url = { workspace = true }
++# std only (no "serde"/"clock" features): timestamps are (de)serialized by hand in
++# types.rs and "now" is always passed in, so the logic stays deterministic in tests
++chrono = { workspace = true }
++flate2 = { workspace = true }
++base64 = { workspace = true }
+diff --git a/crates/zeiler-account/src/lib.rs b/crates/zeiler-account/src/lib.rs
+new file mode 100644
+index 0000000..94aab4a
+--- /dev/null
++++ b/crates/zeiler-account/src/lib.rs
+@@ -0,0 +1,34 @@
++//! Zeiler's local library: Stremio-compatible library items, watch progress and the
++//! watched-episodes bitfield.
++//!
++//! Everything here is pure data and arithmetic — no I/O, no clock, no network. Callers
++//! pass `now` in, and the Tauri shell owns storage (`src-tauri/src/library/`). The types
++//! mirror stremio-core field for field (lenient in, strict out), so the same items can
++//! later be synced with a Stremio account without loss; the progress rules copy
++//! stremio-core's player model, so Continue Watching and watched marks behave like
++//! Stremio's own apps.
++//!
++//! - [`types`]: `LibraryItem`, `LibraryItemState`, behaviour hints, `LibraryItemModified`.
++//! - [`watched`]: the `{anchorVideoId}:{anchorLength}:{base64(zlib(bits))}` codec.
++//! - [`library`]: pure functions over items (add/remove, progress, watched marks,
++//!   Continue Watching, sort orders).
++//!
++//! Semantics are adapted from stremio-core and stremio-watched-bitfield (MIT, Copyright
++//! (c) 2019 SmartCode OOD); see THIRD-PARTY-NOTICES.md.
++
++pub mod library;
++pub mod types;
++pub mod watched;
++
++pub use library::{
++    CREDITS_THRESHOLD_COEF, LibraryFilter, LibrarySort, MetaHints, MetaSummary, ResumePoint,
++    VideoRef, WATCHED_THRESHOLD_COEF, advance_to_video, apply_playback_progress, apply_seek,
++    clear_progress, finish_playback, is_in_continue_watching, mark_video_watched, mark_watched,
++    new_item_from_meta, next_video_id, ordered_video_ids, prepare_playback, refresh_from_meta,
++    resume_point, select, set_in_library, touch,
++};
++pub use types::{
++    LibraryItem, LibraryItemBehaviorHints, LibraryItemModified, LibraryItemState, PosterShape,
++    format_time, now_from_system, parse_time,
++};
++pub use watched::{BitField8, WatchedBitField, WatchedError, WatchedField};
+diff --git a/crates/zeiler-account/src/library.rs b/crates/zeiler-account/src/library.rs
+new file mode 100644
+index 0000000..263c15c
+--- /dev/null
++++ b/crates/zeiler-account/src/library.rs
+@@ -0,0 +1,898 @@
++//! Pure library logic: creating items, adding/removing, playback progress, watched
++//! marks, Continue Watching and the sort orders of Stremio's library views.
++//!
++//! Adapted from stremio-core (<https://github.com/Stremio/stremio-core>: `models/player.rs`
++//! `TimeChanged`/`Seek` and `item_state_update`, `models/ctx/update_library.rs`,
++//! `types/library/library_item.rs`, `models/library_with_filters.rs`), MIT License,
++//! Copyright (c) 2019 SmartCode OOD — see THIRD-PARTY-NOTICES.md for the license text.
++//!
++//! Nothing here reads a clock: `now` is always a parameter. None of the mutating
++//! functions touch `_mtime`; the caller runs [`touch`] once per committed change, which
++//! sets it only when something other than `_mtime` changed (stremio-core's
++//! `UpdateLibraryItem`).
++//!
++//! Zeiler-specific rules (documented deviations):
++//! - Live items ([`LibraryItem::is_live`]) are never tracked: progress, seeks and the
++//!   end-of-playback rule leave them untouched (stremio-core tracks them under the
++//!   channel id).
++//! - The watched bitfield is only written when the caller knows the meta's videos;
++//!   for a movie (no videos) `state.watched` stays `null` as stremio-core documents it,
++//!   and a stored field whose anchor is missing from the given list is left alone
++//!   rather than replaced by a blank one (a partial list must never erase marks).
++//! - The credits rule at the end of playback needs a known duration.
++
++use chrono::{DateTime, Utc};
++use serde::{Deserialize, Deserializer, Serialize};
++use serde_json::Value;
++use url::Url;
++
++use crate::types::{LibraryItem, LibraryItemBehaviorHints, LibraryItemState, PosterShape};
++use crate::watched::{WatchedBitField, WatchedField};
++
++/// A video counts as watched once more than this share of its duration was watched.
++pub const WATCHED_THRESHOLD_COEF: f64 = 0.7;
++/// Stopping past this share of the duration counts as finished: the resume position is
++/// cleared (and a series moves on to the next episode).
++pub const CREDITS_THRESHOLD_COEF: f64 = 0.9;
++
++/// What a new or refreshed library item needs from a meta (stremio-core builds items
++/// from a `MetaItemPreview`). The UI sends the slice of its `MetaItem` it has.
++#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
++#[serde(rename_all = "camelCase", default)]
++pub struct MetaSummary {
++    pub id: String,
++    pub r#type: String,
++    pub name: String,
++    #[serde(deserialize_with = "lenient_url")]
++    pub poster: Option<Url>,
++    pub poster_shape: PosterShape,
++    pub behavior_hints: MetaHints,
++}
++
++/// The meta behaviour hints a library item keeps.
++#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
++#[serde(rename_all = "camelCase", default)]
++pub struct MetaHints {
++    pub default_video_id: Option<String>,
++    pub featured_video_id: Option<String>,
++    pub has_scheduled_videos: bool,
++    pub is_live: bool,
++}
++
++fn lenient_url<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Url>, D::Error> {
++    Ok(match Value::deserialize(d)? {
++        Value::String(s) => Url::parse(&s).ok(),
++        _ => None,
++    })
++}
++
++/// One video of a meta, as much as the bitfield order and "next episode" need.
++#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase", default)]
++pub struct VideoRef {
++    pub id: String,
++    pub season: Option<u32>,
++    pub episode: Option<u32>,
++    #[serde(deserialize_with = "lenient_time", serialize_with = "out_time")]
++    pub released: Option<DateTime<Utc>>,
++}
++
++fn lenient_time<'de, D: Deserializer<'de>>(d: D) -> Result<Option<DateTime<Utc>>, D::Error> {
++    Ok(match Value::deserialize(d)? {
++        Value::String(s) => crate::types::parse_time(&s),
++        _ => None,
++    })
++}
++
++fn out_time<S: serde::Serializer>(t: &Option<DateTime<Utc>>, s: S) -> Result<S::Ok, S::Error> {
++    match t {
++        Some(t) => s.serialize_str(&crate::types::format_time(t)),
++        None => s.serialize_none(),
++    }
++}
++
++/// Video ids in bitfield order: by season, then episode, then release date, missing
++/// values first; stable for ties (stremio-core `LibraryItemState::watched_bitfield`).
++pub fn ordered_video_ids(videos: &[VideoRef]) -> Vec<String> {
++    ordered(videos).into_iter().map(|v| v.id.clone()).collect()
++}
++
++fn ordered(videos: &[VideoRef]) -> Vec<&VideoRef> {
++    let key = |v: &VideoRef| {
++        (
++            v.season.map_or(i64::MIN, i64::from),
++            v.episode.map_or(i64::MIN, i64::from),
++            v.released.map_or(i64::MIN, |r| r.timestamp_millis()),
++        )
++    };
++    let mut sorted: Vec<&VideoRef> = videos.iter().collect();
++    sorted.sort_by_key(|v| key(v));
++    sorted
++}
++
++/// The video after `current` in bitfield order, if it is released by `now` and does not
++/// cross from a regular season into the specials (season 0). After stremio-core's
++/// `MetaItem::next_video`.
++pub fn next_video_id(videos: &[VideoRef], current: &str, now: DateTime<Utc>) -> Option<String> {
++    let sorted = ordered(videos);
++    let index = sorted.iter().position(|v| v.id == current)?;
++    let (this, next) = (sorted[index], *sorted.get(index + 1)?);
++    if next.season == Some(0) && this.season != Some(0) {
++        return None;
++    }
++    if next.released.is_some_and(|released| released > now) {
++        return None;
++    }
++    Some(next.id.clone())
++}
++
++/// A new item for a meta that was played (or marked) but not added: `removed` and
++/// `temp`, so it shows only in Continue Watching (stremio-core `From<&MetaItemPreview>`).
++pub fn new_item_from_meta(meta: &MetaSummary, now: DateTime<Utc>) -> LibraryItem {
++    LibraryItem {
++        id: meta.id.clone(),
++        name: meta.name.clone(),
++        r#type: meta.r#type.clone(),
++        poster: meta.poster.clone(),
++        poster_shape: meta.poster_shape,
++        removed: true,
++        temp: true,
++        ctime: Some(now),
++        mtime: now,
++        state: LibraryItemState {
++            last_watched: Some(now),
++            ..LibraryItemState::default()
++        },
++        behavior_hints: hints_from_meta(&meta.behavior_hints, &meta.r#type, None),
++        extra: Default::default(),
++    }
++}
++
++fn hints_from_meta(
++    hints: &MetaHints,
++    r#type: &str,
++    previous: Option<&LibraryItemBehaviorHints>,
++) -> LibraryItemBehaviorHints {
++    LibraryItemBehaviorHints {
++        default_video_id: hints.default_video_id.clone(),
++        featured_video_id: hints.featured_video_id.clone(),
++        has_scheduled_videos: hints.has_scheduled_videos,
++        is_live: hints.is_live || r#type == "tv",
++        // keep hints we do not model
++        extra: previous.map(|p| p.extra.clone()).unwrap_or_default(),
++    }
++}
++
++/// Refresh an existing item's meta fields (name, type, poster, hints), keeping its
++/// state, flags and times (stremio-core `From<(&MetaItemPreview, &LibraryItem)>`).
++pub fn refresh_from_meta(item: &mut LibraryItem, meta: &MetaSummary) {
++    item.name = meta.name.clone();
++    item.r#type = meta.r#type.clone();
++    item.poster = meta.poster.clone();
++    item.poster_shape = meta.poster_shape;
++    item.behavior_hints = hints_from_meta(
++        &meta.behavior_hints,
++        &meta.r#type,
++        Some(&item.behavior_hints),
++    );
++}
++
++/// Add to (`removed = false`) or remove from (`removed = true`) the library; `temp` is
++/// cleared either way, so a removed item also leaves Continue Watching.
++pub fn set_in_library(item: &mut LibraryItem, in_library: bool) {
++    item.removed = !in_library;
++    item.temp = false;
++}
++
++/// Commit rule: when `item` differs from `previous` in anything but `_mtime` (or is
++/// new), stamp `_mtime = now` and return true; otherwise restore the previous `_mtime`
++/// and return false (nothing to write).
++pub fn touch(previous: Option<&LibraryItem>, item: &mut LibraryItem, now: DateTime<Utc>) -> bool {
++    match previous {
++        Some(previous) if item.eq_no_mtime(previous) => {
++            item.mtime = previous.mtime;
++            false
++        }
++        _ => {
++            item.mtime = now;
++            true
++        }
++    }
++}
++
++/// Before playing `video_id`: when the item last played another video, its resume
++/// position belongs to that video and is cleared (stremio-core
++/// `library_item_state_update`). Live items are left alone.
++pub fn prepare_playback(item: &mut LibraryItem, video_id: &str) {
++    if item.is_live() {
++        return;
++    }
++    if item
++        .state
++        .video_id
++        .as_deref()
++        .is_some_and(|current| current != video_id)
++    {
++        item.state.time_offset = 0;
++    }
++}
++
++/// A playback position report (stremio-core `TimeChanged`): `time` and `duration` in
++/// ms. Returns true when this report made the video count as watched.
++///
++/// - A different video than last time starts a fresh count: the time watched so far
++///   folds into `overallTimeWatched`, `timeWatched` and `flaggedWatched` reset.
++/// - Otherwise the time since the last report (`time - timeOffset`) is added to
++///   `timeWatched` and `overallTimeWatched`.
++/// - `timeOffset`/`duration` only move forward (a backwards jump must be reported with
++///   [`apply_seek`]).
++/// - Watched once `timeWatched > 0.7 × duration`: `flaggedWatched = 1`,
++///   `timesWatched += 1`, and the video's bit is set when `videos` is known.
++/// - A `temp` item never watched stays out of the library (`removed`), and a removed
++///   item stays `temp` (so it shows in Continue Watching).
++pub fn apply_playback_progress(
++    item: &mut LibraryItem,
++    video_id: &str,
++    time: u64,
++    duration: u64,
++    videos: &[VideoRef],
++    now: DateTime<Utc>,
++) -> bool {
++    if item.is_live() {
++        return false;
++    }
++    let state = &mut item.state;
++    state.last_watched = Some(now);
++    if state.video_id.as_deref() != Some(video_id) {
++        state.video_id = Some(video_id.to_string());
++        state.overall_time_watched = state.overall_time_watched.saturating_add(state.time_watched);
++        state.time_watched = 0;
++        state.flagged_watched = 0;
++    } else {
++        let watched = time.saturating_sub(state.time_offset);
++        state.time_watched = state.time_watched.saturating_add(watched);
++        state.overall_time_watched = state.overall_time_watched.saturating_add(watched);
++    }
++
++    // a forward seek makes `time` jump; only `apply_seek` may move the offset back
++    if time > state.time_offset {
++        state.time_offset = time;
++        state.duration = duration;
++    }
++
++    let newly_watched = state.flagged_watched == 0
++        && state.duration > 0
++        && state.time_watched as f64 > state.duration as f64 * WATCHED_THRESHOLD_COEF;
++    if newly_watched {
++        state.flagged_watched = 1;
++        state.times_watched = state.times_watched.saturating_add(1);
++        set_watched_bit(state, videos, video_id, true);
++    }
++
++    if item.temp && item.state.times_watched == 0 {
++        item.removed = true;
++    }
++    if item.removed {
++        item.temp = true;
++    }
++    newly_watched
++}
++
++/// A seek (stremio-core `Seek`): the position jumps to `time` without counting as time
++/// watched. When the item last played another video, this is the first report for this
++/// one and is handled as [`apply_playback_progress`] (which switches the video).
++pub fn apply_seek(
++    item: &mut LibraryItem,
++    video_id: &str,
++    time: u64,
++    duration: u64,
++    videos: &[VideoRef],
++    now: DateTime<Utc>,
++) {
++    if item.is_live() {
++        return;
++    }
++    if item.state.video_id.as_deref() != Some(video_id) {
++        apply_playback_progress(item, video_id, time, duration, videos, now);
++        return;
++    }
++    item.state.last_watched = Some(now);
++    item.state.time_offset = time;
++    item.state.duration = duration;
++}
++
++/// Playback of the current video ended (stopped, finished, or replaced): past the
++/// credits (`timeOffset > 0.9 × duration`) there is nothing left to resume, so the
++/// offset is cleared and, when there is a next episode, the item moves on to it
++/// (stremio-core `item_state_update`). Returns true when it changed anything.
++pub fn finish_playback(item: &mut LibraryItem, next_video_id: Option<&str>) -> bool {
++    if item.is_live() {
++        return false;
++    }
++    let state = &item.state;
++    if state.duration == 0
++        || (state.time_offset as f64) <= state.duration as f64 * CREDITS_THRESHOLD_COEF
++    {
++        return false;
++    }
++    item.state.time_offset = 0;
++    if let Some(next) = next_video_id {
++        advance_to_video(item, next);
++    }
++    true
++}
++
++/// Point Continue Watching at `video_id` from its beginning (stremio-core
++/// `advance_to_video`; `timeOffset = 1` keeps the item in Continue Watching).
++pub fn advance_to_video(item: &mut LibraryItem, video_id: &str) {
++    let state = &mut item.state;
++    state.video_id = Some(video_id.to_string());
++    state.overall_time_watched = state.overall_time_watched.saturating_add(state.time_watched);
++    state.time_watched = 0;
++    state.flagged_watched = 0;
++    state.time_offset = 1;
++}
++
++/// Mark the whole item watched or unwatched (stremio-core `LibraryItem::mark_as_watched`):
++/// watched increments `timesWatched`, stamps `lastWatched` and clears the resume
++/// position; unwatched resets `timesWatched`.
++pub fn mark_watched(item: &mut LibraryItem, watched: bool, now: DateTime<Utc>) {
++    if watched {
++        item.state.times_watched = item.state.times_watched.saturating_add(1);
++        item.state.last_watched = Some(now);
++        item.state.time_offset = 0;
++    } else {
++        item.state.times_watched = 0;
++    }
++}
++
++/// Mark one video watched or unwatched in the bitfield (stremio-core
++/// `mark_video_as_watched`); `videos` is the meta's full video list. Marking watched
++/// moves `lastWatched` up to the video's release date when that is later. Returns false
++/// when `video_id` is not in `videos` (nothing changes).
++pub fn mark_video_watched(
++    item: &mut LibraryItem,
++    videos: &[VideoRef],
++    video_id: &str,
++    watched: bool,
++) -> bool {
++    let Some(video) = videos.iter().find(|v| v.id == video_id) else {
++        return false;
++    };
++    let mut bits = bitfield(&item.state, videos);
++    bits.set_video(video_id, watched);
++    item.state.watched = Some(WatchedField::from(bits).to_string());
++    if watched {
++        item.state.last_watched = match (item.state.last_watched, video.released) {
++            (Some(last), Some(released)) if last < released => Some(released),
++            (None, released) => released,
++            (last, _) => last,
++        };
++    }
++    true
++}
++
++/// Drop the resume position (stremio-core `RewindLibraryItem`); the item leaves
++/// Continue Watching.
++pub fn clear_progress(item: &mut LibraryItem) {
++    item.state.time_offset = 0;
++    if item.is_live() {
++        item.state.last_watched = None;
++    }
++}
++
++/// stremio-core `is_in_continue_watching`: not `other`, in the library or played
++/// (`temp`), and something to resume.
++pub fn is_in_continue_watching(item: &LibraryItem) -> bool {
++    item.r#type != "other" && (!item.removed || item.temp) && item.state.time_offset > 0
++}
++
++/// Where to resume `video_id` (or whatever was last played, when `None`).
++#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub struct ResumePoint {
++    pub video_id: String,
++    pub time_offset: u64,
++    pub duration: u64,
++}
++
++/// The stored resume position when it belongs to `video_id`. `timeOffset = 1` (moved on
++/// to the next episode) means "from the beginning", which is no resume point.
++pub fn resume_point(item: &LibraryItem, video_id: Option<&str>) -> Option<ResumePoint> {
++    if item.is_live() || item.state.time_offset <= 1 {
++        return None;
++    }
++    let stored = item.state.video_id.as_deref()?;
++    if video_id.is_some_and(|v| v != stored) {
++        return None;
++    }
++    Some(ResumePoint {
++        video_id: stored.to_string(),
++        time_offset: item.state.time_offset,
++        duration: item.state.duration,
++    })
++}
++
++/// The views the UI lists.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub enum LibraryFilter {
++    /// [`is_in_continue_watching`], most recently changed first (stremio-core's
++    /// Continue Watching orders by `_mtime`).
++    ContinueWatching,
++    /// Items in the library (`!removed`), in the requested [`LibrarySort`].
++    Library,
++    /// Everything ever played (not `other`, with a `lastWatched` and some watch time
++    /// or a watched mark), including items never added — most recent first. Zeiler's
++    /// own view; Stremio has none.
++    History,
++}
++
++/// stremio-core's library sort orders (`models/library_with_filters.rs`).
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub enum LibrarySort {
++    #[default]
++    LastWatched,
++    Name,
++    NameReverse,
++    TimesWatched,
++    Watched,
++    NotWatched,
++}
++
++/// The items of one view, sorted. `r#type` narrows the library view to one type. Ties
++/// are broken by id so the order is stable.
++pub fn select<'a>(
++    items: impl IntoIterator<Item = &'a LibraryItem>,
++    filter: LibraryFilter,
++    sort: LibrarySort,
++    r#type: Option<&str>,
++) -> Vec<&'a LibraryItem> {
++    let mut selected: Vec<&LibraryItem> = items
++        .into_iter()
++        .filter(|item| r#type.is_none_or(|t| item.r#type == t))
++        .filter(|item| match filter {
++            LibraryFilter::ContinueWatching => is_in_continue_watching(item),
++            LibraryFilter::Library => !item.removed,
++            LibraryFilter::History => {
++                item.r#type != "other"
++                    && item.state.last_watched.is_some()
++                    && (item.state.overall_time_watched > 0
++                        || item.state.time_watched > 0
++                        || item.state.time_offset > 0
++                        || item.state.times_watched > 0)
++            }
++        })
++        .collect();
++    match filter {
++        LibraryFilter::ContinueWatching => {
++            selected.sort_by(|a, b| b.mtime.cmp(&a.mtime).then_with(|| a.id.cmp(&b.id)));
++        }
++        LibraryFilter::History => {
++            selected.sort_by(|a, b| {
++                b.state
++                    .last_watched
++                    .cmp(&a.state.last_watched)
++                    .then_with(|| a.id.cmp(&b.id))
++            });
++        }
++        LibraryFilter::Library => {
++            selected.sort_by(|a, b| {
++                let name = |i: &LibraryItem| i.name.to_lowercase();
++                match sort {
++                    LibrarySort::LastWatched => b.state.last_watched.cmp(&a.state.last_watched),
++                    LibrarySort::Name => name(a).cmp(&name(b)),
++                    LibrarySort::NameReverse => name(b).cmp(&name(a)),
++                    LibrarySort::TimesWatched => b.state.times_watched.cmp(&a.state.times_watched),
++                    LibrarySort::Watched => b
++                        .watched()
++                        .cmp(&a.watched())
++                        .then_with(|| b.state.last_watched.cmp(&a.state.last_watched)),
++                    LibrarySort::NotWatched => a
++                        .watched()
++                        .cmp(&b.watched())
++                        .then_with(|| a.ctime.cmp(&b.ctime)),
++                }
++                .then_with(|| a.id.cmp(&b.id))
++            });
++        }
++    }
++    selected
++}
++
++/// The item's bitfield aligned to `videos` (blank when it has none or it is malformed).
++fn bitfield(state: &LibraryItemState, videos: &[VideoRef]) -> WatchedBitField {
++    let ids = ordered_video_ids(videos);
++    match state
++        .watched
++        .as_deref()
++        .and_then(|w| w.parse::<WatchedField>().ok())
++    {
++        Some(field) => WatchedBitField::construct_with_videos(field, ids),
++        None => WatchedBitField::construct_from_array(&[], ids),
++    }
++}
++
++/// Set one bit for the player's watched rule; leaves the field alone without a video
++/// list, or when the stored anchor is not in the list but marks exist (a partial list
++/// must never erase marks).
++fn set_watched_bit(state: &mut LibraryItemState, videos: &[VideoRef], video_id: &str, value: bool) {
++    if videos.is_empty() || !videos.iter().any(|v| v.id == video_id) {
++        return;
++    }
++    if let Some(field) = state
++        .watched
++        .as_deref()
++        .and_then(|w| w.parse::<WatchedField>().ok())
++        && field.bitfield.last_index_of(true).is_some()
++        && !videos.iter().any(|v| v.id == field.anchor_video)
++    {
++        return;
++    }
++    let mut bits = bitfield(state, videos);
++    bits.set_video(video_id, value);
++    state.watched = Some(WatchedField::from(bits).to_string());
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::types::parse_time;
++
++    fn t(s: &str) -> DateTime<Utc> {
++        parse_time(s).unwrap()
++    }
++
++    fn movie() -> MetaSummary {
++        MetaSummary {
++            id: "tt0133093".into(),
++            r#type: "movie".into(),
++            name: "The Matrix".into(),
++            poster: Some(Url::parse("https://images.example/tt0133093.jpg").unwrap()),
++            ..MetaSummary::default()
++        }
++    }
++
++    fn episodes(n: u32) -> Vec<VideoRef> {
++        // deliberately out of order: the bitfield order is by season/episode
++        (1..=n)
++            .rev()
++            .map(|e| VideoRef {
++                id: format!("tt0944947:1:{e}"),
++                season: Some(1),
++                episode: Some(e),
++                released: Some(t("2011-04-17T00:00:00Z")),
++            })
++            .collect()
++    }
++
++    /// A new movie played to the end, reported every 10 s like the shell does.
++    #[test]
++    fn a_movie_played_through_is_watched_once_and_finishes() {
++        let now = t("2024-01-01T20:00:00Z");
++        let mut item = new_item_from_meta(&movie(), now);
++        assert!(item.removed && item.temp, "played, not added");
++        assert!(!is_in_continue_watching(&item));
++
++        let duration = 600_000;
++        let mut watched_at = None;
++        for second in (0..=600).step_by(10) {
++            let time = second * 1000;
++            if apply_playback_progress(&mut item, "tt0133093", time, duration, &[], now) {
++                watched_at = Some(time);
++            }
++            assert!(item.removed && item.temp);
++        }
++        // 0.7 × 600 s = 420 s; time watched must exceed it
++        assert_eq!(watched_at, Some(430_000));
++        assert_eq!(item.state.times_watched, 1);
++        assert_eq!(item.state.flagged_watched, 1);
++        assert_eq!(item.state.time_watched, 600_000);
++        assert_eq!(item.state.watched, None, "a movie has no bitfield");
++        assert!(is_in_continue_watching(&item));
++
++        assert!(finish_playback(&mut item, None));
++        assert_eq!(item.state.time_offset, 0);
++        assert!(!is_in_continue_watching(&item), "finished → out of CW");
++    }
++
++    #[test]
++    fn a_forward_seek_is_not_time_watched() {
++        let now = t("2024-01-01T20:00:00Z");
++        let mut item = new_item_from_meta(&movie(), now);
++        apply_playback_progress(&mut item, "tt0133093", 10_000, 600_000, &[], now);
++        apply_seek(&mut item, "tt0133093", 500_000, 600_000, &[], now);
++        assert!(!apply_playback_progress(
++            &mut item,
++            "tt0133093",
++            505_000,
++            600_000,
++            &[],
++            now
++        ));
++        assert_eq!(item.state.time_watched, 5_000);
++        assert_eq!(item.state.time_offset, 505_000);
++        // a backwards seek moves the offset back
++        apply_seek(&mut item, "tt0133093", 60_000, 600_000, &[], now);
++        assert_eq!(item.state.time_offset, 60_000);
++        assert_eq!(item.state.time_watched, 5_000);
++    }
++
++    #[test]
++    fn without_a_seek_a_backwards_report_never_moves_the_offset_back() {
++        let now = t("2024-01-01T20:00:00Z");
++        let mut item = new_item_from_meta(&movie(), now);
++        apply_playback_progress(&mut item, "tt0133093", 100_000, 600_000, &[], now);
++        apply_playback_progress(&mut item, "tt0133093", 50_000, 600_000, &[], now);
++        assert_eq!(item.state.time_offset, 100_000);
++    }
++
++    #[test]
++    fn a_series_episode_sets_its_bit_and_the_next_one_starts_fresh() {
++        let now = t("2024-01-01T20:00:00Z");
++        let videos = episodes(9);
++        let meta = MetaSummary {
++            id: "tt0944947".into(),
++            r#type: "series".into(),
++            name: "Game of Thrones".into(),
++            ..MetaSummary::default()
++        };
++        let mut item = new_item_from_meta(&meta, now);
++        set_in_library(&mut item, true);
++
++        let duration = 3_600_000;
++        for minute in 0..=55 {
++            apply_playback_progress(
++                &mut item,
++                "tt0944947:1:5",
++                minute * 60_000,
++                duration,
++                &videos,
++                now,
++            );
++        }
++        assert_eq!(item.state.times_watched, 1);
++        assert!(!item.removed && !item.temp, "added items stay in the library");
++        let watched = item.state.watched.clone().unwrap();
++        assert!(watched.starts_with("tt0944947:1:5:5:"), "{watched}");
++        let bits = bitfield(&item.state, &videos);
++        assert!(bits.get_video("tt0944947:1:5"));
++        assert!(!bits.get_video("tt0944947:1:4"));
++
++        // stopping in the credits moves Continue Watching to the next episode
++        let next = next_video_id(&videos, "tt0944947:1:5", now);
++        assert_eq!(next.as_deref(), Some("tt0944947:1:6"));
++        assert!(finish_playback(&mut item, next.as_deref()));
++        assert_eq!(item.state.video_id.as_deref(), Some("tt0944947:1:6"));
++        assert_eq!(item.state.time_offset, 1);
++        assert_eq!(item.state.time_watched, 0);
++        // the episode's time is in `overallTimeWatched` twice: TimeChanged adds every
++        // report to it, and moving on folds `timeWatched` in again (stremio-core does the
++        // same; ported as-is so both clients agree)
++        assert_eq!(item.state.overall_time_watched, 6_600_000);
++        assert!(is_in_continue_watching(&item));
++        assert_eq!(resume_point(&item, None), None, "from the start");
++
++        // playing episode 6 counts from zero
++        prepare_playback(&mut item, "tt0944947:1:6");
++        apply_seek(&mut item, "tt0944947:1:6", 0, duration, &videos, now);
++        apply_playback_progress(&mut item, "tt0944947:1:6", 60_000, duration, &videos, now);
++        assert_eq!(item.state.time_watched, 60_000);
++        assert_eq!(item.state.flagged_watched, 0);
++        assert_eq!(
++            resume_point(&item, Some("tt0944947:1:6")),
++            Some(ResumePoint {
++                video_id: "tt0944947:1:6".into(),
++                time_offset: 60_000,
++                duration
++            })
++        );
++        assert_eq!(resume_point(&item, Some("tt0944947:1:5")), None);
++    }
++
++    #[test]
++    fn switching_videos_folds_the_count_and_clears_the_old_offset() {
++        let now = t("2024-01-01T20:00:00Z");
++        let mut item = new_item_from_meta(&movie(), now);
++        item.state.video_id = Some("a".into());
++        item.state.time_offset = 900_000;
++        item.state.time_watched = 120_000;
++        item.state.flagged_watched = 1;
++
++        prepare_playback(&mut item, "b");
++        assert_eq!(item.state.time_offset, 0);
++        apply_playback_progress(&mut item, "b", 5_000, 1_000_000, &[], now);
++        assert_eq!(item.state.video_id.as_deref(), Some("b"));
++        assert_eq!(item.state.time_watched, 0);
++        assert_eq!(item.state.overall_time_watched, 120_000);
++        assert_eq!(item.state.flagged_watched, 0);
++        assert_eq!(item.state.time_offset, 5_000);
++    }
++
++    #[test]
++    fn live_items_are_never_tracked() {
++        let now = t("2024-01-01T20:00:00Z");
++        let meta = MetaSummary {
++            id: "tv:1".into(),
++            r#type: "tv".into(),
++            name: "Channel".into(),
++            ..MetaSummary::default()
++        };
++        let mut item = new_item_from_meta(&meta, now);
++        assert!(item.is_live() && item.behavior_hints.is_live);
++        let before = item.clone();
++        apply_playback_progress(&mut item, "tv:1", 99_000, 0, &[], now);
++        apply_seek(&mut item, "tv:1", 5_000, 0, &[], now);
++        assert!(!finish_playback(&mut item, None));
++        assert_eq!(item, before);
++        assert!(!is_in_continue_watching(&item));
++    }
++
++    #[test]
++    fn mark_watched_mirrors_stremio_core() {
++        let now = t("2024-01-01T20:00:00Z");
++        let mut item = new_item_from_meta(&movie(), t("2023-01-01T00:00:00Z"));
++        item.state.time_offset = 1234;
++        mark_watched(&mut item, true, now);
++        assert_eq!(item.state.times_watched, 1);
++        assert_eq!(item.state.time_offset, 0);
++        assert_eq!(item.state.last_watched, Some(now));
++        mark_watched(&mut item, true, now);
++        assert_eq!(item.state.times_watched, 2);
++        mark_watched(&mut item, false, now);
++        assert_eq!(item.state.times_watched, 0);
++    }
++
++    #[test]
++    fn mark_video_watched_sets_bits_and_moves_last_watched_to_the_release() {
++        let mut videos = episodes(3);
++        videos[0].released = Some(t("2030-01-01T00:00:00Z")); // episode 3, in the future
++        let mut item = new_item_from_meta(&movie(), t("2024-01-01T00:00:00Z"));
++
++        assert!(mark_video_watched(&mut item, &videos, "tt0944947:1:2", true));
++        assert_eq!(item.state.last_watched, Some(t("2024-01-01T00:00:00Z")));
++        assert!(mark_video_watched(&mut item, &videos, "tt0944947:1:3", true));
++        assert_eq!(item.state.last_watched, Some(t("2030-01-01T00:00:00Z")));
++        let bits = bitfield(&item.state, &videos);
++        assert!(!bits.get_video("tt0944947:1:1"));
++        assert!(bits.get_video("tt0944947:1:2") && bits.get_video("tt0944947:1:3"));
++
++        assert!(mark_video_watched(&mut item, &videos, "tt0944947:1:3", false));
++        let bits = bitfield(&item.state, &videos);
++        assert!(bits.get_video("tt0944947:1:2") && !bits.get_video("tt0944947:1:3"));
++        assert!(item.state.watched.as_deref().unwrap().starts_with("tt0944947:1:2:2:"));
++
++        assert!(!mark_video_watched(&mut item, &videos, "tt0944947:9:9", true));
++    }
++
++    #[test]
++    fn a_partial_video_list_never_erases_marks() {
++        let now = t("2024-01-01T20:00:00Z");
++        let mut item = new_item_from_meta(&movie(), now);
++        let all = episodes(9);
++        assert!(mark_video_watched(&mut item, &all, "tt0944947:1:8", true));
++        let stored = item.state.watched.clone();
++
++        // the player only knows episodes 1-2: the anchor (1:8) is not among them
++        let partial: Vec<VideoRef> = all.iter().filter(|v| v.episode <= Some(2)).cloned().collect();
++        item.state.video_id = Some("tt0944947:1:1".into());
++        for minute in 0..=50 {
++            apply_playback_progress(&mut item, "tt0944947:1:1", minute * 60_000, 3_000_000, &partial, now);
++        }
++        assert_eq!(item.state.times_watched, 1);
++        assert_eq!(item.state.watched, stored);
++    }
++
++    #[test]
++    fn touch_stamps_mtime_only_for_real_changes() {
++        let then = t("2024-01-01T00:00:00Z");
++        let now = t("2024-01-02T00:00:00Z");
++        let item = new_item_from_meta(&movie(), then);
++        let mut same = item.clone();
++        same.mtime = now;
++        assert!(!touch(Some(&item), &mut same, now));
++        assert_eq!(same.mtime, then);
++        let mut changed = item.clone();
++        set_in_library(&mut changed, true);
++        assert!(touch(Some(&item), &mut changed, now));
++        assert_eq!(changed.mtime, now);
++        let mut fresh = item.clone();
++        assert!(touch(None, &mut fresh, now));
++    }
++
++    #[test]
++    fn next_video_respects_release_dates_and_specials() {
++        let now = t("2024-01-01T00:00:00Z");
++        let mut videos = vec![
++            VideoRef { id: "s:0:1".into(), season: Some(0), episode: Some(1), released: None },
++            VideoRef { id: "s:1:1".into(), season: Some(1), episode: Some(1), released: None },
++            VideoRef {
++                id: "s:1:2".into(),
++                season: Some(1),
++                episode: Some(2),
++                released: Some(t("2025-01-01T00:00:00Z")),
++            },
++        ];
++        assert_eq!(next_video_id(&videos, "s:0:1", now).as_deref(), Some("s:1:1"));
++        assert_eq!(next_video_id(&videos, "s:1:1", now), None, "not released yet");
++        videos.push(VideoRef { id: "s:0:2".into(), season: Some(0), episode: Some(2), released: None });
++        assert_eq!(ordered_video_ids(&videos), ["s:0:1", "s:0:2", "s:1:1", "s:1:2"]);
++        assert_eq!(next_video_id(&videos, "s:1:2", now), None, "last");
++        assert_eq!(next_video_id(&videos, "missing", now), None);
++    }
++
++    #[test]
++    fn views_filter_and_sort_like_stremio() {
++        let base = t("2024-01-01T00:00:00Z");
++        let at = |h: i64| base + chrono::Duration::hours(h);
++        let mk = |id: &str, name: &str, removed: bool, temp: bool, offset: u64, h: i64| {
++            let mut item = new_item_from_meta(
++                &MetaSummary {
++                    id: id.into(),
++                    r#type: "movie".into(),
++                    name: name.into(),
++                    ..MetaSummary::default()
++                },
++                at(h),
++            );
++            item.removed = removed;
++            item.temp = temp;
++            item.state.time_offset = offset;
++            item.state.overall_time_watched = offset;
++            item
++        };
++        let mut other = mk("o", "Other", false, false, 5, 9);
++        other.r#type = "other".into();
++        let mut watched = mk("w", "beta", false, false, 0, 1);
++        watched.state.times_watched = 3;
++        let items = [
++            mk("a", "Alpha", false, false, 10, 2), // library + CW
++            mk("b", "Bravo", true, true, 20, 5),   // played, never added
++            mk("c", "charlie", true, false, 30, 7), // removed by the user
++            mk("d", "Delta", false, false, 0, 3),  // in library, nothing to resume
++            watched,
++            other,
++        ];
++        let ids = |v: Vec<&LibraryItem>| v.into_iter().map(|i| i.id.clone()).collect::<Vec<_>>();
++
++        assert_eq!(
++            ids(select(&items, LibraryFilter::ContinueWatching, LibrarySort::default(), None)),
++            ["b", "a"]
++        );
++        assert_eq!(
++            ids(select(&items, LibraryFilter::Library, LibrarySort::LastWatched, None)),
++            ["o", "d", "a", "w"]
++        );
++        assert_eq!(
++            ids(select(&items, LibraryFilter::Library, LibrarySort::Name, None)),
++            ["a", "w", "d", "o"]
++        );
++        assert_eq!(
++            ids(select(&items, LibraryFilter::Library, LibrarySort::NameReverse, Some("movie"))),
++            ["d", "w", "a"]
++        );
++        assert_eq!(
++            ids(select(&items, LibraryFilter::Library, LibrarySort::TimesWatched, None))[0],
++            "w"
++        );
++        assert_eq!(
++            ids(select(&items, LibraryFilter::Library, LibrarySort::Watched, None))[0],
++            "w"
++        );
++        assert_eq!(
++            ids(select(&items, LibraryFilter::History, LibrarySort::default(), None)),
++            ["c", "b", "a", "w"]
++        );
++    }
++
++    #[test]
++    fn clear_progress_leaves_continue_watching() {
++        let mut item = new_item_from_meta(&movie(), t("2024-01-01T00:00:00Z"));
++        item.state.time_offset = 5000;
++        assert!(is_in_continue_watching(&item));
++        clear_progress(&mut item);
++        assert!(!is_in_continue_watching(&item));
++        assert!(item.state.last_watched.is_some(), "kept for non-live items");
++    }
++}
+diff --git a/crates/zeiler-account/src/types.rs b/crates/zeiler-account/src/types.rs
+new file mode 100644
+index 0000000..9018c5a
+--- /dev/null
++++ b/crates/zeiler-account/src/types.rs
+@@ -0,0 +1,461 @@
++//! Library item types, field for field compatible with stremio-core's
++//! `types/library/library_item.rs`.
++//!
++//! Adapted from stremio-core (<https://github.com/Stremio/stremio-core>), MIT License,
++//! Copyright (c) 2019 SmartCode OOD — see THIRD-PARTY-NOTICES.md for the license text.
++//!
++//! **Lenient in.** Library data has been written by many clients over the years (some of
++//! them buggy, e.g. floats or nulls in integer fields), so every field reads leniently:
++//! a missing, null or wrongly typed value becomes that field's default instead of
++//! failing the whole item; numbers given as floats or strings are truncated to
++//! integers; an unparseable `watched` string or poster URL reads as absent.
++//!
++//! **Strict out.** What we write is exactly what stremio-core writes: the same field
++//! names (including the snake_case `video_id` among camelCase siblings), the same field
++//! order, integers for every numeric field (never floats, never null), RFC 3339
++//! timestamps in UTC with a `Z` suffix (chrono's own format: `AutoSi` precision), and
++//! `null` for absent optional values.
++//!
++//! **Unknown fields survive.** Each level (item, state, behaviour hints) keeps the fields
++//! it does not know in `extra` (serde `flatten`), and writes them back after its own.
++
++use chrono::{DateTime, SecondsFormat, Utc};
++use serde::{Deserialize, Deserializer, Serialize, Serializer};
++use serde_json::{Map, Value};
++use url::Url;
++
++use crate::watched::WatchedField;
++
++/// stremio-core's `PosterShape`: unknown values read as `poster`.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "camelCase")]
++pub enum PosterShape {
++    Square,
++    Landscape,
++    #[default]
++    Poster,
++}
++
++impl<'de> Deserialize<'de> for PosterShape {
++    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
++        Ok(match Value::deserialize(deserializer)? {
++            Value::String(s) if s == "square" => PosterShape::Square,
++            Value::String(s) if s == "landscape" => PosterShape::Landscape,
++            _ => PosterShape::Poster,
++        })
++    }
++}
++
++/// One title in the user's library (`libraryItem` in Stremio's datastore).
++///
++/// `removed`/`temp` encode where it shows up (stremio-core semantics):
++///
++/// | removed | temp  | meaning |
++/// | ------- | ----- | ------- |
++/// | false   | false | in the library |
++/// | true    | true  | played but never added: only Continue Watching / history |
++/// | true    | false | removed by the user |
++/// | false   | true  | in the library and played before it was added |
++#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct LibraryItem {
++    #[serde(rename = "_id", deserialize_with = "lenient::string")]
++    pub id: String,
++    #[serde(default, deserialize_with = "lenient::string")]
++    pub name: String,
++    #[serde(default, deserialize_with = "lenient::string")]
++    pub r#type: String,
++    #[serde(default, deserialize_with = "lenient::opt_url")]
++    pub poster: Option<Url>,
++    #[serde(default)]
++    pub poster_shape: PosterShape,
++    #[serde(default, deserialize_with = "lenient::boolean")]
++    pub removed: bool,
++    #[serde(default, deserialize_with = "lenient::boolean")]
++    pub temp: bool,
++    /// Creation time.
++    #[serde(
++        rename = "_ctime",
++        default,
++        deserialize_with = "lenient::opt_time",
++        serialize_with = "out::opt_time"
++    )]
++    pub ctime: Option<DateTime<Utc>>,
++    /// Modification time: last-writer-wins key for sync (set by [`crate::touch`]).
++    #[serde(
++        rename = "_mtime",
++        default = "epoch",
++        deserialize_with = "lenient::time",
++        serialize_with = "out::time"
++    )]
++    pub mtime: DateTime<Utc>,
++    #[serde(default, deserialize_with = "lenient::object")]
++    pub state: LibraryItemState,
++    #[serde(default, deserialize_with = "lenient::object")]
++    pub behavior_hints: LibraryItemBehaviorHints,
++    /// Fields this version does not know, written back unchanged.
++    #[serde(flatten)]
++    pub extra: Map<String, Value>,
++}
++
++impl LibraryItem {
++    /// Live TV / channels: never tracked. Zeiler's rule (the same as its UI):
++    /// `behaviorHints.isLive`, or the `tv` type.
++    pub fn is_live(&self) -> bool {
++        self.behavior_hints.is_live || self.r#type == "tv"
++    }
++
++    /// Whether it has been watched at least once (stremio-core `watched()`).
++    pub fn watched(&self) -> bool {
++        self.state.times_watched > 0
++    }
++
++    /// Equal apart from `_mtime` (stremio-core `eq_no_mtime`): decides whether a change
++    /// is a change at all.
++    pub fn eq_no_mtime(&self, other: &LibraryItem) -> bool {
++        self.id == other.id
++            && self.removed == other.removed
++            && self.temp == other.temp
++            && self.ctime == other.ctime
++            && self.state == other.state
++            && self.name == other.name
++            && self.r#type == other.r#type
++            && self.poster == other.poster
++            && self.poster_shape == other.poster_shape
++            && self.behavior_hints == other.behavior_hints
++            && self.extra == other.extra
++    }
++}
++
++/// Playback state of a [`LibraryItem`]. Times are milliseconds.
++#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct LibraryItemState {
++    /// Last time this item was played or marked watched.
++    #[serde(
++        default,
++        deserialize_with = "lenient::opt_time",
++        serialize_with = "out::opt_time"
++    )]
++    pub last_watched: Option<DateTime<Utc>>,
++    /// Time watched of the current video (`video_id`).
++    #[serde(default, deserialize_with = "lenient::uint")]
++    pub time_watched: u64,
++    /// Resume position in the current video; 0 = nothing to resume.
++    #[serde(default, deserialize_with = "lenient::uint")]
++    pub time_offset: u64,
++    /// Time watched across all videos.
++    #[serde(default, deserialize_with = "lenient::uint")]
++    pub overall_time_watched: u64,
++    /// Incremented once per video that crossed the watched threshold, and by "mark as
++    /// watched".
++    #[serde(default, deserialize_with = "lenient::uint32")]
++    pub times_watched: u32,
++    /// 1 once the current video crossed the watched threshold.
++    #[serde(default, deserialize_with = "lenient::uint32")]
++    pub flagged_watched: u32,
++    /// Duration of the current video.
++    #[serde(default, deserialize_with = "lenient::uint")]
++    pub duration: u64,
++    /// The video last played (an episode id, or the meta id for a movie). Spelled
++    /// `video_id` on the wire, unlike its camelCase siblings — as in stremio-core.
++    #[serde(
++        rename = "video_id",
++        default,
++        deserialize_with = "lenient::opt_string"
++    )]
++    pub video_id: Option<String>,
++    /// Watched episodes, as a [`WatchedField`] string. Kept verbatim (so an unchanged
++    /// item round-trips byte for byte); a string that does not parse reads as `None`.
++    #[serde(default, deserialize_with = "lenient::opt_watched")]
++    pub watched: Option<String>,
++    /// Opt out of new-episode notifications.
++    #[serde(default, deserialize_with = "lenient::boolean")]
++    pub no_notif: bool,
++    #[serde(flatten)]
++    pub extra: Map<String, Value>,
++}
++
++/// stremio-core's `MetaItemBehaviorHints` as stored on a library item.
++#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
++#[serde(rename_all = "camelCase")]
++pub struct LibraryItemBehaviorHints {
++    #[serde(default, deserialize_with = "lenient::opt_string")]
++    pub default_video_id: Option<String>,
++    #[serde(default, deserialize_with = "lenient::opt_string")]
++    pub featured_video_id: Option<String>,
++    #[serde(default, deserialize_with = "lenient::boolean")]
++    pub has_scheduled_videos: bool,
++    /// Written only when true (older stremio-core versions do not know the field).
++    #[serde(
++        default,
++        deserialize_with = "lenient::boolean",
++        skip_serializing_if = "is_false"
++    )]
++    pub is_live: bool,
++    #[serde(flatten)]
++    pub extra: Map<String, Value>,
++}
++
++/// `[id, mtimeMillis]`, one entry of Stremio's `datastoreMeta` answer.
++#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
++pub struct LibraryItemModified(pub String, pub i64);
++
++impl<'de> Deserialize<'de> for LibraryItemModified {
++    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
++        let (id, mtime) = <(String, Value)>::deserialize(deserializer)?;
++        let millis = match &mtime {
++            Value::String(s) => parse_time(s).map(|t| t.timestamp_millis()),
++            other => number_to_u64(other).and_then(|n| i64::try_from(n).ok()),
++        };
++        Ok(LibraryItemModified(id, millis.unwrap_or(0)))
++    }
++}
++
++fn is_false(b: &bool) -> bool {
++    !*b
++}
++
++fn epoch() -> DateTime<Utc> {
++    DateTime::UNIX_EPOCH
++}
++
++/// chrono's own RFC 3339 form (what stremio-core writes): UTC, `Z`, fractional seconds
++/// only as precise as needed.
++pub fn format_time(time: &DateTime<Utc>) -> String {
++    time.to_rfc3339_opts(SecondsFormat::AutoSi, true)
++}
++
++/// RFC 3339 (any offset), as UTC.
++pub fn parse_time(s: &str) -> Option<DateTime<Utc>> {
++    DateTime::parse_from_rfc3339(s.trim())
++        .ok()
++        .map(|t| t.with_timezone(&Utc))
++}
++
++/// The current time at millisecond precision (like JavaScript's `Date`), so stored
++/// timestamps match what Stremio's own apps write. Callers pass it into the pure
++/// functions of this crate.
++pub fn now_from_system(now: std::time::SystemTime) -> DateTime<Utc> {
++    let millis = now
++        .duration_since(std::time::UNIX_EPOCH)
++        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
++        .unwrap_or(0);
++    DateTime::from_timestamp_millis(millis).unwrap_or(DateTime::UNIX_EPOCH)
++}
++
++/// A non-negative integer from a JSON number (floats truncate), numeric string or bool.
++fn number_to_u64(value: &Value) -> Option<u64> {
++    match value {
++        Value::Number(n) => n.as_u64().or_else(|| {
++            n.as_f64()
++                .filter(|f| f.is_finite())
++                // `as` saturates: negative → 0, huge → u64::MAX
++                .map(|f| f.trunc() as u64)
++        }),
++        Value::String(s) => {
++            let s = s.trim();
++            s.parse::<u64>()
++                .ok()
++                .or_else(|| number_to_u64(&serde_json::from_str::<Value>(s).ok()?))
++        }
++        Value::Bool(b) => Some(u64::from(*b)),
++        _ => None,
++    }
++}
++
++mod lenient {
++    use super::*;
++
++    pub fn string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
++        Ok(match Value::deserialize(d)? {
++            Value::String(s) => s,
++            Value::Number(n) => n.to_string(),
++            _ => String::new(),
++        })
++    }
++
++    pub fn opt_string<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
++        Ok(match Value::deserialize(d)? {
++            Value::String(s) if !s.is_empty() => Some(s),
++            _ => None,
++        })
++    }
++
++    pub fn opt_url<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Url>, D::Error> {
++        Ok(match Value::deserialize(d)? {
++            Value::String(s) => Url::parse(&s).ok(),
++            _ => None,
++        })
++    }
++
++    pub fn opt_watched<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
++        Ok(match Value::deserialize(d)? {
++            Value::String(s) if s.parse::<WatchedField>().is_ok() => Some(s),
++            _ => None,
++        })
++    }
++
++    pub fn boolean<'de, D: Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
++        Ok(match Value::deserialize(d)? {
++            Value::Bool(b) => b,
++            Value::String(s) => s == "true" || s == "1",
++            other => number_to_u64(&other).is_some_and(|n| n != 0),
++        })
++    }
++
++    pub fn uint<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
++        Ok(number_to_u64(&Value::deserialize(d)?).unwrap_or(0))
++    }
++
++    pub fn uint32<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
++        Ok(number_to_u64(&Value::deserialize(d)?)
++            .map_or(0, |n| u32::try_from(n).unwrap_or(u32::MAX)))
++    }
++
++    fn any_time(value: &Value) -> Option<DateTime<Utc>> {
++        match value {
++            Value::String(s) => parse_time(s),
++            // epoch milliseconds (as datastoreMeta reports them)
++            Value::Number(_) => number_to_u64(value)
++                .and_then(|n| i64::try_from(n).ok())
++                .and_then(DateTime::from_timestamp_millis),
++            _ => None,
++        }
++    }
++
++    pub fn opt_time<'de, D: Deserializer<'de>>(d: D) -> Result<Option<DateTime<Utc>>, D::Error> {
++        Ok(any_time(&Value::deserialize(d)?))
++    }
++
++    pub fn time<'de, D: Deserializer<'de>>(d: D) -> Result<DateTime<Utc>, D::Error> {
++        Ok(any_time(&Value::deserialize(d)?).unwrap_or_else(epoch))
++    }
++
++    /// A nested object read leniently; anything that is not an object (or fails anyway)
++    /// becomes the default.
++    pub fn object<'de, D, T>(d: D) -> Result<T, D::Error>
++    where
++        D: Deserializer<'de>,
++        T: serde::de::DeserializeOwned + Default,
++    {
++        Ok(match Value::deserialize(d)? {
++            value @ Value::Object(_) => serde_json::from_value(value).unwrap_or_default(),
++            _ => T::default(),
++        })
++    }
++}
++
++mod out {
++    use super::*;
++
++    pub fn time<S: Serializer>(time: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
++        s.serialize_str(&format_time(time))
++    }
++
++    pub fn opt_time<S: Serializer>(time: &Option<DateTime<Utc>>, s: S) -> Result<S::Ok, S::Error> {
++        match time {
++            Some(time) => s.serialize_str(&format_time(time)),
++            None => s.serialize_none(),
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use serde_json::json;
++
++    /// An item as stremio-core writes it (field order, integers, `video_id`, `Z` times).
++    const GOLDEN: &str = include_str!("../tests/fixtures/library_item.json");
++    /// The same item as old/buggy clients wrote it: floats, numeric strings, nulls,
++    /// missing fields, an invalid poster URL and watched string, plus unknown fields.
++    const MESSY: &str = include_str!("../tests/fixtures/library_item_messy.json");
++
++    #[test]
++    fn golden_item_round_trips_byte_for_byte() {
++        let golden = GOLDEN.trim_end();
++        let item: LibraryItem = serde_json::from_str(golden).unwrap();
++        assert_eq!(item.id, "tt0944947");
++        assert_eq!(item.state.video_id.as_deref(), Some("tt0944947:1:3"));
++        assert_eq!(item.state.time_offset, 1_900_000);
++        assert_eq!(
++            item.mtime,
++            parse_time("2023-05-14T12:34:56.789Z").unwrap(),
++            "fractional seconds are kept"
++        );
++        assert_eq!(serde_json::to_string(&item).unwrap(), golden);
++    }
++
++    #[test]
++    fn messy_input_reads_leniently_and_writes_strictly() {
++        let item: LibraryItem = serde_json::from_str(MESSY).unwrap();
++        let expected = include_str!("../tests/fixtures/library_item_messy.out.json");
++        assert_eq!(serde_json::to_string(&item).unwrap(), expected.trim_end());
++    }
++
++    #[test]
++    fn integers_are_never_written_as_floats_or_nulls() {
++        let item: LibraryItem = serde_json::from_value(json!({
++            "_id": "tt1", "name": "A", "type": "movie", "_mtime": "2024-01-01T00:00:00Z",
++            "state": {"timeOffset": 12.9, "timeWatched": null, "duration": "5400000.0",
++                      "timesWatched": -3, "flaggedWatched": true}
++        }))
++        .unwrap();
++        let state = serde_json::to_value(&item).unwrap()["state"].clone();
++        assert_eq!(state["timeOffset"], json!(12));
++        assert!(state["timeOffset"].is_u64());
++        assert_eq!(state["timeWatched"], json!(0));
++        assert_eq!(state["duration"], json!(5_400_000));
++        assert_eq!(state["timesWatched"], json!(0));
++        assert_eq!(state["flaggedWatched"], json!(1));
++        assert_eq!(state["overallTimeWatched"], json!(0), "missing → 0, not null");
++    }
++
++    #[test]
++    fn unknown_fields_survive_at_every_level() {
++        let item: LibraryItem = serde_json::from_value(json!({
++            "_id": "tt1", "name": "A", "type": "movie", "_mtime": "2024-01-01T00:00:00Z",
++            "aFutureField": [1, 2],
++            "state": {"zSomething": {"deep": true}},
++            "behaviorHints": {"futureHint": "x"}
++        }))
++        .unwrap();
++        let back = serde_json::to_value(&item).unwrap();
++        assert_eq!(back["aFutureField"], json!([1, 2]));
++        assert_eq!(back["state"]["zSomething"], json!({"deep": true}));
++        assert_eq!(back["behaviorHints"]["futureHint"], json!("x"));
++        assert!(back["behaviorHints"].get("isLive").is_none(), "false isLive is omitted");
++    }
++
++    #[test]
++    fn library_item_modified_reads_millis_or_dates() {
++        let entries: Vec<LibraryItemModified> = serde_json::from_value(json!([
++            ["tt1", 1_700_000_000_000_i64],
++            ["tt2", 1_700_000_000_000.0],
++            ["tt3", "2023-11-14T22:13:20Z"],
++            ["tt4", null]
++        ]))
++        .unwrap();
++        assert_eq!(entries[0], LibraryItemModified("tt1".into(), 1_700_000_000_000));
++        assert_eq!(entries[1].1, 1_700_000_000_000);
++        assert_eq!(entries[2].1, 1_700_000_000_000);
++        assert_eq!(entries[3].1, 0);
++        assert_eq!(
++            serde_json::to_string(&entries[0]).unwrap(),
++            r#"["tt1",1700000000000]"#
++        );
++    }
++
++    #[test]
++    fn times_use_chronos_rfc3339_form() {
++        let whole = parse_time("2024-02-03T04:05:06+02:00").unwrap();
++        assert_eq!(format_time(&whole), "2024-02-03T02:05:06Z");
++        let millis = DateTime::from_timestamp_millis(1_700_000_000_123).unwrap();
++        assert_eq!(format_time(&millis), "2023-11-14T22:13:20.123Z");
++        let now = now_from_system(
++            std::time::UNIX_EPOCH + std::time::Duration::from_nanos(1_700_000_000_123_456_789),
++        );
++        assert_eq!(now, millis, "now is truncated to milliseconds");
++    }
++}
+diff --git a/crates/zeiler-account/src/watched.rs b/crates/zeiler-account/src/watched.rs
+new file mode 100644
+index 0000000..e7659bd
+--- /dev/null
++++ b/crates/zeiler-account/src/watched.rs
+@@ -0,0 +1,444 @@
++//! The watched-episodes bitfield of a library item (`state.watched`).
++//!
++//! Ported from stremio-watched-bitfield (part of stremio-core,
++//! <https://github.com/Stremio/stremio-core>), MIT License, Copyright (c) 2019 SmartCode
++//! OOD — see THIRD-PARTY-NOTICES.md for the license text.
++//!
++//! Wire format: `{anchorVideoId}:{anchorLength}:{base64(zlib(bitfield8))}`.
++//!
++//! - Bit *i* (little-endian within each byte) is video *i* of the meta's videos ordered
++//!   by (season, episode, released) — see [`crate::ordered_video_ids`].
++//! - The anchor is the last watched video and `anchorLength` its index + 1. Video lists
++//!   grow (new episodes) and shift (specials inserted), so the bits are re-aligned on
++//!   read by finding the anchor in the current list ("resize on anchor").
++//! - Video ids contain `:` (`tt0944947:1:5`), so the string is parsed from the right.
++//!
++//! Differences from the original, none of them visible on the wire: decoding is capped
++//! (a hostile string cannot inflate into gigabytes), base64 padding is optional on
++//! input, and offsets use checked signed arithmetic instead of `i32` casts.
++
++use std::fmt;
++use std::io::{Read, Write};
++use std::str::FromStr;
++
++use base64::Engine;
++use base64::alphabet;
++use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
++use flate2::Compression;
++use flate2::read::ZlibDecoder;
++use flate2::write::ZlibEncoder;
++
++/// Standard alphabet; padding written, optional when reading (JavaScript clients and
++/// older base64 crates disagree about it).
++const BASE64: GeneralPurpose = GeneralPurpose::new(
++    &alphabet::STANDARD,
++    GeneralPurposeConfig::new()
++        .with_decode_padding_mode(DecodePaddingMode::Indifferent)
++        .with_decode_allow_trailing_bits(true),
++);
++
++/// Upper bound for a decoded bitfield: 1 MiB is 8 million videos.
++const MAX_DECODED_BYTES: u64 = 1 << 20;
++
++#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
++pub enum WatchedError {
++    #[error("the watched field is malformed: {0}")]
++    Format(&'static str),
++    #[error("the watched bitfield is not valid base64")]
++    Base64,
++    #[error("the watched bitfield is not valid zlib data")]
++    Zlib,
++    #[error("the watched bitfield is too large")]
++    TooLarge,
++}
++
++/// A growable bitfield, `length` bits stored in `ceil(length / 8)` bytes.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct BitField8 {
++    pub length: usize,
++    values: Vec<u8>,
++}
++
++impl BitField8 {
++    pub fn new(length: usize) -> Self {
++        Self {
++            length,
++            values: vec![0; length.div_ceil(8)],
++        }
++    }
++
++    /// From raw bytes; `length` defaults to all their bits, and the bytes are padded
++    /// with zeros when `length` needs more.
++    pub fn new_with_values(mut values: Vec<u8>, length: Option<usize>) -> Self {
++        let length = length.unwrap_or(values.len() * 8);
++        let bytes = length.div_ceil(8);
++        if bytes > values.len() {
++            values.resize(bytes, 0);
++        }
++        Self { length, values }
++    }
++
++    pub fn get(&self, i: usize) -> bool {
++        self.values
++            .get(i / 8)
++            .is_some_and(|byte| (byte >> (i % 8)) & 1 != 0)
++    }
++
++    /// Set bit `i`, growing the field if needed (the length then becomes a whole
++    /// number of bytes, as in the original).
++    pub fn set(&mut self, i: usize, value: bool) {
++        let index = i / 8;
++        let mask = 1 << (i % 8);
++        if index >= self.values.len() {
++            self.values.resize(index + 1, 0);
++            self.length = self.values.len() * 8;
++        }
++        if value {
++            self.values[index] |= mask;
++        } else {
++            self.values[index] &= !mask;
++        }
++    }
++
++    /// The last index (below `length`) whose bit equals `value`.
++    pub fn last_index_of(&self, value: bool) -> Option<usize> {
++        (0..self.length).rev().find(|&i| self.get(i) == value)
++    }
++
++    /// `base64(zlib(bytes))`, zlib level 6 like the original.
++    pub fn encode(&self) -> String {
++        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::new(6));
++        // writing into a Vec cannot fail
++        let compressed = encoder
++            .write_all(&self.values)
++            .and_then(|()| encoder.finish())
++            .unwrap_or_default();
++        BASE64.encode(compressed)
++    }
++
++    pub fn decode(encoded: &str, length: Option<usize>) -> Result<Self, WatchedError> {
++        let compressed = BASE64
++            .decode(encoded.trim())
++            .map_err(|_| WatchedError::Base64)?;
++        let mut values = Vec::new();
++        ZlibDecoder::new(&compressed[..])
++            .take(MAX_DECODED_BYTES + 1)
++            .read_to_end(&mut values)
++            .map_err(|_| WatchedError::Zlib)?;
++        if values.len() as u64 > MAX_DECODED_BYTES {
++            return Err(WatchedError::TooLarge);
++        }
++        Ok(Self::new_with_values(values, length))
++    }
++}
++
++/// The serialized form, parsed without knowing the meta's videos.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct WatchedField {
++    /// The last watched video id (`undefined` when nothing is watched).
++    pub anchor_video: String,
++    /// Index of the anchor + 1.
++    pub anchor_length: usize,
++    pub bitfield: BitField8,
++}
++
++impl fmt::Display for WatchedField {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(
++            f,
++            "{}:{}:{}",
++            self.anchor_video,
++            self.anchor_length,
++            self.bitfield.encode()
++        )
++    }
++}
++
++impl FromStr for WatchedField {
++    type Err = WatchedError;
++
++    fn from_str(s: &str) -> Result<Self, Self::Err> {
++        // {id}:{len}:{buf}, where {id} may itself contain ':' — pop from the right
++        let mut parts = s.rsplitn(3, ':');
++        let buf = parts.next().ok_or(WatchedError::Format("no bitfield"))?;
++        let length = parts
++            .next()
++            .ok_or(WatchedError::Format("no anchor length"))?;
++        let anchor = parts.next().ok_or(WatchedError::Format("no anchor video"))?;
++        let anchor_length = length
++            .parse::<usize>()
++            .map_err(|_| WatchedError::Format("the anchor length is not a number"))?;
++        Ok(Self {
++            anchor_video: anchor.to_string(),
++            anchor_length,
++            bitfield: BitField8::decode(buf, None)?,
++        })
++    }
++}
++
++impl From<WatchedBitField> for WatchedField {
++    fn from(watched: WatchedBitField) -> Self {
++        let last = watched.bitfield.last_index_of(true).unwrap_or(0);
++        Self {
++            anchor_video: watched
++                .video_ids
++                .get(last)
++                .cloned()
++                .unwrap_or_else(|| "undefined".to_string()),
++            anchor_length: last + 1,
++            bitfield: watched.bitfield,
++        }
++    }
++}
++
++/// A bitfield aligned to a concrete, ordered list of video ids.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct WatchedBitField {
++    bitfield: BitField8,
++    video_ids: Vec<String>,
++}
++
++impl WatchedBitField {
++    /// All unwatched (or `values[i]` for the first entries).
++    pub fn construct_from_array(values: &[bool], video_ids: Vec<String>) -> Self {
++        let mut bitfield = BitField8::new(video_ids.len());
++        for (i, &value) in values.iter().enumerate() {
++            bitfield.set(i, value);
++        }
++        Self {
++            bitfield,
++            video_ids,
++        }
++    }
++
++    /// Align a parsed field to `video_ids` by its anchor. When the anchor is not in the
++    /// list the result is blank (as in the original).
++    pub fn construct_with_videos(watched: WatchedField, video_ids: Vec<String>) -> Self {
++        let Some(anchor_index) = video_ids.iter().position(|id| *id == watched.anchor_video)
++        else {
++            return Self::construct_from_array(&[], video_ids);
++        };
++        let offset = watched.anchor_length as i64 - anchor_index as i64 - 1;
++        let bitfield = BitField8::new_with_values(watched.bitfield.values, Some(video_ids.len()));
++        if offset == 0 {
++            return Self {
++                bitfield,
++                video_ids,
++            };
++        }
++        let mut resized = Self::construct_from_array(&[], video_ids);
++        for i in 0..resized.video_ids.len() {
++            let previous = i as i64 + offset;
++            if let Ok(previous) = usize::try_from(previous)
++                && previous < bitfield.length
++            {
++                resized.set(i, bitfield.get(previous));
++            }
++        }
++        resized
++    }
++
++    /// Parse `serialized` and align it to `video_ids`.
++    pub fn construct_and_resize(
++        serialized: &str,
++        video_ids: Vec<String>,
++    ) -> Result<Self, WatchedError> {
++        Ok(Self::construct_with_videos(serialized.parse()?, video_ids))
++    }
++
++    pub fn video_ids(&self) -> &[String] {
++        &self.video_ids
++    }
++
++    pub fn get(&self, index: usize) -> bool {
++        self.bitfield.get(index)
++    }
++
++    pub fn get_video(&self, video_id: &str) -> bool {
++        self.video_ids
++            .iter()
++            .position(|id| id == video_id)
++            .is_some_and(|i| self.bitfield.get(i))
++    }
++
++    pub fn set(&mut self, index: usize, value: bool) {
++        self.bitfield.set(index, value);
++    }
++
++    /// Set `video_id`'s bit; returns false (and changes nothing) when it is not in the
++    /// list.
++    pub fn set_video(&mut self, video_id: &str, value: bool) -> bool {
++        match self.video_ids.iter().position(|id| id == video_id) {
++            Some(i) => {
++                self.bitfield.set(i, value);
++                true
++            }
++            None => false,
++        }
++    }
++
++    /// Whether any video is marked watched.
++    pub fn any(&self) -> bool {
++        self.bitfield.last_index_of(true).is_some()
++    }
++}
++
++impl fmt::Display for WatchedBitField {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        let last = self.bitfield.last_index_of(true).unwrap_or(0);
++        let anchor = self.video_ids.get(last).map_or("undefined", String::as_str);
++        write!(f, "{anchor}:{}:{}", last + 1, self.bitfield.encode())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn ids(prefix: &str, range: std::ops::RangeInclusive<u32>) -> Vec<String> {
++        range.map(|i| format!("{prefix}{i}")).collect()
++    }
++
++    // --- the original crate's tests -----------------------------------------------------
++
++    #[test]
++    fn bitfield8_decodes_and_encodes_the_reference_string() {
++        let bf = BitField8::decode("eJyTZwAAAEAAIA==", None).unwrap();
++        assert_eq!(bf.length, 16);
++        assert_eq!(bf.values, vec![31, 0]);
++        assert_eq!(bf.encode(), "eJyTZwAAAEAAIA==");
++        // a custom length keeps the bytes, so the encoding is the same
++        let short = BitField8::decode("eJyTZwAAAEAAIA==", Some(9)).unwrap();
++        assert_eq!(short.length, 9);
++        assert_eq!(short.encode(), "eJyTZwAAAEAAIA==");
++    }
++
++    #[test]
++    fn bitfield8_new_uses_the_bit_length() {
++        let mut bf = BitField8::new(20);
++        assert_eq!(bf.length, 20);
++        bf.set(15, true);
++        assert_eq!(bf.last_index_of(true), Some(15));
++    }
++
++    #[test]
++    fn parse_and_modify() {
++        let videos = ids("tt2934286:1:", 1..=9);
++        let watched = "tt2934286:1:5:5:eJyTZwAAAEAAIA==";
++        let mut wb = WatchedBitField::construct_and_resize(watched, videos).unwrap();
++
++        assert!(wb.get_video("tt2934286:1:5"));
++        assert!(!wb.get_video("tt2934286:1:6"));
++        assert_eq!(wb.to_string(), watched);
++
++        assert!(wb.set_video("tt2934286:1:6", true));
++        assert!(wb.get_video("tt2934286:1:6"));
++        assert!(!wb.set_video("tt2934286:9:9", true), "not in the list");
++    }
++
++    #[test]
++    fn construct_from_array_round_trips() {
++        let video_ids = ids("tt2934286:1:", 1..=499);
++        let mut wb = WatchedBitField::construct_from_array(&[false; 500], video_ids.clone());
++        assert!(video_ids.iter().all(|id| !wb.get_video(id)));
++        for i in 0..video_ids.len() {
++            wb.set(i, i % 2 == 0);
++        }
++        let back = WatchedBitField::construct_and_resize(&wb.to_string(), video_ids.clone())
++            .unwrap();
++        for (i, id) in video_ids.iter().enumerate() {
++            assert_eq!(back.get(i), i % 2 == 0);
++            assert_eq!(back.get_video(id), i % 2 == 0);
++        }
++    }
++
++    #[test]
++    fn empty_serializes_to_the_known_string() {
++        let empty = WatchedBitField::construct_from_array(&[], vec![]);
++        assert_eq!(empty.to_string(), "undefined:1:eJwDAAAAAAE=");
++        let back = WatchedBitField::construct_and_resize("undefined:1:eJwDAAAAAAE=", vec![]);
++        assert_eq!(back, Ok(WatchedBitField::construct_from_array(&[], vec![])));
++    }
++
++    #[test]
++    fn watched_field_parses_series_anchors_from_the_right() {
++        let field: WatchedField = "tt7767422:3:8:24:eJz7//8/AAX9Av4=".parse().unwrap();
++        assert_eq!(field.anchor_video, "tt7767422:3:8");
++        assert_eq!(field.anchor_length, 24);
++        assert_eq!(field.bitfield.encode(), "eJz7//8/AAX9Av4=");
++        assert_eq!(field.to_string(), "tt7767422:3:8:24:eJz7//8/AAX9Av4=");
++    }
++
++    #[test]
++    fn anchor_points_to_the_last_watched_video() {
++        let video_ids = ids("tt0:1:", 1..=20);
++        let mut watched = WatchedBitField::construct_from_array(&[], video_ids);
++        watched.set_video("tt0:1:16", true);
++        let field: WatchedField = watched.into();
++        assert!(field.to_string().starts_with("tt0:1:16:16:"), "{field}");
++    }
++
++    // --- resize on anchor -----------------------------------------------------------
++
++    #[test]
++    fn bits_follow_the_anchor_when_videos_are_inserted_before_it() {
++        // watched 1..=5 of season 1
++        let before = ids("tt1:1:", 1..=9);
++        let mut wb = WatchedBitField::construct_from_array(&[], before);
++        for i in 1..=5 {
++            wb.set_video(&format!("tt1:1:{i}"), true);
++        }
++        let stored = wb.to_string();
++        assert!(stored.starts_with("tt1:1:5:5:"));
++
++        // two specials (season 0) now sort first
++        let mut after = vec!["tt1:0:1".to_string(), "tt1:0:2".to_string()];
++        after.extend(ids("tt1:1:", 1..=10));
++        let realigned = WatchedBitField::construct_and_resize(&stored, after).unwrap();
++        assert!(!realigned.get_video("tt1:0:1"));
++        assert!(!realigned.get_video("tt1:0:2"));
++        for i in 1..=5 {
++            assert!(realigned.get_video(&format!("tt1:1:{i}")), "episode {i}");
++        }
++        assert!(!realigned.get_video("tt1:1:6"));
++        assert!(!realigned.get_video("tt1:1:10"));
++    }
++
++    #[test]
++    fn an_unknown_anchor_gives_a_blank_field() {
++        let wb = WatchedBitField::construct_and_resize(
++            "tt9:9:9:3:eJyTZwAAAEAAIA==",
++            ids("tt1:1:", 1..=4),
++        )
++        .unwrap();
++        assert!(!wb.any());
++    }
++
++    #[test]
++    fn malformed_strings_are_errors_not_panics() {
++        for bad in [
++            "",
++            "abc",
++            "a:b",
++            "tt1:x:eJyTZwAAAEAAIA==",
++            "tt1:1:not base64!",
++            "tt1:1:aGVsbG8=", // base64, but not zlib
++        ] {
++            assert!(bad.parse::<WatchedField>().is_err(), "{bad:?}");
++        }
++        // unpadded base64 is accepted
++        let unpadded: WatchedField = "tt1:1:5:5:eJyTZwAAAEAAIA".parse().unwrap();
++        assert_eq!(unpadded.bitfield.values, vec![31, 0]);
++    }
++
++    #[test]
++    fn decoding_is_capped() {
++        // 2 MiB of zeros compress to a few KiB
++        let huge = BitField8::new((MAX_DECODED_BYTES as usize + (1 << 20)) * 8).encode();
++        assert!(huge.len() < 16 * 1024);
++        assert_eq!(
++            BitField8::decode(&huge, None),
++            Err(WatchedError::TooLarge)
++        );
++    }
++}
+diff --git a/crates/zeiler-account/tests/fixtures/library_item.json b/crates/zeiler-account/tests/fixtures/library_item.json
+new file mode 100644
+index 0000000..8c11c5e
+--- /dev/null
++++ b/crates/zeiler-account/tests/fixtures/library_item.json
+@@ -0,0 +1 @@
++{"_id":"tt0944947","name":"Game of Thrones","type":"series","poster":"https://images.metahub.space/poster/medium/tt0944947/img","posterShape":"poster","removed":false,"temp":false,"_ctime":"2020-01-01T00:00:00Z","_mtime":"2023-05-14T12:34:56.789Z","state":{"lastWatched":"2023-05-14T12:30:00Z","timeWatched":1800000,"timeOffset":1900000,"overallTimeWatched":5400000,"timesWatched":5,"flaggedWatched":0,"duration":3600000,"video_id":"tt0944947:1:3","watched":"tt0944947:1:5:5:eJyTZwAAAEAAIA==","noNotif":false},"behaviorHints":{"defaultVideoId":null,"featuredVideoId":null,"hasScheduledVideos":false}}
+diff --git a/crates/zeiler-account/tests/fixtures/library_item_messy.json b/crates/zeiler-account/tests/fixtures/library_item_messy.json
+new file mode 100644
+index 0000000..1990261
+--- /dev/null
++++ b/crates/zeiler-account/tests/fixtures/library_item_messy.json
+@@ -0,0 +1,30 @@
++{
++  "_id": "tt0944947",
++  "name": "Game of Thrones",
++  "type": "series",
++  "poster": "not a url",
++  "posterShape": "wide",
++  "removed": 0,
++  "temp": "true",
++  "_ctime": null,
++  "_mtime": "2023-05-14T14:34:56.789+02:00",
++  "state": {
++    "lastWatched": "",
++    "timeWatched": 1800000.7,
++    "timeOffset": "1900000",
++    "overallTimeWatched": null,
++    "timesWatched": 2.0,
++    "flaggedWatched": false,
++    "video_id": "",
++    "watched": "garbage",
++    "noNotif": null,
++    "zLegacy": 1
++  },
++  "behaviorHints": {
++    "defaultVideoId": "",
++    "hasScheduledVideos": 1,
++    "isLive": false,
++    "extraHint": true
++  },
++  "aFutureField": { "x": 1 }
++}
+diff --git a/crates/zeiler-account/tests/fixtures/library_item_messy.out.json b/crates/zeiler-account/tests/fixtures/library_item_messy.out.json
+new file mode 100644
+index 0000000..97ab3f2
+--- /dev/null
++++ b/crates/zeiler-account/tests/fixtures/library_item_messy.out.json
+@@ -0,0 +1 @@
++{"_id":"tt0944947","name":"Game of Thrones","type":"series","poster":null,"posterShape":"poster","removed":false,"temp":true,"_ctime":null,"_mtime":"2023-05-14T12:34:56.789Z","state":{"lastWatched":null,"timeWatched":1800000,"timeOffset":1900000,"overallTimeWatched":0,"timesWatched":2,"flaggedWatched":0,"duration":0,"video_id":null,"watched":null,"noNotif":false,"zLegacy":1},"behaviorHints":{"defaultVideoId":null,"featuredVideoId":null,"hasScheduledVideos":true,"extraHint":true},"aFutureField":{"x":1}}
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index a53a2cb..fe29972 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -19,6 +19,7 @@ tauri-build = { workspace = true }
+ tauri = { workspace = true }
+ tauri-plugin-opener = { workspace = true }
+ tauri-plugin-deep-link = { workspace = true }
++zeiler-account = { workspace = true }
+ zeiler-addon = { workspace = true }
+ zeiler-engine = { workspace = true }
+ zeiler-player = { workspace = true }
+diff --git a/src-tauri/src/persist.rs b/src-tauri/src/persist.rs
+index 944e29d..69d2132 100644
+--- a/src-tauri/src/persist.rs
++++ b/src-tauri/src/persist.rs
+@@ -63,10 +63,6 @@ pub(crate) async fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(
+ ///
+ /// New files should carry a `{"version": N, ...}` envelope so their schema can be
+ /// migrated at load time.
+-#[cfg_attr(
+-    not(test),
+-    expect(dead_code, reason = "the first feature store lands after M0")
+-)]
+ pub(crate) struct JsonStore<T> {
+     path: PathBuf,
+     value: RwLock<T>,
+@@ -75,10 +71,6 @@ pub(crate) struct JsonStore<T> {
+     write_lock: Mutex<()>,
+ }
+ 
+-#[cfg_attr(
+-    not(test),
+-    expect(dead_code, reason = "the first feature store lands after M0")
+-)]
+ impl<T> JsonStore<T>
+ where
+     T: Clone + Default + Serialize + DeserializeOwned,
+@@ -97,12 +89,20 @@ where
+     }
+ 
+     /// A snapshot of the current value.
++    #[cfg_attr(
++        not(test),
++        expect(dead_code, reason = "the library store reads through `read`")
++    )]
+     pub(crate) async fn get(&self) -> T {
+         self.value.read().await.clone()
+     }
+ 
+     /// Apply `f` to a copy of the value, persist it, then publish it. If the write
+     /// fails, the in-memory value is left unchanged, so memory never runs ahead of disk.
++    #[cfg_attr(
++        not(test),
++        expect(dead_code, reason = "the library store updates through `try_update`")
++    )]
+     pub(crate) async fn update(&self, f: impl FnOnce(&mut T)) -> Result<T, IpcError> {
+         let _guard = self.write_lock.lock().await;
+         let mut next = self.value.read().await.clone();
+@@ -111,6 +111,30 @@ where
+         *self.value.write().await = next.clone();
+         Ok(next)
+     }
++
++    /// Run `f` on the current value without copying it (for large values such as the
++    /// library).
++    pub(crate) async fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
++        f(&*self.value.read().await)
++    }
++
++    /// Like [`update`](Self::update), but `f` decides what happens: `Ok(Some(r))`
++    /// persists and publishes the changed copy and returns `r`; `Ok(None)` means nothing
++    /// changed, so nothing is written; `Err` aborts without a write. Serialized with
++    /// every other update, with the same memory-never-ahead-of-disk rule.
++    pub(crate) async fn try_update<R>(
++        &self,
++        f: impl FnOnce(&mut T) -> Result<Option<R>, IpcError>,
++    ) -> Result<Option<R>, IpcError> {
++        let _guard = self.write_lock.lock().await;
++        let mut next = self.value.read().await.clone();
++        let Some(result) = f(&mut next)? else {
++            return Ok(None);
++        };
++        write_json(&self.path, &next).await?;
++        *self.value.write().await = next;
++        Ok(Some(result))
++    }
+ }
+ 
+ #[cfg(test)]
+@@ -215,6 +239,38 @@ pub(crate) mod tests {
+         assert_eq!(on_disk.hits, 16);
+     }
+ 
++    #[tokio::test]
++    async fn try_update_writes_only_changes() {
++        let dir = temp_dir("persist-store-try");
++        let path = dir.join("counter.json");
++        let store = JsonStore::<Counter>::load(path.clone()).await.unwrap();
++
++        let unchanged = store.try_update(|_| Ok(None::<()>)).await.unwrap();
++        assert_eq!(unchanged, None);
++        assert!(!path.exists(), "nothing changed, nothing written");
++
++        let refused = store
++            .try_update(|c| {
++                c.hits = 5;
++                Err::<Option<()>, _>(IpcError::InvalidInput("no".into()))
++            })
++            .await;
++        assert!(refused.is_err());
++        assert_eq!(store.read(|c| c.hits).await, 0, "an error discards the copy");
++
++        let changed = store
++            .try_update(|c| {
++                c.hits = 7;
++                Ok(Some(c.hits * 2))
++            })
++            .await
++            .unwrap();
++        assert_eq!(changed, Some(14));
++        assert_eq!(store.read(|c| c.hits).await, 7);
++        let on_disk: Counter = read_json(&path).await.unwrap();
++        assert_eq!(on_disk.hits, 7);
++    }
++
+     #[tokio::test]
+     async fn json_store_failed_write_leaves_memory_unchanged() {
+         let dir = temp_dir("persist-store-fail");
+diff --git a/src-tauri/src/state.rs b/src-tauri/src/state.rs
+index 2fba966..300cd23 100644
+--- a/src-tauri/src/state.rs
++++ b/src-tauri/src/state.rs
+@@ -225,10 +225,6 @@ impl AppState {
+     /// `data_dir/profiles/<active id>/`, so new per-user stores must take their path
+     /// from here rather than from the data dir. Device-wide files (settings.json,
+     /// engine state) stay in the data dir.
+-    #[cfg_attr(
+-        not(test),
+-        expect(dead_code, reason = "first per-profile store lands after M0")
+-    )]
+     pub fn profile_dir(&self) -> PathBuf {
+         self.data_dir.clone()
+     }

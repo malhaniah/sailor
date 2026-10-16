@@ -1,0 +1,286 @@
+{
+ "area": "Addon marketplace (browse/search/filter/install/uninstall/reorder/configure/update, p2p/adult handling)",
+ "harbor_approach": "Paths below are relative to the Harbor root, /tmp/claude-0/-home-user-sailor/3ec38e8b-1ace-545e-a82a-ac4418d8c2a1/scratchpad/ref/harbor. Everything here runs in the webview (TS); only the deep-link and Linux browser pieces are Rust.\n\nWHERE LISTINGS COME FROM (3 sources merged in src/lib/addons-store/store.ts useAddonsCatalog, L35-263):\n(a) A bundled curated list, src/lib/addons-store/curated.ts. It defines CuratedEntry {id, transportUrl, category, tags, curatorNote, warnings, nsfw, hero, rails[], recommended 0-100}, CURATED_RAILS (L49-58: essential, streams-debrid, streams-free, anime, subtitles, metadata, sports, tools, adult) and about 40 entries, mostly stream addons (Torrentio is the \"essential\" hero, recommended 99). Zeiler must NOT port this.\n(b) Stremio's public directories, src/lib/addons-store/community.ts L4-9:\n  - GET https://v3-cinemeta.strem.io/addon_catalog/all/community.json and .../all/official.json, which return {addons:[{manifest, transportUrl}]}.\n  - GET https://api.strem.io/addonsofficialcollection.json, which may be a bare array or {addons}.\n  - Results are deduped by manifest.id. fetchManifest() fetches curated manifests that are missing from the listings.\n(c) The stremio-addons.net community API, src/lib/providers/stremio-addons.ts. API_BASE is https://stremio-addons.net/api/v0 (L7).\n  - listAddons(params) (L205-241) calls GET /addons. Query params (L77-91): page, limit, search, nsfw=exclude|only, category (repeatable), sort_by=stars|createdAt, order=asc|desc, after.\n  - The response (L41-51) is {addons: SAAddon[], pagination: {page, limit, total, totalPages, hasNextPage, hasPreviousPage}}.\n  - SAAddon (L12-24) is {uuid, url, manifestUrl, manifest, slug, stars, categories: [{name, slug}], configureUrl|null, createdAt, updatedAt, documentation?}.\n  - getAddon(slug) (L243-262) calls GET /addons/{uuidOrSlug} and returns SAAddon plus instances[] and markdown documentation.\n  - listCategories() (L264-278) calls GET /categories and returns {categories: [{name, slug}]}. There is a hard-coded fallback of 16 slugs (L280-297): anime, asian+drama, bollywood, debrid+support, http+streams, live+tv, metadata, misc, movies, music, nsfw, radios, subtitles, torrents, tv+shows, usenet.\n  - Responses are kept in an in-memory cache (1 h TTL, 48 entries). If the API fails, it falls back to the Stremio community catalog and filters/paginates locally (applyListParams L132-173).\n  - src/lib/providers/stremio-addons-index.ts builds a manifestId\u2192community index (6 pages \u00d7 100, sorted by stars, 1 h TTL) that feeds the star badges.\n  - src/lib/providers/stremio-addons-velocity.ts stores star snapshots in localStorage key \"harbor.stremio-addons.velocity.v1\" (max 14 snapshots, MIN_DELTA 5) to produce the \"Rising\" list.\n  - Site links: https://stremio-addons.net/addons/{slug} (and #rate, L329-335).\n\nMERGE AND CLASSIFY (store.ts):\n- Installed state is the union of the local list and the Stremio account list.\n- Entries are re-keyed by real manifest.id and by transport URL.\n- Duplicates are dropped by normalizeAddonName (L16-25); the winner is installed > curated > stremio-addons.net.\n- ALWAYS_HIDDEN_IDS (L11-14) hides OpenSubtitles because Harbor builds it in.\n- isAdultAddon (L265-271) uses curated.nsfw, else behaviorHints.adult || isAdultText(id, name). isAdultText is in src/lib/addons-store/adult-filter.ts: a leetspeak-normalised substring list plus a word list.\n- categorizeAddon (L290-312) and matchesRail (L314-350) are regex heuristics (ANIME_RX, SPORTS_RX, LIVE_TV_RX, a DEBRID_RX that names specific stream addons, USENET_RX, SUBS_RX) plus resources/types/idPrefixes.\n- buildRail (L361-387) tiers results by curated.recommended and then shuffles.\n- src/lib/addons-store/recommend.ts provides relatedAddons/recommendedAddons (category + tag + type + resource overlap scoring).\n\nUI (src/views/addons.tsx):\n- Three tabs (L271): discover (curated hero + rails + CategoryGrid + CommunityAddonsRail), browse and installed.\n- The browse tab has category chips from useCategories() (L391-406) and BROWSE_MODES top (stars) / new (createdAt) (L46-54).\n- There is a search bar and AddByUrlBar.\n- The \"Adult\" toggle (L330-357) goes through AgeGateModal (a quiz) and sets settings.showAdultAddons (default false, src/lib/settings.tsx L236).\n- Browse is src/views/addons/community-browse-list.tsx:\n  - ApiSortedList (L36-141) uses limit 50 with infinite scroll. It sends nsfw=exclude unless adult is allowed or the category is nsfw.\n  - CommunityRow (L220-336) shows stars, a \"New\" chip (<14 days) and a Rising delta.\n  - Install (L249-267) goes to the configure viewport if configurable/configurationRequired, otherwise it calls installAddon directly WITHOUT a confirmation dialog.\n- Installed is src/views/addons/installed-pane.tsx: search, a Manage button for configurable addons (L118-130), uninstall. There is NO reorder anywhere in Harbor's addon UI.\n- Detail is src/views/addons/addon-detail.tsx:\n  - The install / \"Configure & install\" / \"Install default\" / Reconfigure / Copy URL / stremio:// link buttons are at L209-310.\n  - The stats table (Version, Resources, Types, ID prefixes, Catalogs, P2P) is at L139-146.\n  - The manifest URL is masked with Reveal because URLs carry debrid keys (L65-72, L361-411).\n  - The attribution footer (L413-429) says ratings and categories come from stremio-addons.net.\n  - Tags come from curated tags (src/views/addons/tag-row.tsx).\n  - src/views/addons/addon-documentation.tsx renders stremio-addons.net markdown with react-markdown + rehype-raw, which allows raw HTML.\n- Logos: src/components/addon-logo.tsx has bundled brand logos (mostly stream/debrid services), resolveAddonLogo (resolves relative logos against the transport URL) and a gradient-initial fallback. src/components/addon-star-badge.tsx shows stars and the New chip.\n\nINSTALL / UNINSTALL / CONFIGURE (src/lib/addon-store.ts):\n- Local list is in localStorage \"harbor.installed-addons\" (L4) with slimmed manifests (L62-95).\n- seedDefaultAddonsIfFirstRun seeds Torrentio (L7-29). Do NOT port.\n- parseAddonUrl (L155-174): stremio://\u2192https://, strips /#/configure and /configure, appends /manifest.json.\n- validateManifest needs id and name.\n- installAddon (L204-213), installFromUrl(raw, {replaceId}) (L215-247) and uninstallAddon (L249-259) all mirror changes to the Stremio account via pushToStremio. That goes through src/lib/addons.ts L88-104: POST https://api.strem.io/api/addonCollectionGet {authKey, type:\"user\", update:false} \u2192 {result:{addons}}, and addonCollectionSet {authKey, type:\"user\", addons:[{manifest, transportUrl}]}.\n- manifestToConfigureUrl (L283-285) replaces manifest.json with configure.\n- The install modal, src/views/addons/install-modal.tsx:\n  - Previews the manifest (ManifestPreview L373-445: logo, version, description, types and resources chips).\n  - Detects the match kind (L58-93): fresh, id-match (same manifest id = update) or hostname-match (same host = reconfigure \u2192 replaceId).\n  - Shows staged progress (L106-126) and a manage mode with \"Open setup page\" (L262-313).\n- Configure pages open in src/components/installer-viewport.tsx:\n  - A full-screen iframe of {base}/configure (L325-333).\n  - On Linux it uses the separate \"Harbor Browser\" WebviewWindow (src-tauri/src/browser.rs, whose on_navigation captures stremio:// or manifest.json links, L116-125).\n  - It catches the addon's Install click through postMessage, the \"harbor:deeplink-install\" event or paste/clipboard (L180-230), then calls installFromUrl immediately (L138-167, no confirmation).\n- Deep links (src/lib/deep-link.ts, src-tauri/src/lib.rs):\n  - deeplink_set_stremio / deeplink_is_stremio_registered (L28-47) register the \"stremio\" scheme at runtime.\n  - The static schemes are [\"harbor\",\"stremio\"] (tauri.conf.json L77).\n  - macOS uses register_uri_scheme_protocol (L226-235).\n\nUPDATE DETECTION: none. \"Update\" in Harbor only means re-installing a reconfigured URL (the id/hostname match above). Stored manifests are refreshed only when missing (fetchInstalledAddons L261-281).\n\nTRUST/SCORING: harbor-core/src/trust.rs (mirror of src/lib/streams/trust.ts) is a STREAM-result filter (size floors, trailer/sample regex, .exe/.zip blacklist). It is not addon trust and is not relevant to the marketplace.",
+ "zeiler_today": "Paths below are relative to /home/user/sailor.\n\nUI: src/views/Addons.tsx (229 lines) is a single page.\n- A URL form (L70-90) calls addonPreview(url). The result goes into the confirmation Modal \"Install this addon?\" (L115-134), and Install calls addonAdd(preview.transportUrl).\n- AddonSummary (L139-183) shows logo, name, version, id, description, resource and type badges, catalog count, warn badges for P2P (\"your IP is visible to peers\") and adult, a configurable badge, the full transport URL and a trust disclaimer.\n- AddonCard (L185-229) lists effective addons with resources and a p2p badge, and shows the FULL transport URL (L196). Configured URLs can contain credentials, so this exposes secrets on screen.\n- Built-ins show a \"Built-in\" pill instead of Remove (L204-210).\n- There is no marketplace, no search/filter, no categories, no reorder, no configure button, no update indicator and no adult/p2p visibility setting.\n- The header copy says \"Zeiler ships no addons\" (L62), even though Cinemeta is built in.\n\nIPC (src-tauri/src/commands/addons.rs):\n- addon_preview(url) (L7-15): normalize_transport_input + client.descriptor. Not persisted.\n- addon_add(url) (L17-45):\n  - Refetches the manifest.\n  - Rejects behaviorHints.configurationRequired with a text error telling the user to open {url}/configure in a browser (L23-30).\n  - Uses transport URL as identity: it updates in place if the same URL exists, otherwise appends (L33-41). A reconfigured addon with a different URL therefore becomes a duplicate.\n  - Then calls persist_addons.\n- addon_remove(transport_url) (L47-61) and addon_list() (L63-66, returns effective_addons) complete the set.\n- Commands are registered in src-tauri/src/lib.rs L54-79. TS wrappers are in src/lib/ipc.ts L27-31; the Descriptor/Manifest types are in src/lib/types.ts L35-53. src/lib/store.tsx useAddons() reloads them.\n\nSTATE (src-tauri/src/state.rs):\n- Settings (L13-39): mpvPath, engineListenPort, engineUpnp, upload/downloadLimitKibps, deleteOnStop, theme, instantPlay, hideAnime, hideLiveTv, builtinCinemeta, autoUpdate. There are no addon-visibility keys.\n- builtin_cinemeta() (L65-76) loads the bundled src-tauri/builtin/cinemeta-manifest.json with flags {official:true, protected:true}.\n- effective_addons() (L145-161) puts built-in Cinemeta first, then user addons in install order. That order is the priority order for first_meta and aggregate_streams (crates/zeiler-addon/src/fanout.rs L21, L75-78).\n- Persistence is addons.json and settings.json in the app data dir.\n\nPROTOCOL CRATE (crates/zeiler-addon):\n- Descriptor {manifest, transport_url, flags{official, protected}} (manifest.rs L9-25). flags is serde-default and deserializable from remote JSON.\n- Manifest already parses addon_catalogs (L61-63) and behaviorHints adult/p2p/configurable/configurationRequired (L242-260).\n- resource.rs L363-369 defines AddonCatalogResponse {addons: Vec<Descriptor>}, exported but unused anywhere.\n- The bundled Cinemeta manifest declares addonCatalogs all/movie/series/channel \u00d7 official, and all/movie/series/channel/tv/Podcasts/other \u00d7 community, with resource \"addon_catalog\".\n- client.rs: AddonClient.get_json is private (L34-64; 20 MB streaming cap, Zeiler UA, 30 s timeout).\n- request.rs normalize_transport_input (L86-99) only rewrites stremio:// to https and validates the /manifest.json suffix. It does not strip /configure or append manifest.json.\n- Manifest.logo is Option<Url> with DefaultOnError, so relative logo paths become None.\n\nSHELL / SECURITY (src-tauri/tauri.conf.json):\n- CSP has connect-src 'self' ipc: only, so all HTTP must be done in Rust, and frame-src 'none', so Harbor's iframe installer is impossible.\n- img-src allows https: and http:.\n- plugins.deep-link.desktop.schemes is [] (no stremio://).\n- Capabilities (src-tauri/capabilities/default.json): opener:default and deep-link:default for the main window only. @tauri-apps/plugin-opener openUrl is already used in src/views/PlayPicker.tsx L127. The single-instance plugin already has the deep-link feature (Cargo.toml L20).\n\nPOLICY:\n- docs/ARCHITECTURE.md L17: no seeded stream addons; Cinemeta is the only built-in; stream addons are installed by user-pasted URL behind the confirmation dialog.\n- docs/ARCHITECTURE.md L100-103: transport URLs are secrets; deep links are untrusted.\n- CONTRIBUTING.md L9-18: no bundled/seeded stream addons or default content sources; any built-in must be metadata-only and switchable; \"features that help users manage addons they choose to install are always welcome\".\n- The Settings \u2192 Content section is src/views/Settings.tsx L347-382.",
+ "gaps": [
+  "No addon directory/marketplace at all: the only way to install is pasting a URL. AddonCatalogResponse and the bundled Cinemeta addonCatalogs (all/community, all/official) are parsed but never used.",
+  "No third-party directory client (stremio-addons.net) and no listing index or cache. Even if one existed, the webview cannot fetch remote JSON because CSP connect-src is ipc only, so the work must be a new Rust module plus IPC commands.",
+  "No browsing UX: no tabs (built-in / installed / browse), search, type/resource/category facets, sort (stars/newest/A-Z), detail page, stars/'New' badges or attribution.",
+  "No adult gating setting (Harbor: showAdultAddons default false + age gate + adult-filter.ts) and no P2P filter. Today p2p/adult are shown only as badges inside the confirm dialog and card.",
+  "Configurable addons: configurationRequired returns a text error (commands/addons.rs L23-30). configurable-but-optional addons silently install the default with no 'Configure\u2026' option. Installed addons cannot be reconfigured. No paste-back or clipboard flow, and stremio:// is not registered (schemes []).",
+  "Identity is transport URL only, so a reconfigured addon (new URL, same manifest.id) installs as a duplicate. There is no id-match/hostname-match 'replace' like Harbor's install-modal.tsx L58-93.",
+  "No reorder command/UI, although install order is the user's priority order for meta precedence and stream-group order (fanout.rs L75-78).",
+  "No update detection. Installed manifests are frozen snapshots in addons.json, so new catalogs/resources or a version bump never appear and capability changes (e.g. an addon starting to declare p2p) are never surfaced.",
+  "Installed list renders the full transport URL (Addons.tsx L196), exposing credentials embedded in configured URLs. Harbor masks it with Reveal (addon-detail.tsx L65-72, L361-411).",
+  "normalize_transport_input does not accept '/configure', '/#/configure' or URLs missing '/manifest.json' (Harbor parseAddonUrl handles all three).",
+  "Relative manifest logos are dropped (Manifest.logo: Option<Url> DefaultOnError). Harbor resolves them against the transport URL (addon-logo.tsx resolveAddonLogo).",
+  "Remote addon_catalog entries deserialize straight into Descriptor including flags.official/protected. If a directory entry were ever persisted directly, a remote listing could mark itself 'protected', which makes it unremovable from the UI. Directory data needs its own type that strips flags."
+ ],
+ "implementation_plan": [
+  {
+   "step": "1. Directory types, parsers and client in the protocol crate",
+   "details": "New module crates/zeiler-addon/src/directory.rs (re-exported from lib.rs).\n\nTypes:\n- `enum DirectorySource { StremioCommunity, StremioOfficial, StremioAddonsNet }`\n- `struct DirectoryEntry { key: String /* manifest.id */, manifest: Manifest /* listing snapshot, display only */, transport_url: Url, sources: Vec<DirectorySource>, stars: Option<u32>, categories: Vec<Category{name, slug}>, listed_at: Option<String>, updated_at: Option<String>, slug: Option<String>, site_url: Option<Url>, adult: bool, p2p: bool, configurable: bool, configuration_required: bool }`\n- Lenient serde mirrors of the stremio-addons.net shapes: SaAddon {uuid, url, manifestUrl, manifest, slug, stars, categories, configureUrl, createdAt, updatedAt, documentation?}, SaList {addons, pagination{page, limit, total, totalPages, hasNextPage, hasPreviousPage}}, SaCategories {categories}. Use VecSkipError/DefaultOnError like the rest of the crate.\n\nClient methods:\n- Add `AddonClient::addon_catalog(transport, type, id) -> AddonCatalogResponse` via the existing resource() with ResourcePath::new(\"addon_catalog\", \"all\", \"community\"|\"official\") against the Cinemeta transport URL. This is protocol-native, so no new host is hard-coded beyond Cinemeta.\n- Make get_json pub(crate) so `DirectoryClient::{list_page(page, limit, nsfw), detail(slug), categories()}` keep the 20 MB cap and the Zeiler UA.\n\nNormalisation:\n- Validate every entry with validate_transport_url and drop failures.\n- Convert addon_catalog Descriptors into DirectoryEntry and DISCARD their flags.\n- Dedupe by manifest.id, merging sources and keeping stremio-addons.net stars/categories.\n- Port Harbor's src/lib/addons-store/adult-filter.ts into directory/adult.rs (MIT header, attribution): is_adult_text(fields).\n- adult = manifest.behaviorHints.adult || category slug 'nsfw' || is_adult_text(id, name). p2p = manifest.behaviorHints.p2p (self-declared; documented as such).\n- Do not port Harbor's DEBRID_RX/curated categorisation or bundled stream-brand logos.",
+   "files": [
+    "crates/zeiler-addon/src/directory.rs",
+    "crates/zeiler-addon/src/directory/adult.rs",
+    "crates/zeiler-addon/src/client.rs",
+    "crates/zeiler-addon/src/lib.rs",
+    "crates/zeiler-addon/tests/fixtures/stremio-addons-net-list.json",
+    "crates/zeiler-addon/tests/fixtures/addon-catalog-community.json"
+   ]
+  },
+  {
+   "step": "2. Marketplace index cache and IPC commands",
+   "details": "New src-tauri/src/commands/marketplace.rs, registered in lib.rs generate_handler.\n\nAppState gets `market: RwLock<Option<MarketIndex{entries, categories, fetched_at, failures}>>`:\n- TTL 1 h, mirrored to cache_dir/marketplace-index.json for fast start and offline.\n- Build mirrors Harbor stremio-addons-index.ts: stremio-addons.net pages 1..=6 \u00d7 limit 100, sort_by=stars, order=desc, nsfw=exclude unless show_adult_addons (then refetch without it), joined with Cinemeta addon_catalog all/community and all/official, all fetched in parallel.\n- Partial failures are kept per source and returned to the UI. Errors carry only the host, never full URLs.\n\nCommands:\n- `marketplace_list(query: MarketQuery{search?, types: Vec<String>, resources: Vec<String> /* stream|subtitles|catalog|meta|addon_catalog */, category?: String, sort: \"stars\"|\"newest\"|\"name\", page, limit}) -> MarketPage{entries: Vec<MarketEntryView>, total, hasMore, sourcesOk, sourcesFailed, fetchedAt}`.\n  - Filtering is local, using manifest.types plus object-form resource types, resource names (catalog when catalogs is non-empty), category slug, and search over name/description/id/slug.\n  - Adult entries are always dropped unless settings.show_adult_addons. P2P entries are dropped only when settings.hide_p2p_addons.\n  - MarketEntryView adds installState: \"builtIn\"|\"installed\"|\"available\", computed against effective_addons by manifest.id OR transport URL. Built-in Cinemeta shows as Built-in, never Install.\n- `marketplace_categories()` uses /api/v0/categories, falls back to Harbor's 16 default slugs, and hides 'nsfw' unless adult is enabled.\n- `marketplace_detail(key) -> {entry, documentation: Option<String> /* plain text */}` uses GET /api/v0/addons/{slug}.\n- `marketplace_refresh()` forces a rebuild.\n- No fetch happens until settings.marketplace_enabled is true.",
+   "files": [
+    "src-tauri/src/commands/marketplace.rs",
+    "src-tauri/src/commands/mod.rs",
+    "src-tauri/src/state.rs",
+    "src-tauri/src/lib.rs"
+   ]
+  },
+  {
+   "step": "3. Settings keys",
+   "details": "Add to Settings (state.rs, serde camelCase, default):\n- `marketplace_enabled: bool = false`: opt-in. The first visit to Browse shows a notice: 'Listings come from stremio-addons.net and Stremio's public addon catalog. Zeiler doesn't review, rank or endorse them. Install only what you trust.'\n- `marketplace_sources: {stremio_addons_net: bool = true, stremio_catalog: bool = true}`\n- `show_adult_addons: bool = false`\n- `hide_p2p_addons: bool = false`: P2P is flagged by default, not hidden. This is a product decision; flip the default if the owner prefers hidden.\n- `stremio_deep_link: bool = false`\n\nMirror the keys in src/lib/types.ts Settings. Expose them in Settings \u2192 Content under a new 'Addon directory' SectionCard next to the Cinemeta toggle (Settings.tsx ContentSection L347-382).",
+   "files": [
+    "src-tauri/src/state.rs",
+    "src/lib/types.ts",
+    "src/views/Settings.tsx"
+   ]
+  },
+  {
+   "step": "4. Harden the install path (everything still goes through the confirmation dialog)",
+   "details": "a) normalize_transport_input (request.rs L86-99):\n- Also strip a trailing '/configure', '/#/configure' and '/'.\n- Append '/manifest.json' when it is missing.\n- This ports Harbor addon-store.ts parseAddonUrl L155-174 with attribution. Add unit tests.\n\nb) addon_preview returns `InstallPreview{descriptor, existing: Option<{kind: \"sameUrl\"|\"sameId\"|\"sameHost\", name, maskedUrl}>, configureUrl: Option<String>, listingMismatch: Vec<String>}`.\n- The match logic adapts Harbor install-modal.tsx L58-93, with masked URLs only.\n- Add an optional `listingKey` arg: when the install starts from the marketplace, diff the LIVE manifest against the listing snapshot (id changed, p2p/adult newly declared, 'stream' resource added, configurationRequired) and surface the differences as warnings.\n\nc) addon_add(url, replace: Option<String>):\n- When replace names an installed transport URL, swap in place, keeping the list position.\n- Never accept flags from the client; built-ins stay protected.\n\nd) Update ipc.ts and types.ts.\n\ne) The confirm Modal (AddonSummary) gains:\n- a source line ('Listed on stremio-addons.net, not reviewed by Zeiler', or 'Pasted by you')\n- the mismatch warnings\n- 'Update'/'Replace <name>' wording for an existing match\n- an explicit acknowledgment checkbox for p2p installs\n- the masked transport URL with a Reveal button instead of the raw URL.",
+   "files": [
+    "crates/zeiler-addon/src/request.rs",
+    "src-tauri/src/commands/addons.rs",
+    "src/lib/ipc.ts",
+    "src/lib/types.ts",
+    "src/views/addons/InstallDialog.tsx"
+   ]
+  },
+  {
+   "step": "5. Configure / reconfigure flow without iframes",
+   "details": "Keep CSP frame-src 'none'. Do not port installer-viewport.tsx's iframe or browser.rs's remote window, which gives a remote page IPC (browser_close) and auto-installs.\n\nBehaviour by manifest flag:\n- configurationRequired: the dialog shows 'Set up on the addon's page' \u2192 openUrl(configureUrl) through the already-permitted @tauri-apps/plugin-opener, plus a paste field and a 'From clipboard' button. The pasted link goes to addon_preview, then the normal confirm step.\n- configurable: show both 'Install default' and 'Configure\u2026'.\n- Installed configurable addons get 'Reconfigure', which opens the same dialog with replace=<current transport URL> so the new configured URL replaces the old one in place.\n\nOptional opt-in stremio:// handler:\n- Add commands deeplink_set_stremio(enabled) and deeplink_stremio_status(), adapted from Harbor src-tauri/src/lib.rs L28-47 (MIT attribution), using the existing tauri-plugin-deep-link register/unregister at runtime.\n- Add the @tauri-apps/plugin-deep-link npm package. onOpenUrl does setView('addons') and opens InstallDialog with the URL; parsing happens in Rust.\n- NEVER auto-install, ignore incoming links while a dialog is busy, and debounce repeats (Harbor uses 2.5 s).\n- The ARCHITECTURE doc already plans an opt-in stremio:// handler.",
+   "files": [
+    "src-tauri/src/commands/addons.rs",
+    "src-tauri/src/lib.rs",
+    "src/views/addons/InstallDialog.tsx",
+    "src/App.tsx",
+    "package.json",
+    "src-tauri/capabilities/default.json"
+   ]
+  },
+  {
+   "step": "6. Reorder",
+   "details": "Add `addon_reorder(order: Vec<String>)`:\n- Reject the request unless it is an exact permutation of the user addon transport URLs (state.addons).\n- Built-ins stay pinned first by effective_addons().\n- Persist via persist_addons.\n\nUI in the Installed tab:\n- Up/down buttons (keyboard accessible) plus an optional drag handle.\n- Helper text: 'Order is priority: details come from the first addon that has them; stream groups appear in this order.'\n\nAdd unit tests for permutation validation.",
+   "files": [
+    "src-tauri/src/commands/addons.rs",
+    "src-tauri/src/lib.rs",
+    "src/lib/ipc.ts",
+    "src/views/addons/InstalledTab.tsx"
+   ]
+  },
+  {
+   "step": "7. Update detection",
+   "details": "Add `addon_check_updates(force: bool) -> Vec<AddonUpdate{transportUrlMasked, key /* index or opaque id, never the raw URL in logs */, name, currentVersion, latestVersion, changes: Vec<String>, requiresReview: bool}>`.\n- Refetch the manifest of every user addon in parallel: futures buffer_unordered(6), 10 s timeout each.\n- Compare the version string and a capability fingerprint: resource names, types, idPrefixes, catalog type/id, and behaviorHints adult/p2p/configurationRequired.\n- requiresReview is true when the addon gains 'stream', p2p, adult or configurationRequired, or when manifest.id changes.\n- Throttle to once per 6 h in memory, with a manual 'Check for updates' button.\n\nUI:\n- An 'Update available' chip on Installed rows.\n- Clicking it opens InstallDialog with a diff; applying it calls addon_add(url) (in place).\n- Cosmetic-only changes (name, description, logo, version with the same capabilities) can be applied with one click. Capability escalation always goes through the full confirm dialog.\n\nHarbor has nothing equivalent, so this is new design.",
+   "files": [
+    "src-tauri/src/commands/addons.rs",
+    "crates/zeiler-addon/src/manifest.rs",
+    "src/lib/ipc.ts",
+    "src/views/addons/InstalledTab.tsx"
+   ]
+  },
+  {
+   "step": "8. Addons UI restructure (Harbor-style, without curation)",
+   "details": "Split src/views/Addons.tsx into src/views/addons/.\n\nTabs:\n- Installed (default): search, reorder, update chips, Reconfigure, Remove, masked URL with Reveal.\n- Built-in: protected descriptors from addon_list where flags.protected, e.g. Cinemeta and future metadata/subtitle built-ins. They show 'Turn off in Settings \u2192 Content' instead of Remove.\n- Browse: the marketplace, behind the opt-in notice.\n\nThe header keeps the add-by-URL bar on every tab.\n\nBrowse filters:\n- Type chips (Movie, Series, Channel, TV, Other, from manifest types)\n- Resource chips (Streams, Subtitles, Catalogs, Metadata)\n- Category chips from marketplace_categories\n- Sort: Most starred / Newest / A\u2013Z\n- 'Show adult' toggle with a simple 18+ confirmation modal (not Harbor's quiz)\n- 'Hide P2P' toggle\n\nA persistent banner reads 'Directory by stremio-addons.net + Stremio community catalog \u00b7 not curated by Zeiler', followed by the per-source status.\n\nCards use the existing AddonLogo (cards.tsx L82) with relative logos resolved in Rust. Each card shows name, version, a stars badge titled 'stremio-addons.net stars', a 'New' chip for listings under 14 days old (ported from addon-star-badge.tsx), and badges for resources, P2P (warn, existing copy), Adult (warn), Configurable and 'Needs setup'. The action is Install, Configure, Installed or Built-in.\n\nDetail page: add a new view.tsx Frame `{kind: \"addon\"; key: string}`. It shows a facts table ported from addon-detail.tsx L139-146, categories, 'View on stremio-addons.net' via openUrl, and documentation rendered as plain text. Do NOT port rehype-raw, and add no markdown dependency unless it renders without raw HTML.\n\nDo NOT port: hero cards, the essential/featured rails, recommended/related scoring, the Rising velocity tracker, or bundled stream-brand logos. Ordering comes only from the directory's own signals or alphabetical.",
+   "files": [
+    "src/views/Addons.tsx",
+    "src/views/addons/BrowseTab.tsx",
+    "src/views/addons/InstalledTab.tsx",
+    "src/views/addons/BuiltInTab.tsx",
+    "src/views/addons/AddonDetail.tsx",
+    "src/views/addons/InstallDialog.tsx",
+    "src/views/addons/AdultGate.tsx",
+    "src/lib/view.tsx",
+    "src/lib/ipc.ts",
+    "src/lib/types.ts",
+    "src/components/cards.tsx",
+    "src/App.tsx"
+   ]
+  },
+  {
+   "step": "9. Policy, docs and attribution",
+   "details": "- docs/ARCHITECTURE.md: add a decision row 'Addon directory: opt-in browsing of third-party listings (stremio-addons.net, Stremio addon_catalog); Zeiler curates, ranks and seeds nothing; installs always go through the manifest confirm dialog'. Add the new IPC commands to the command list.\n- CONTRIBUTING.md: state that directory browsing is allowed but curated/featured/pre-selected stream addons are still declined.\n- THIRD-PARTY-NOTICES.md: credit Harbor (MIT) for the adult term list, the URL-parse rules, the directory merge/dedupe approach and the deep-link registration command, and keep MIT headers in the adapted files.\n- Credit stremio-addons.net as the data source in the UI.\n- Fix the Addons header copy ('Zeiler ships no stream addons\u2026').",
+   "files": [
+    "docs/ARCHITECTURE.md",
+    "CONTRIBUTING.md",
+    "THIRD-PARTY-NOTICES.md",
+    "README.md"
+   ]
+  },
+  {
+   "step": "10. Tests",
+   "details": "Rust unit tests with JSON fixtures:\n- SaList and addon_catalog parsing, including null/garbage fields.\n- Remote flags are stripped.\n- Dedupe by id.\n- Adult detection, both the declared hint and the term list.\n- p2p flag.\n- Facet filtering: types, resources, category, search.\n- normalize_transport_input with /configure, /#/configure and missing manifest.json.\n- Install match kinds (sameUrl/sameId/sameHost).\n- addon_reorder permutation validation.\n- Update capability diff and requiresReview.\n\nAn optional ignored live test (`cargo test -p zeiler-addon --test live -- --ignored`, consistent with CONTRIBUTING.md L60-63) checks the real endpoints.",
+   "files": [
+    "crates/zeiler-addon/src/directory.rs",
+    "crates/zeiler-addon/src/request.rs",
+    "src-tauri/src/commands/addons.rs",
+    "src-tauri/src/commands/marketplace.rs",
+    "crates/zeiler-addon/tests/live.rs"
+   ]
+  }
+ ],
+ "risks": [
+  "stremio-addons.net /api/v0 is an undocumented, unversioned third-party API. Its shape may change, it may rate-limit, or its operator may object to client apps. Check the ToS or ask the operator first, cache for 1 h, and degrade to Stremio's addon_catalog alone. The response shapes here come from Harbor's TypeScript types and were NOT live-verified: this container's proxy returns 403 for stremio-addons.net, v3-cinemeta.strem.io and api.strem.io.",
+  "Content-neutrality perception: the directory's top-starred entries are mostly stream/torrent/debrid addons. Mitigations: opt-in (marketplace_enabled=false), a neutral sort, no featured rails, hero or recommendations, a persistent 'not curated by Zeiler' label, and installs only through the manifest confirmation dialog. The owner should approve the opt-in default and the P2P default (flagged vs hidden).",
+  "Listing data is untrusted, including name, description, logo, documentation and the manifest snapshot. Render as text only (no rehype-raw, unlike Harbor addon-documentation.tsx). Always refetch the live manifest at install and diff it against the listing. Never persist listing Descriptors: remote flags.official/protected must be dropped.",
+  "Adult detection is heuristic. behaviorHints.adult and the 'nsfw' category are self-declared, and the ported term list (e.g. 'explicit', 'uncensored', 'hardcore') gives both false negatives and false positives. Keep the 'Show adult' override and the server-side nsfw=exclude as a second layer.",
+  "p2p is self-declared too; many torrent addons may not set behaviorHints.p2p, so a 'Hide P2P' filter is incomplete. Label the flag as declared by the addon, and don't add Zeiler-side name heuristics like Harbor's DEBRID_RX, which hard-codes stream-addon names against CONTRIBUTING.md.",
+  "Privacy: browsing the directory exposes the user's IP to stremio-addons.net, strem.io and every logo host, because img-src allows https: and http:. Only fetch after opt-in, and only when the Browse tab is opened.",
+  "Transport URLs embed credentials. Update checks and reconfigure flows touch them, so keep them out of logs and error strings. reqwest::Error's Display can include the URL, so map errors to host-only messages. Mask URLs in the UI by default.",
+  "Registering the stremio:// scheme can take it over from an installed Stremio app. Keep it opt-in and reversible (unregister). On macOS, runtime registration may not be supported by tauri-plugin-deep-link without static Info.plist schemes; unverified.",
+  "Reorder changes meta precedence (first_meta) and stream-group order. This is intended, but users may be surprised, so document it in the UI.",
+  "Client-side facet filtering over a capped index (about 600 stremio-addons.net entries plus the Stremio catalog) can miss long-tail addons. Mitigate by passing search through to the server's search param when the local index has no hits.",
+  "Update checks fan out to every addon host. Throttle (6 h, concurrency 6, 10 s timeout) to avoid hammering self-hosted or free-tier addons."
+ ],
+ "effort": "L",
+ "external_services": [
+  {
+   "name": "stremio-addons.net community API, list endpoint",
+   "url": "https://stremio-addons.net/api/v0/addons",
+   "auth": "none",
+   "shapes": "GET ?page=&limit=&search=&nsfw=exclude|only&category=<slug> (repeatable)&sort_by=stars|createdAt&order=asc|desc&after= \u2192 { addons: SAAddon[], pagination: { page, limit, total, totalPages, hasNextPage, hasPreviousPage } }. SAAddon = { uuid, url, manifestUrl, manifest (Stremio manifest), slug, stars, categories: [{name, slug}], configureUrl: string|null, createdAt, updatedAt, documentation? }",
+   "notes": "Source: Harbor src/lib/providers/stremio-addons.ts L7-51, L77-91, L205-241. Not live-verified (proxy 403 here). Third-party and unversioned 'v0'; check ToS and rate limits. Harbor indexes 6 pages \u00d7 100 sorted by stars with a 1 h TTL."
+  },
+  {
+   "name": "stremio-addons.net addon detail",
+   "url": "https://stremio-addons.net/api/v0/addons/{uuidOrSlug}",
+   "auth": "none",
+   "shapes": "SAAddon & { instances: SAAddon[] }. documentation is markdown (may contain HTML).",
+   "notes": "Harbor stremio-addons.ts L243-262. Render documentation as plain text in Zeiler. Human pages are https://stremio-addons.net/addons/{slug} (#rate for ratings)."
+  },
+  {
+   "name": "stremio-addons.net categories",
+   "url": "https://stremio-addons.net/api/v0/categories",
+   "auth": "none",
+   "shapes": "{ categories: [{ name, slug }] }",
+   "notes": "Fallback list in Harbor stremio-addons.ts L280-297: anime, asian+drama, bollywood, debrid+support, http+streams, live+tv, metadata, misc, movies, music, nsfw, radios, subtitles, torrents, tv+shows, usenet. Hide 'nsfw' unless adult is enabled."
+  },
+  {
+   "name": "Stremio community/official addon catalog (via Cinemeta addon_catalog resource)",
+   "url": "https://v3-cinemeta.strem.io/addon_catalog/all/community.json",
+   "auth": "none",
+   "shapes": "{ addons: [{ manifest, transportUrl, flags? }] }. Also /addon_catalog/all/official.json and per-type variants (movie, series, channel, tv, Podcasts, other) as declared in the addonCatalogs of src-tauri/builtin/cinemeta-manifest.json.",
+   "notes": "Protocol-native resource. Zeiler already has AddonCatalogResponse (resource.rs L363-369). Strip remote flags. Harbor uses it in src/lib/addons-store/community.ts L4-7 and as the fallback when stremio-addons.net is down. Not live-verified here."
+  },
+  {
+   "name": "Stremio official addon collection (flat)",
+   "url": "https://api.strem.io/addonsofficialcollection.json",
+   "auth": "none",
+   "shapes": "Either Addon[] or { addons: Addon[] }, where Addon = { manifest, transportUrl } (Harbor accepts both; exact shape uncertain).",
+   "notes": "Optional; overlaps addon_catalog/all/official. Harbor community.ts L9, L22-32."
+  },
+  {
+   "name": "Stremio account addon collection (for future sign-in sync, not the marketplace itself)",
+   "url": "https://api.strem.io/api/addonCollectionGet",
+   "auth": "authKey in JSON body",
+   "shapes": "POST addonCollectionGet { authKey, type: 'user', update: false } \u2192 { result: { addons: [{ manifest, transportUrl, flags }] } }. POST addonCollectionSet { authKey, type: 'user', addons: [{ manifest, transportUrl }] } \u2192 { result: { success } }",
+   "notes": "Harbor src/lib/addons.ts L73-104 and addon-store.ts pushToStremio L42-53. Belongs to the sign-in area; the marketplace install should expose a hook for it."
+  },
+  {
+   "name": "Addon configure pages",
+   "url": "{transport base}/configure",
+   "auth": "none (the user enters their own keys on the addon's page)",
+   "shapes": "HTML page. Ends with a stremio://\u2026 or https://\u2026/manifest.json install link.",
+   "notes": "Open with the system browser via the plugin-opener openUrl. Bring the result back by paste, clipboard or an opt-in stremio:// deep link, always into the confirmation dialog. Arbitrary third-party hosts."
+  }
+ ],
+ "harbor_files_to_adapt": [
+  {
+   "path": "src/lib/providers/stremio-addons.ts",
+   "why": "API surface, query params, response shapes, cache TTL and fallback strategy. Reimplement in Rust (crates/zeiler-addon/src/directory.rs) because Zeiler's CSP forbids webview fetch."
+  },
+  {
+   "path": "src/lib/providers/stremio-addons-index.ts",
+   "why": "Index-building approach: 6 pages \u00d7 100 sorted by stars, 1 h TTL, manifestId\u2192entry map for badges. Becomes the Rust MarketIndex."
+  },
+  {
+   "path": "src/lib/addons-store/community.ts",
+   "why": "Stremio directory URLs (addon_catalog community/official, addonsofficialcollection) and dedupe-by-id merge."
+  },
+  {
+   "path": "src/lib/addons-store/store.ts",
+   "why": "Merge/re-key/dedupe logic (normalizeAddonName L16-25, L114-216), the ALWAYS_HIDDEN_IDS idea for built-ins, and isAdultAddon. Do NOT port categorizeAddon/matchesRail/buildRail curation or DEBRID_RX."
+  },
+  {
+   "path": "src/lib/addons-store/adult-filter.ts",
+   "why": "Port isAdultText (term lists + leetspeak normalisation) to Rust with an MIT attribution header."
+  },
+  {
+   "path": "src/lib/addon-store.ts",
+   "why": "parseAddonUrl (L155-174) URL normalisation rules, validateManifest, manifestToConfigureUrl, and installFromUrl's replaceId semantics. Do NOT port seedDefaultAddonsIfFirstRun/torrentio/comet helpers."
+  },
+  {
+   "path": "src/views/addons/install-modal.tsx",
+   "why": "Match-kind detection (fresh/id-match/hostname-match \u2192 replace), manifest preview layout, manage/reconfigure two-step flow. Fold these into Zeiler's existing confirm dialog."
+  },
+  {
+   "path": "src/views/addons/addon-detail.tsx",
+   "why": "Facts table (L139-146), masked manifest URL with Reveal (L65-72, L361-411), source attribution footer (L413-429), and the configurable/configurationRequired button logic (L47-51, L235-267)."
+  },
+  {
+   "path": "src/views/addons/community-browse-list.tsx",
+   "why": "Paged list UX (limit 50, sort stars/createdAt, nsfw=exclude unless allowed) and row layout with stars and New chips. Zeiler adds the confirm dialog that Harbor skips."
+  },
+  {
+   "path": "src/views/addons/installed-pane.tsx",
+   "why": "Installed list with search and a Manage (reconfigure) button. Zeiler adds reorder and update chips."
+  },
+  {
+   "path": "src/components/addon-star-badge.tsx",
+   "why": "Stars + 'New' (<14 days) badge semantics and the attribution tooltip."
+  },
+  {
+   "path": "src/components/addon-logo.tsx",
+   "why": "resolveAddonLogo (relative logo \u2192 absolute against transportUrl) and the gradient-initial fallback. Skip the BUNDLED stream-brand logos."
+  },
+  {
+   "path": "src/views/addons.tsx",
+   "why": "Tab structure, adult toggle + age gate wiring (L263-267, L330-357), and deep-link \u2192 install-modal routing (L99-115)."
+  },
+  {
+   "path": "src-tauri/src/lib.rs",
+   "why": "deeplink_set_stremio / deeplink_is_stremio_registered (L28-47) for an opt-in, reversible stremio:// handler."
+  },
+  {
+   "path": "src/lib/deep-link.ts",
+   "why": "Pending-link buffering and debounce for deep-link installs. In Zeiler they route to the confirm dialog, never auto-install."
+  }
+ ],
+ "shared_files_touched": [
+  "src-tauri/src/lib.rs",
+  "src-tauri/src/state.rs",
+  "src-tauri/src/commands/mod.rs",
+  "src-tauri/src/commands/addons.rs",
+  "src-tauri/capabilities/default.json",
+  "crates/zeiler-addon/src/lib.rs",
+  "crates/zeiler-addon/src/client.rs",
+  "crates/zeiler-addon/src/request.rs",
+  "crates/zeiler-addon/src/manifest.rs",
+  "src/lib/ipc.ts",
+  "src/lib/types.ts",
+  "src/lib/view.tsx",
+  "src/lib/store.tsx",
+  "src/App.tsx",
+  "src/views/Addons.tsx",
+  "src/views/Settings.tsx",
+  "src/components/cards.tsx",
+  "package.json",
+  "docs/ARCHITECTURE.md",
+  "CONTRIBUTING.md",
+  "THIRD-PARTY-NOTICES.md",
+  "README.md"
+ ],
+ "verifiable_in_linux_container": "Partly. The following can be checked here:\n- Rust unit tests with JSON fixtures: directory parsing, flag stripping, dedupe, adult filter, facet filtering, URL normalisation, install match kinds, reorder permutation checks and the update capability diff (cargo test -p zeiler-addon / -p zeiler).\n- TypeScript typecheck and Vite build of the new views.\n- clippy and fmt.\n\nThese cannot be checked here:\n- Live endpoint shapes. The agent proxy returns CONNECT 403 for stremio-addons.net, v3-cinemeta.strem.io and api.strem.io, so the shapes above come from Harbor's types plus Zeiler's existing AddonCatalogResponse and need confirming on a networked machine with the ignored live test.\n- stremio:// deep-link registration, openUrl hand-off to the system browser, and Windows WebView2 rendering.\n- Running the Tauri app with UI interaction, which needs webkit2gtk and a display."
+}
