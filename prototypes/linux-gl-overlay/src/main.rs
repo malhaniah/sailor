@@ -56,6 +56,29 @@ fn get_proc_address(_: &(), name: &str) -> *mut c_void {
 
 static LOADER_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+fn current_glx() -> usize {
+    type Current = unsafe extern "C" fn() -> *mut c_void;
+    unsafe {
+        let h = libc::dlopen(c"libGL.so.1".as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
+        let f = libc::dlsym(h, c"glXGetCurrentContext".as_ptr());
+        if f.is_null() { 0 } else { std::mem::transmute::<*mut c_void, Current>(f)() as usize }
+    }
+}
+
+fn gl_is_enabled(cap: u32) -> u8 {
+    type IsEnabled = unsafe extern "C" fn(u32) -> u8;
+    unsafe { std::mem::transmute::<*mut c_void, IsEnabled>(get_proc_address(&(), "glIsEnabled"))(cap) }
+}
+
+fn read_center(w: i32, h: i32) -> [u8; 4] {
+    type ReadPixels = unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut u8);
+    let mut px = [0u8; 4];
+    unsafe {
+        std::mem::transmute::<*mut c_void, ReadPixels>(get_proc_address(&(), "glReadPixels"))(w / 2, h / 2, 1, 1, 0x1908, 0x1401, px.as_mut_ptr());
+    }
+    px
+}
+
 fn gl_get_integer(pname: u32) -> i32 {
     type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
     let f = get_proc_address(&(), "glGetIntegerv");
@@ -145,6 +168,7 @@ fn main() {
                 return;
             }
             println!("PROTO: GL {} / {}", gl_string(0x1F01), gl_string(0x1F02));
+            println!("PROTO: realize context {:#x}", current_glx());
             let ctx = mpv
                 .create_render_context([
                     RenderParam::ApiType(RenderParamApiType::OpenGl),
@@ -185,6 +209,15 @@ fn main() {
             }
             if let Some(ctx) = render.borrow().as_ref() {
                 let fbo = gl_get_integer(0x8CA6); // GL_FRAMEBUFFER_BINDING
+                if FRAMES.load(Ordering::Relaxed) < 3 {
+                    let scale = area.scale_factor();
+                    let (w, h) = (area.allocated_width() * scale, area.allocated_height() * scale);
+                    let mut mask = [0u8; 4];
+                    type GetBooleanv = unsafe extern "C" fn(u32, *mut u8);
+                    unsafe { std::mem::transmute::<*mut c_void, GetBooleanv>(get_proc_address(&(), "glGetBooleanv"))(0x0C23, mask.as_mut_ptr()) };
+                    println!("PROTO: before render context {:#x} scissor={} blend={} depth={} stencil={} colormask={mask:?} center_before={:?} viewport-fb={}",
+                        current_glx(), gl_is_enabled(0x0C11), gl_is_enabled(0x0BE2), gl_is_enabled(0x0B71), gl_is_enabled(0x0B90), read_center(w, h), fbo);
+                }
                 let scale = area.scale_factor();
                 let (w, h) = (area.allocated_width() * scale, area.allocated_height() * scale);
                 if let Err(e) = ctx.render::<()>(fbo, w, h, true) {
