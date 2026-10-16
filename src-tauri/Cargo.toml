@@ -45,6 +45,10 @@ uuid = { workspace = true }
 argon2 = { workspace = true }
 # profile avatars travel as data: URLs
 base64 = { workspace = true }
+# Stremio account sync (zeiler-sync); its session key lives in the OS keychain
+zeiler-sync = { workspace = true }
+keyring = { workspace = true }
+zeroize = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { workspace = true }

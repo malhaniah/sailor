@@ -490,6 +490,74 @@ impl LibraryState {
         Ok(changed.map(|item| LibraryDetail::new(&item, videos)))
     }
 
+    /// Every item and the account the library belongs to, for account sync.
+    pub(crate) async fn sync_snapshot(&self) -> (Option<String>, BTreeMap<String, LibraryItem>) {
+        self.store
+            .read(|file| (file.uid.clone(), file.items.clone()))
+            .await
+    }
+
+    /// Take items pulled from the account `uid` (each only if at least as new as the
+    /// local copy and different from it) and mark the library as that account's.
+    /// Returns the ids that changed; listeners hear about them.
+    pub(crate) async fn merge_remote(
+        &self,
+        uid: &str,
+        pulled: Vec<LibraryItem>,
+    ) -> Result<Vec<String>, IpcError> {
+        let pulled: Vec<LibraryItem> = pulled
+            .into_iter()
+            .filter(|i| check_id(&i.id).is_ok())
+            .collect();
+        let changed = self
+            .store
+            .try_update(|file| {
+                let changed = zeiler_sync::sync::merge_pulled(&mut file.items, pulled);
+                let new_uid = file.uid.as_deref() != Some(uid);
+                file.uid = Some(uid.to_string());
+                Ok((new_uid || !changed.is_empty()).then_some(changed))
+            })
+            .await?
+            .unwrap_or_default();
+        if !changed.is_empty() {
+            (self.on_change)(changed.clone());
+        }
+        Ok(changed)
+    }
+
+    /// The library is about to sync with account `uid`. When it belongs to another
+    /// account, that library is kept beside it (`library-<uid>.json`) and this one
+    /// starts empty for `uid`, so two accounts' libraries never mix (stremio-core
+    /// keeps one bucket per user the same way). A library of no account (used before
+    /// signing in) is kept and merged. Returns whether it started over.
+    pub(crate) async fn prepare_for_account(&self, uid: &str) -> Result<bool, IpcError> {
+        let path = self.store.path();
+        let started_over = self
+            .store
+            .try_update(|file| {
+                let Some(previous) = file.uid.clone().filter(|p| p != uid) else {
+                    return Ok(None);
+                };
+                let backup = path.with_file_name(format!(
+                    "library-{}.json",
+                    previous.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+                ));
+                let json = serde_json::to_vec_pretty(&*file)
+                    .map_err(|e| IpcError::Storage(format!("Could not keep the library: {e}")))?;
+                std::fs::write(&backup, json)
+                    .map_err(|e| IpcError::Storage(format!("Could not keep the library: {e}")))?;
+                file.items.clear();
+                file.uid = Some(uid.to_string());
+                Ok(Some(()))
+            })
+            .await?
+            .is_some();
+        if started_over {
+            (self.on_change)(Vec::new());
+        }
+        Ok(started_over)
+    }
+
     /// Take the title out of Continue Watching (its resume position is dropped).
     pub async fn clear_progress(&self, id: &str) -> Result<Option<LibraryEntry>, IpcError> {
         check_id(id)?;

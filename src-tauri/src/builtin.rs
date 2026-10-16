@@ -129,6 +129,18 @@ pub(crate) fn with_builtins(user: Vec<Descriptor>, settings: &Settings) -> Vec<D
     all
 }
 
+/// The built-ins as account sync knows them: never imported from, or pushed into, a
+/// Stremio account's addon collection (by transport URL or manifest id).
+pub(crate) fn builtins_for_sync() -> zeiler_sync::sync::Builtins {
+    zeiler_sync::sync::Builtins {
+        transport_urls: BUILTINS
+            .iter()
+            .map(|b| b.transport_url.to_string())
+            .collect(),
+        manifest_ids: DESCRIPTORS.iter().map(|d| d.manifest.id.clone()).collect(),
+    }
+}
+
 /// A meta answered by a built-in, without the streams a meta may embed in its videos
 /// (`videos[].streams`, which the Play picker offers directly): the manifest tests below
 /// can't see those, and a built-in never serves streams. A user's own install of the

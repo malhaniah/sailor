@@ -11,6 +11,7 @@ Zeiler is a self-contained media client that speaks the open [Stremio addon prot
 
 - **Self-contained** — a built-in torrent streaming engine and mpv-based playback (built into the window on Windows); no external streaming server, no browser, no Node runtime required.
 - **Bring your own addons** — paste any addon manifest URL. Zeiler ships no stream or content addon and endorses none. For browsing out of the box, a few *metadata and subtitle* addons are built in — Cinemeta (catalogs, details, episode lists), Anime Kitsu (anime catalogs and details) and OpenSubtitles v3 (subtitles) — none serves streams, and each can be turned off in Settings.
+- **Profiles and an optional Stremio account** — each profile has its own addons, library and preferences (with an optional PIN), and can sign in to a Stremio account to sync its library and, if you choose, its addons with Stremio's own apps.
 - **Updates itself** — signed updates install automatically the next time you open Zeiler.
 - **Rust core** — the addon protocol client, streaming engine, and playback orchestration are Rust crates; the UI is a thin TypeScript layer in a Tauri 2 shell.
 - **Cross-platform** — Windows, macOS, Linux.
@@ -61,9 +62,21 @@ removes Sailor. On macOS the updated app keeps its old name in Applications: ren
 | `crates/zeiler-addon` | Stremio addon-protocol client (manifests, catalogs, meta, streams, subtitles) |
 | `crates/zeiler-engine` | Built-in BitTorrent streaming engine (librqbit) exposing local HTTP streams |
 | `crates/zeiler-player` | Playback: embedded libmpv (Windows), or the user's mpv remote-controlled over JSON IPC |
+| `crates/zeiler-sync` | Opt-in Stremio account sync: the account API client and the library/addon sync rules |
 | `src-tauri` | Tauri 2 shell wiring the core to the UI |
 | `src/` | TypeScript/React frontend |
 | `website/` | The download website for zeiler.io (static, Vite) — see [website/README.md](website/README.md) |
+
+## Privacy
+
+Zeiler has no telemetry and no account of its own. Signed out, it talks only to the
+addons you install (and the built-ins you leave on). If you sign a profile in to a
+Stremio account, Zeiler sends Stremio's servers (api.strem.io, link.stremio.com) your
+sign-in (a code you confirm in the browser, or your email and password), your library
+items (titles, progress, watched marks) and, if you turn on addon sync, your addons'
+addresses, including any keys inside configured ones. The session key is kept in your
+system's keychain if you ask to stay signed in (otherwise only in memory until Zeiler
+quits); nothing else goes anywhere, and nothing is sent once you sign out.
 
 ## Building from source
 

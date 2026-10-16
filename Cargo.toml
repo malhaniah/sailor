@@ -42,6 +42,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 # local-profile PINs (Argon2id hashes with a random salt)
 argon2 = "0.5"
+# the Stremio session key in the OS keychain: macOS Keychain, Windows Credential
+# Manager, the Secret Service on Linux (over libdbus, which webkit2gtk already needs)
+# wipes the password after a password sign-in (already in Cargo.lock)
+zeroize = "1"
+keyring = { version = "3.6", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 libc = "0.2"
 # the watched-episodes bitfield of library items (zeiler-account): zlib + base64, both
 # already in Cargo.lock (flate2 via librqbit's compression, base64 via reqwest)
@@ -76,6 +81,7 @@ zeiler-addon = { path = "crates/zeiler-addon" }
 zeiler-engine = { path = "crates/zeiler-engine" }
 zeiler-player = { path = "crates/zeiler-player" }
 zeiler-skip = { path = "crates/zeiler-skip" }
+zeiler-sync = { path = "crates/zeiler-sync" }
 
 [profile.release]
 codegen-units = 1

@@ -1,0 +1,11 @@
+{
+  "_id": "5f0000000000000000000001",
+  "email": "a@example.com",
+  "fbId": null,
+  "avatar": "",
+  "lastModified": "2026-09-01T10:00:00.000Z",
+  "dateRegistered": "2020-01-01T00:00:00.000Z",
+  "premium_expire": null,
+  "gdpr_consent": { "tos": true, "privacy": true, "marketing": false, "from": "web" },
+  "trakt": { "access_token": "do-not-keep-this", "expires_in": 7776000 }
+}
