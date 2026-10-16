@@ -13,6 +13,7 @@ import { AudioMenu } from "./AudioMenu";
 import { chip, MenuRow, PopupMenu } from "./menu";
 import { formatTime, type MpvState } from "./mpv-state";
 import { type PlaybackClock, useClock } from "./playback-clock";
+import { useLive } from "./live";
 import { SubtitleMenu } from "./SubtitleMenu";
 import { QualityMenu } from "./QualityMenu";
 import { SPEEDS, type PlayerControls } from "./usePlayerControls";
@@ -47,6 +48,8 @@ export function ControlsBar({
   /** a quiet line under the controls (e.g. what Back does) */
   footnote?: ReactNode;
 }) {
+  // live TV: nothing to seek in or speed up, so no seek bar, time or speed
+  const live = useLive();
   return (
     <div
       className={`absolute inset-x-0 bottom-0 flex flex-col gap-1.5 bg-gradient-to-t from-canvas/90 to-transparent px-4 pb-3 pt-10 transition-opacity duration-300 ${
@@ -54,10 +57,10 @@ export function ControlsBar({
       }`}
     >
       {tracks.notice && <Notice text={tracks.notice} onDismiss={tracks.dismissNotice} />}
-      <SeekBar clock={clock} chapters={mpv.chapters} onPoke={onPoke} />
+      {!live && <SeekBar clock={clock} chapters={mpv.chapters} onPoke={onPoke} />}
       <div className="flex items-center gap-3">
         <PlayPauseButton clock={clock} ended={ended} onClick={controls.togglePauseOrReplay} />
-        <TimeReadout clock={clock} />
+        {live ? <LiveBadge /> : <TimeReadout clock={clock} />}
         <VolumeControl
           volume={mpv.volume}
           mute={mpv.mute}
@@ -69,7 +72,7 @@ export function ControlsBar({
         <QualityMenu mpv={mpv} />
         <AudioMenu tracks={tracks} mpv={mpv} />
         <SubtitleMenu tracks={tracks} mpv={mpv} />
-        <SpeedMenu speed={mpv.speed} />
+        {!live && <SpeedMenu speed={mpv.speed} />}
         <button
           className={chip}
           onClick={onToggleFullscreen}
@@ -121,6 +124,15 @@ function PlayPauseButton({
         <Pause size={16} fill="currentColor" />
       )}
     </button>
+  );
+}
+
+function LiveBadge() {
+  return (
+    <span className="flex items-center gap-1.5 rounded-md bg-danger/15 px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.18em] text-[oklch(0.75_0.12_25)]">
+      <span className="h-1.5 w-1.5 rounded-full bg-[oklch(0.7_0.2_25)]" aria-hidden />
+      Live
+    </span>
   );
 }
 

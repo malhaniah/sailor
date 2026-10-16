@@ -202,7 +202,11 @@ export function usePlaybackSession(
         kind: "error",
         message: startErrorMessage(e),
         // mpv missing or failing to launch: a direct URL still plays in any other player
-        streamUrl: errorKind(e) === "player" && failed.kind === "url" ? failed.url : undefined,
+        // (not a live channel's: an IPTV stream URL carries the account)
+        streamUrl:
+          errorKind(e) === "player" && failed.kind === "url" && !playing.live
+            ? failed.url
+            : undefined,
       });
     };
 

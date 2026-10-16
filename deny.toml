@@ -8,7 +8,7 @@
 # Every licence here is GPL-3.0-compatible. Each entry names the crates that need it (a
 # crate under "A OR B" needs only one of the two allowed).
 allow = [
-  # Zeiler's own crates (zeiler, zeiler-account, -addon, -engine, -player)
+  # Zeiler's own crates (zeiler, zeiler-account, -addon, -engine, -iptv, -player)
   "GPL-3.0-or-later",
   "MIT",
   # librqbit and its sub-crates, backon, dpi, aws-lc-sys

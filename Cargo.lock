@@ -7383,6 +7383,7 @@ dependencies = [
  "zeiler-account",
  "zeiler-addon",
  "zeiler-engine",
+ "zeiler-iptv",
  "zeiler-player",
  "zeiler-skip",
  "zeiler-sync",
@@ -7437,6 +7438,22 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "zeiler-iptv"
+version = "0.2.1"
+dependencies = [
+ "encoding_rs",
+ "flate2",
+ "percent-encoding",
+ "quick-xml 0.42.0",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
 ]
 
 [[package]]
