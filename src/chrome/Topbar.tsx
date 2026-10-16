@@ -1,5 +1,6 @@
 import { ArrowLeft, Search } from "lucide-react";
 import { useEffect, useState } from "react";
+import { playerActive } from "../lib/playback-handoff";
 import { useSearch } from "../lib/store";
 import { useView } from "../lib/view";
 
@@ -9,10 +10,11 @@ export function Topbar() {
   const { canGoBack, goBack, top } = useView();
   const { setOpen } = useSearch();
 
-  // "/" opens search anywhere (except while typing)
+  // "/" opens search anywhere (except while typing, or under the Player screen, where
+  // the shell is hidden and the overlay would steal the player's keyboard focus)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey || playerActive()) return;
       const target = e.target as HTMLElement | null;
       if (
         target &&

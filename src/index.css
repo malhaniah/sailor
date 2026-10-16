@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /*
- * Design tokens mirroring Harbor's system (github.com/9000000/harbor, MIT) so its
+ * Design tokens mirroring Harbor's system (github.com/harborstremio/harbor, MIT) so its
  * component recipes port 1:1. Fonts use bundled-free system stacks (no CDN).
  */
 @theme {

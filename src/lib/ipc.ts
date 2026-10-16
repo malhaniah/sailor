@@ -5,7 +5,6 @@ import type {
   Descriptor,
   IpcError,
   MetaLookup,
-  PlayerStatus,
   ResolvedStream,
   Settings,
 } from "./types";
@@ -57,18 +56,7 @@ export const engineStats = (infoHash: string) =>
 export const engineRemove = (infoHash: string, deleteFiles: boolean) =>
   invoke<void>("engine_remove", { infoHash, deleteFiles });
 
-export const playerStatus = () => invoke<PlayerStatus>("player_status");
-
-export const playerPlay = (request: {
-  url: string;
-  title?: string | null;
-  headers?: [string, string][];
-  userAgent?: string | null;
-  referrer?: string | null;
-  startAtSec?: number | null;
-}) => invoke<void>("player_play", { request });
-
-export const playerStop = () => invoke<void>("player_stop");
+// Player commands live in ./player-ipc.ts (the unified, backend-neutral player API).
 
 export interface UpdateStatus {
   current: string;
@@ -81,5 +69,12 @@ export const updateCheck = () => invoke<string | null>("update_check");
 export const updateInstallNow = () => invoke<void>("update_install_now");
 
 export const settingsGet = () => invoke<Settings>("settings_get");
+/** Merges just these keys server-side; resolves to the full new settings. */
+export const settingsPatch = (patch: Partial<Settings>) =>
+  invoke<Settings>("settings_patch", { patch });
+/** @deprecated replaces every setting (lost-update prone); use settingsPatch */
 export const settingsSet = (settings: Settings) =>
   invoke<Settings>("settings_set", { settings });
+
+/** Emitted by Rust with the full new settings after every successful change. */
+export const SETTINGS_CHANGED = "settings://changed";

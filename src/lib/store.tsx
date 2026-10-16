@@ -1,12 +1,14 @@
+import { listen } from "@tauri-apps/api/event";
 import {
   type ReactNode,
   createContext,
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
-import { addonList, settingsGet, settingsSet } from "./ipc";
+import { SETTINGS_CHANGED, addonList, settingsGet, settingsPatch } from "./ipc";
 import { applyTheme } from "./theme";
 import type { Descriptor, Settings } from "./types";
 
@@ -30,6 +32,11 @@ export const useAddons = () => useContext(AddonsContext);
 
 interface SettingsCtx {
   settings: Settings | null;
+  /**
+   * Optimistically applies `patch`, then sends only its keys to Rust (`settings_patch`,
+   * merged server-side so concurrent writers never undo each other). On failure the
+   * patched keys revert. Every change, from anywhere, arrives via `settings://changed`.
+   */
   save: (patch: Partial<Settings>) => Promise<void>;
 }
 
@@ -55,8 +62,16 @@ export const useSearch = () => useContext(SearchContext);
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [addons, setAddons] = useState<Descriptor[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settings, setSettingsState] = useState<Settings | null>(null);
+  // latest settings for save(), which must not close over a stale render
+  const settingsRef = useRef<Settings | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+
+  const setSettings = useCallback((next: Settings) => {
+    settingsRef.current = next;
+    setSettingsState(next);
+    applyTheme(next.theme);
+  }, []);
 
   const reload = useCallback(async () => {
     try {
@@ -69,27 +84,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void reload();
     settingsGet()
-      .then((s) => {
-        setSettings(s);
-        applyTheme(s.theme);
-      })
-      .catch(() => setSettings(null));
-  }, [reload]);
+      .then(setSettings)
+      .catch(() => {});
+    const unlisten = listen<Settings>(SETTINGS_CHANGED, (e) => setSettings(e.payload));
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, [reload, setSettings]);
 
   const save = useCallback(
     async (patch: Partial<Settings>) => {
-      if (!settings) return;
-      const next = { ...settings, ...patch };
-      setSettings(next); // optimistic
-      applyTheme(next.theme);
+      const current = settingsRef.current;
+      if (!current) return;
+      const keys = (Object.keys(patch) as (keyof Settings)[]).filter(
+        (k) => patch[k] !== undefined,
+      );
+      if (keys.length === 0) return;
+      const changed: Partial<Settings> = {};
+      const previous: Partial<Settings> = {};
+      for (const k of keys) {
+        Object.assign(changed, { [k]: patch[k] });
+        Object.assign(previous, { [k]: current[k] });
+      }
+      setSettings({ ...current, ...changed }); // optimistic
       try {
-        setSettings(await settingsSet(next));
+        setSettings(await settingsPatch(changed));
       } catch {
-        setSettings(settings);
-        applyTheme(settings.theme);
+        const latest = settingsRef.current ?? current;
+        setSettings({ ...latest, ...previous });
       }
     },
-    [settings],
+    [setSettings],
   );
 
   return (

@@ -1,0 +1,306 @@
+{
+ "area": "Catalogs, discovery and built-in addons: every Stremio type and genre, manifest-extras filters, rooms and rows, essential built-in metadata and subtitle addons, Live TV",
+ "harbor_approach": "Harbor does not build discovery from the manifests of installed addons. It hardcodes its providers and treats addons as extra rows.\n\n1) SEEDING AND BUILT-INS. src/lib/addon-store.ts:7-9 DEFAULT_ADDONS = [Torrentio], installed on first run by seedDefaultAddonsIfFirstRun (localStorage key \"harbor.addons.seeded.v1\"). That is the only seeded addon, and Zeiler must not copy it. Cinemeta, OpenSubtitles v3 and Anime Kitsu are not installed addons in Harbor. They are hardcoded HTTP clients that always run:\n- src/lib/cinemeta.ts: CINEMETA=https://v3-cinemeta.strem.io. topMovies/topSeries(genre, skip) request catalog/{type}/top/genre=X/skip=N.json; meta(type, id).\n- src/lib/meta-resource.ts resolveMeta: Cinemeta is raced against installed meta addons, and a result with a poster wins.\n- src/lib/providers/anime-kitsu-addon.ts: https://anime-kitsu.strem.fun, tries /meta/series/{id} then /meta/movie/{id} for kitsu:/mal:/anilist:/anidb: ids, with a 6 h LRU cache.\n- src/lib/subtitles/providers/opensubtitles-v3.ts:6-10 fans out to opensubtitles.stremio.homes (an unofficial mirror), opensubtitles-v3.strem.io and opensubtitles.strem.io at /subtitles/{type}/{tt[:s:e]}.json.\nThe only switch is settings.subProvidersEnabled.opensubtitles (src/lib/settings.tsx:102).\n\n2) ROWS FROM ADDONS. src/lib/addons.ts loadAddonRows (~l.222-275):\n- Merges the Stremio account's addonCollectionGet with the localStorage installed list.\n- Keeps every catalog that has name, type and id and no isRequired extra; fetches page 1 with an 8 s timeout; tags metas with addonOrigin.\n- Dedups rows by normalizeName(name, type) (l.110-118 strips \"movies/series/tv\") and caps at 24. fetchAddonCatalogPage(base, type, id, skip) handles paging.\n- extra.options are never read. Catalogs with required extras (Cinemeta \"New\" year catalogs, search-only catalogs) are dropped. There is no generic genre or year picker driven by manifests.\n\n3) HOME. src/views/home.tsx:92-130:\n- Built rows come from TMDB with the user's own tmdbKey (src/views/home/home-rows.ts buildTmdbSpecs) or fall back to buildCinemetaRows: 17 parallel Cinemeta top/genre calls such as \"Top 10 Drama\" and \"Action Hits\".\n- These are merged (mergeRows) with addon rows filtered by a.type !== \"tv\" && a.type !== \"channel\" (home.tsx:114), !isAnimeRow and !isStreamingServiceRow.\n- Anime rows on Home come from Jikan (buildAnimeHomeRows).\n- Row customization: src/lib/home-customization.ts (order/hidden/renamed, keyed by row key, saved in settings.homeRows) plus src/views/home/{customizable-rows,row-controls,customize-bar}.tsx.\n\n4) MOVIES AND SHOWS. src/views/movies.tsx and shows.tsx use TMDB discover specs when tmdbKey is set. Otherwise they use Cinemeta topMovies/topSeries per genre, plus a TmdbNudge.\n\n5) DISCOVER. src/views/discover.tsx with src/lib/feed/* and src/lib/discover/*:\n- TMDB-driven daily rotating rails (selectDailyRows; daily-rows-catalog.ts) weighted by a local taste profile (localStorage \"harbor.discover.v1\", affinity.ts).\n- Without a TMDB key it falls back to Cinemeta genre tops (feed/pool.ts:117-119).\n- src/components/genre-tiles.tsx has 18 hardcoded genres with a hand-tuned oklch GENRE_PALETTE.\n\n6) FILTER. src/views/filter.tsx and filter/rails-config.ts:\n- MetaFilter kinds year/runtime/genre/studio/country/language/network all map to TMDB /discover parameters.\n- Without a key, filter/cinemeta-fallback.tsx shows an infinite grid of Cinemeta top?genre=X (page size 100, cap 600).\n\n7) ANIME. src/views/anime.tsx:\n- 22 SPECS rows from Jikan (api.jikan.moe/v4, 400 ms throttle, 429 backoff, 6 h cache). Results map to kitsu: ids via ARM (relations.yuna.moe/api/ids, 30-day cache), or to mal: ids (providers/jikan.ts:4-5,126-180).\n- Plus installed addon rows that pass isAnimeRow (anime.tsx:94-107): type===\"anime\", or the name matches /anime|mal|anilist|kitsu|aniworld|crunchyroll|funimation/, or at least 50% of the first 6 ids start with kitsu:/mal:/anilist:.\n- Detail pages are enriched from the Kitsu REST API (providers/kitsu.ts, kitsu.io/api/edge), ani.zip and anime-lists XML (anime-mapping.ts).\n\n8) LIVE TV. src/views/live.tsx, src/views/live/*, src/lib/iptv/*. Live TV is entirely user-supplied IPTV:\n- settings.iptvPlaylists (default [], settings.tsx:172-183,335): {id, name, url, epgUrl?, kind:\"m3u\"|\"xtream\"|\"epg\", xtream:{server, username, password}}.\n- iptv/store.ts loadPlaylist tries Xtream first (xtream.ts: player_api.php; stream URL {base}/live/{user}/{pass}/{id}.m3u8). Otherwise it fetches the M3U through tauri-plugin-http with a \"VLC/3.0.20 LibVLC/3.0.20\" UA, 30 s connect timeout, 80 MB cap, 6 h cache, and friendly per-status error messages.\n- m3u.ts parses EXTINF attributes and EXTGRP and ignores EXTVLCOPT/KODIPROP. divider-filter.ts drops decorative rows.\n- Also: xmltv.ts (streaming parse), epg-store.ts, catchup.ts (default/append/shift/flussonic/xtream), favorites.tsx, top-networks.ts (per-region network rows by regex), live/guide/* (EPG grid), export.ts.\n- No playlist is seeded.\n- Stremio \"tv\"/\"channel\" addon catalogs are not part of Live TV and are filtered out of Home. cinemeta.ts isAddonNativeMeta only routes tv/channel metas to detail and picker.\n- Live-TV addons (USA TV, Vavoo, M3U-EPG) exist only as marketplace listings (addons-store/curated.ts ~l.420+).\n\n9) ADDON DIRECTORY. addons-store/community.ts reads Cinemeta addon_catalog/all/{official,community}.json and api.strem.io/addonsofficialcollection.json. The curated.ts \"essential\" rail lists community.anime.kitsu (l.186). The subtitles rail lists a community \"OpenSubtitles v3 PRO\" fork (l.303).\n\n10) CONTENT SETTINGS. tmdbKey, region, streaming, hideContent{anime, liveTv, sports, adult=true}, homeMode \"harbor\"|\"classic\", homeShowAllAddonRows, homeRows, animeFavoriteGenres, showAdultAddons (settings.tsx:35-121,186,281-295). All of Harbor's catalog and IPTV logic runs in the frontend TypeScript; src-tauri/src has none of it.",
+ "zeiler_today": "BUILT-IN MECHANISM (one addon):\n- src-tauri/builtin/cinemeta-manifest.json is a snapshot of com.linvo.cinemeta v3.0.14:\n  - resources: catalog, meta, addon_catalog; types movie/series; idPrefixes [\"tt\"].\n  - catalogs:\n    - movie|series \"top\" (Popular): genre with 19/22 options, search, skip. The options have no \"Music\"; they include Biography and Sport.\n    - movie|series \"year\" (New): genre is REQUIRED, options are years 2026\u21921920 / 2026\u21921960, plus skip.\n    - movie|series \"imdbRating\" (Featured): genre, skip.\n    - series last-videos and calendar-videos: required id-list extras.\n  - addonCatalogs: official/community for all/movie/series/channel/tv/Podcasts/other.\n- It is compiled in via include_str! in builtin_cinemeta() (src-tauri/src/state.rs:60-74) with flags official+protected.\n- AppState::effective_addons (state.rs:147) prepends it when Settings.builtin_cinemeta (state.rs:36, default true) is on and the user has not installed the same transport URL.\n- Toggle: Settings \u2192 Content (src/views/Settings.tsx:347-384, ContentSection \u2192 save({builtinCinemeta}) then reload()).\n- A unit test in state.rs asserts it serves no stream. Addons.tsx:204-209 shows \"Built-in\" for flags.protected.\n\nPROTOCOL:\n- crates/zeiler-addon/src/manifest.rs:147-193: ManifestCatalog::extra_props / is_extra_supported / is_browsable (no required extra; tests at l.391-397,432 assert the year catalog is NOT browsable) / supports_extra.\n- ExtraProp {name, isRequired, options, optionsLimit}. ExtraValue lists allow repeated names (request.rs:31).\n- client.rs has catalog/meta/streams/subtitles methods and AddonCatalogResponse. Only catalog_load, meta_get and streams_get are exposed over IPC (src-tauri/src/lib.rs invoke_handler).\n\nIPC: catalog_load {args:{transportUrl, type, id, extra}} \u2192 {metas} (src-tauri/src/commands/content.rs:29-37). It fetches whatever transport URL it receives, without checking that it belongs to an installed addon or that the extras are declared. Nothing is cached.\n\nTYPESCRIPT:\n- src/lib/catalogs.ts mirrors the extras: isBrowsable (l.17), browsableCatalogs (l.39), searchableCatalogs (l.49), genreOptions. CatalogRef.key is \"transportUrl|type|id\" and has no extra.\n- src/lib/rows.ts useCatalogRows fires page 1 of every catalog at once on each mount: no cache, no lazy loading, no concurrency cap. It pages with skip up to ROW_CAP 60; dedupRows.\n\nVIEWS:\n- Home.tsx: all browsable catalogs, movie/series first; hero and Top 10 from the first catalog.\n- TypeRoom.tsx ROOMS: movies [\"movie\"], shows [\"series\",\"tv\"], anime [\"anime\"]. The anime empty state tells the user to install a Kitsu addon.\n- Discover.tsx: GenreTiles always opens type \"movie\" (l.46), so series genres are unreachable.\n- Filter.tsx: genre-only infinite grid. It uses the first catalog of the type that declares genre, so Cinemeta \"Popular\" only; \"Featured\" and \"New\" can't be reached.\n- GenreTiles.tsx: 18 hardcoded names. \"Music\" is not among Cinemeta's options, so that tile always lands on \"No genre catalog\".\n- view.tsx Frame {kind:\"filter\", genre, type}.\n\nLIVE TV:\n- Sidebar.tsx:32-34 shows a disabled placeholder that routes to \"home\"; Settings has hideLiveTv.\n- \"tv\" catalogs sit in the Shows room. \"channel\" catalogs appear only as Home/Discover rows.\n- Detail.tsx:93 already treats isLive / type===\"tv\" as live and uses defaultVideoId (resource.rs:164-177).\n- player_play and player_embedded_start accept headers/userAgent/referrer (player-ipc.ts PlaybackRequest).\n\nPOLICY:\n- CONTRIBUTING.md:16-18: \"Any further built-in source must likewise be metadata-only and switchable\".\n- docs/ARCHITECTURE.md decisions table: \"one built-in metadata addon\".\n- So a built-in subtitle addon needs a written policy amendment approved by the owner.",
+ "gaps": [
+  "Catalogs with a required extra that has options never appear. Cinemeta's movie/series 'New' (year) catalogs are hidden, though stremio-core's Discover picks options[0] by default (from memory, unverified).",
+  "No filter UI driven by manifest extras. Users can't pick a type, then a catalog, then genre/year/any declared extra. Filter.tsx does genre only, uses the first genre-capable catalog only, and Discover always passes type 'movie'.",
+  "Genre tiles are hardcoded rather than read from catalog options. 'Music' is a dead tile with Cinemeta; Biography, Sport, Reality-TV, Talk-Show and Game-Show are missing; there are no series or anime genre tiles.",
+  "Only one built-in addon, and the code path is Cinemeta-specific (CINEMETA_TRANSPORT_URL, builtin_cinemeta(), the builtin_cinemeta setting). There is no registry and no subtitle built-in. OpenSubtitles needs a subtitles IPC, which belongs to the subtitles area.",
+  "The Anime room is empty out of the box. It is type 'anime' only, with no Harbor-style isAnimeRow heuristic, no built-in anime metadata addon, and no meta type fallback for kitsu:/mal:/anilist:/anidb: ids. Detail calls meta_get with the catalog item's type, which may not match the meta types the Kitsu addon declares (unverified).",
+  "No Live room. The sidebar entry is a disabled placeholder; 'tv' is mixed into Shows; 'channel' catalogs have no home of their own; there is no user-supplied IPTV (M3U/Xtream/XMLTV).",
+  "catalog_load trusts any transportUrl from the webview and does not check declared extras. There is no response cache, so every room switch refetches every catalog.",
+  "Rows have no lazy loading and no concurrency cap. Row keys leave out extras, so the same catalog with different genre values would collide.",
+  "No row customization (order/hide/rename) and no adult filter for catalogs or genre options, though manifest behaviorHints.adult is already parsed.",
+  "Built-in manifest snapshots go stale. Cinemeta's year options end at 2026, so 'New' falls behind after the year rolls over until the snapshot is refreshed. There is no refresh script and no runtime refresh.",
+  "README, CONTRIBUTING, ARCHITECTURE and THIRD-PARTY-NOTICES describe a single metadata-only built-in. THIRD-PARTY-NOTICES also attributes Harbor as 'Harbor contributors', while Harbor's LICENSE says 'Copyright (c) 2026 Harbor'."
+ ],
+ "implementation_plan": [
+  {
+   "step": "1. Protocol helpers for default and filter extras (zeiler-addon plus its TypeScript mirror)",
+   "details": "manifest.rs: add ManifestCatalog::default_extra(&self) -> Option<Vec<ExtraValue>>. For every required prop: if it has options, take ExtraValue{name, value: options[0]}; if it has none (search, lastVideosIds, calendarVideosIds), return None. Add is_boardable() = default_extra().is_some(). Add filter_props() = props with non-empty options, excluding search and skip. Leave is_browsable untouched, because the existing tests (manifest.rs:391-397,432) assert its meaning. Unit-test against the bundled Cinemeta snapshot: movie/year \u2192 genre=2026; series/last-videos \u2192 None; a search-only catalog \u2192 None.\n\nsrc/lib/catalogs.ts: add defaultExtra(), isBoardable(), filterProps(), extraLabel(prop) ('genre' whose options are all /^\\d{4}$/ becomes 'Year'; otherwise the name title-cased, so a custom 'sort' extra shows as 'Sort'), and catalogTypes(addons) ordered movie, series, anime, channel, tv, then the rest alphabetically. Add a shared TYPE_LABEL {movie:'Movies', series:'Series', anime:'Anime', channel:'Channels', tv:'Live TV', other:'Other'}; unknown types are title-cased.\n\nCatalogRef gains extra: ExtraValue[] plus a separate transportUrl. Its key becomes `${manifest.id}|${type}|${id}|${extra as n=v&...}`, so persisted row keys never copy config-in-URL secrets.",
+   "files": [
+    "crates/zeiler-addon/src/manifest.rs",
+    "src/lib/catalogs.ts",
+    "src/lib/types.ts"
+   ]
+  },
+  {
+   "step": "2. Built-in addon registry with three essential built-ins: Cinemeta, Anime Kitsu, OpenSubtitles v3",
+   "details": "New src-tauri/src/builtin.rs: struct Builtin {id, transport_url, snapshot: include_str!(..), kind: Metadata|Subtitles, enabled: fn(&Settings)->bool}, and BUILTINS = [Cinemeta (https://v3-cinemeta.strem.io/manifest.json), Anime Kitsu (https://anime-kitsu.strem.fun/manifest.json), OpenSubtitles v3 (https://opensubtitles-v3.strem.io/manifest.json)]. Move builtin_cinemeta() and CINEMETA_TRANSPORT_URL out of state.rs.\n\nAppState::effective_addons prepends each enabled built-in in table order unless the user has installed the same transport URL or manifest id. Metadata built-ins come first, which keeps meta priority Cinemeta > Kitsu > user addons in fanout::first_meta.\n\nSettings (state.rs and the TS mirror): builtin_kitsu (default true), builtin_opensubtitles (default true), show_adult (default false), home_rows {order: Vec<String>, hidden: Vec<String>, renamed: BTreeMap<String,String>}. The struct-level #[serde(default)] keeps old settings.json files loading.\n\nNew snapshots src-tauri/builtin/kitsu-manifest.json and opensubtitles-v3-manifest.json, produced by a new scripts/refresh-builtin-manifests.mjs (needs network; writes only into src-tauri/builtin/).\n\nRuntime freshness: a non-blocking startup task fetches each enabled built-in's live manifest via AddonClient::manifest. It accepts the manifest only if the id is unchanged and no stream resource appears, caches it at ${data_dir}/builtin/<id>.json, and effective_addons prefers that cache over the compiled snapshot. This fixes the year rollover in Cinemeta 'New'.\n\nContent-neutrality guard tests: every snapshot (and every accepted cached manifest) must fail is_resource_supported('stream', T, sample id) for T in movie/series/anime/channel/tv/other. A Subtitles-kind entry may only expose 'subtitles' and must have empty catalogs.\n\nSettings \u2192 Content: replace the single Cinemeta ToggleRow with a 'Built-in addons' card with one ToggleRow each, a kind badge, and a privacy line ('requests go to <host>'). Each toggle runs save() then reload(), as today.\n\nAmend README.md:13, CONTRIBUTING.md:16-18, the ARCHITECTURE.md 'Content neutrality' row and THIRD-PARTY-NOTICES.md (data sources, plus the exact Harbor MIT notice) to: 'built-ins are metadata or subtitle addons only, each switchable, none serves streams'. This needs the owner's sign-off.\n\nDo NOT build in WatchHub (it is a stream-resource addon, even though it only returns externalUrl links), Stremio Local Files (it needs Stremio's server.js at 127.0.0.1:11470), YouTube channels (stream addon) or Torrentio.",
+   "files": [
+    "src-tauri/src/builtin.rs",
+    "src-tauri/src/state.rs",
+    "src-tauri/builtin/kitsu-manifest.json",
+    "src-tauri/builtin/opensubtitles-v3-manifest.json",
+    "scripts/refresh-builtin-manifests.mjs",
+    "src/views/Settings.tsx",
+    "src/lib/types.ts",
+    "README.md",
+    "CONTRIBUTING.md",
+    "docs/ARCHITECTURE.md",
+    "THIRD-PARTY-NOTICES.md"
+   ]
+  },
+  {
+   "step": "3. Harden and cache catalog_load",
+   "details": "commands/content.rs catalog_load: look up args.transport_url in state.effective_addons(). If it isn't there, return IpcError::InvalidInput('not an installed addon'). Then require manifest.is_resource_supported(&path), which already checks declared and required extras. Put this in a pure helper, find_catalog_addon(addons, url, &path), so it can be unit-tested.\n\nAdd an in-memory TTL/LRU cache to AppState: CatalogCache with tokio Mutex<HashMap<Url, (Instant, CatalogResponse)>>, 256 entries, 15 min TTL, keyed by build_resource_url. Add an optional force: bool to CatalogArgs. Domain crates stay stateless.",
+   "files": [
+    "src-tauri/src/commands/content.rs",
+    "src-tauri/src/state.rs",
+    "src/lib/ipc.ts"
+   ]
+  },
+  {
+   "step": "4. Room and row assembly (adapting Harbor's merge and filter rules)",
+   "details": "New src/lib/rooms.ts with roomCatalogs(addons, room, settings): CatalogRef[] built on isBoardable plus defaultExtra. Cinemeta 'New' then shows as a row titled 'New \u00b7 2026'.\n\nRoom rules:\n- movies = type movie, not anime\n- shows = type series, not anime ('tv' moves to Live)\n- anime = type anime, plus isAnimeCatalog (the addon's idPrefixes fall within kitsu/mal/anilist/anidb, or Harbor's name regex from anime.tsx:94-107), plus post-load reclassification when at least 50% of the first 6 ids are anime-prefixed\n- live = tv and channel\n- home = movie, series, then anime (unless hideAnime), then other types; drop tv/channel when the Live room is enabled (Harbor home.tsx:114)\n- drop catalogs whose addon has behaviorHints.adult unless show_adult\n\nGenre spotlight rows: per room, take the first boardable catalog whose 'genre' filter prop has options and emit up to 8 rows with extra genre=X. Use a preferred list (movies: Action, Comedy, Drama, Sci-Fi, Thriller, Animation, Horror, Documentary; series: Drama, Comedy, Crime, ...; anime: whatever the built-in Kitsu catalog declares) intersected with the declared options. This is the manifest-driven equivalent of Harbor's buildCinemetaRows.\n\nrows.ts useCatalogRows: send extras on every request, and on loadMore send [...ref.extra, {name:'skip', value}]. Cap requests at 6 in flight. The first ~4 rows load eagerly; the rest load lazily when a Row enters view (IntersectionObserver).\n\nPort src/lib/home-customization.ts (applyHomeRowCustomization, effectiveOrder, moveRow, toggleRowHidden, renameRow, resetHomeRows) with Harbor's MIT header. Store it in Settings.home_rows and add a 'Customize' mode on Home with up/down/hide/rename controls (Harbor row-controls.tsx, customize-bar.tsx).",
+   "files": [
+    "src/lib/rooms.ts",
+    "src/lib/rows.ts",
+    "src/lib/home-customization.ts",
+    "src/views/Home.tsx",
+    "src/views/TypeRoom.tsx",
+    "src/components/Row.tsx"
+   ]
+  },
+  {
+   "step": "5. Browse view: a catalog browser for every type, driven by manifest extras (replaces Filter)",
+   "details": "view.tsx: add Frame {kind:'browse'; type: string; addonId?: string; catalogId?: string; extra: ExtraValue[]} and openBrowse(). openFilter(type, genre) stays as shorthand for openBrowse({type, extra:[{name:'genre', value: genre}]}). Escape pops 'browse'.\n\nNew src/views/Browse.tsx, evolved from Filter.tsx:\n- Type pills from catalogTypes(addons).\n- A catalog select labelled 'catalog \u00b7 addon', listing only boardable catalogs.\n- One control per filterProp. optionsLimit > 1 becomes multi-select chips capped at optionsLimit; required props have no 'All' choice; optional props add 'All' (= omit the extra).\n- Option values matching an adult denylist (e.g. /hentai|ecchi|yaoi|yuri|erotic|adult/i, cf. Harbor addons-store/adult-filter.ts isAdultText) are hidden unless show_adult.\n- Selections live in the frame, so Back restores them.\n- Infinite grid via catalog_load with skip while supportsExtra('skip'); PAGE_CAP 600, the same cap as Filter.tsx and Harbor's cinemeta-fallback.tsx.\n\nGenreTiles.tsx takes {type}. Tiles are the genre options of that type's first genre-capable catalog (the row is hidden when there are none). Known names keep the Harbor palette; unknown names get a hue hashed from the name. This removes the dead 'Music' tile.\n\nDiscover.tsx: one GenreTiles row per available type plus a 'Browse everything' entry; fix genreType (l.46). Each TypeRoom gets its own GenreTiles(type) and a 'Browse all <label>' button.",
+   "files": [
+    "src/lib/view.tsx",
+    "src/views/Browse.tsx",
+    "src/views/Filter.tsx",
+    "src/views/Discover.tsx",
+    "src/views/TypeRoom.tsx",
+    "src/components/GenreTiles.tsx",
+    "src/App.tsx"
+   ]
+  },
+  {
+   "step": "6. Anime through the built-in Kitsu metadata addon, plus a meta type fallback",
+   "details": "commands/content.rs meta_get: when lookup.meta is None and the id starts with kitsu:, mal:, anilist: or anidb:, retry first_meta with the types series, movie, anime (skipping the original). This mirrors Harbor's anime-kitsu-addon.ts series\u2192movie fallback and stays generic across addons.\n\nThe anime TypeRoom empty state points to the built-in Kitsu toggle (Settings \u2192 Content) when it is off, and to Addons otherwise.\n\nDo NOT port Harbor's direct Jikan, ARM (relations.yuna.moe), Kitsu REST or ani.zip integrations in v1. They are non-addon third-party APIs with rate limits and extra privacy exposure, and Zeiler keeps all content discovery inside the addon protocol. They can come back later as optional enrichment.",
+   "files": [
+    "src-tauri/src/commands/content.rs",
+    "crates/zeiler-addon/src/fanout.rs",
+    "src/views/TypeRoom.tsx"
+   ]
+  },
+  {
+   "step": "7. Live room, part A: Stremio 'tv' and 'channel' catalogs from addons the user installs",
+   "details": "Add 'live' to RootView/ROOT_VIEWS in view.tsx. Sidebar.tsx:32-34 Live TV becomes enabled and calls setView('live'); it is still hidden by settings.hideLiveTv.\n\nNew src/views/Live.tsx with two tabs, 'Channels' (addons) and 'Playlists' (IPTV). Channels renders roomCatalogs(..., 'live') rows using square/landscape cards (posterShape) and a Browse shortcut for their genre extras, which many TV addons use as categories.\n\nA click opens the existing Detail page, which already handles isLive and defaultVideoId, then PlayPicker through streams_get(type 'tv'|'channel', id). The empty state says to install an addon that provides TV channels and links to Addons. Nothing is seeded.",
+   "files": [
+    "src/lib/view.tsx",
+    "src/chrome/Sidebar.tsx",
+    "src/views/Live.tsx",
+    "src/App.tsx"
+   ]
+  },
+  {
+   "step": "8. Live room, part B: user-supplied IPTV (M3U, Xtream Codes, XMLTV) in Rust",
+   "details": "New crate crates/zeiler-iptv (no tauri dependency; GPL; logic adapted from Harbor iptv/m3u.ts, divider-filter.ts, xmltv.ts, xtream.ts, catchup.ts with the MIT notice):\n- m3u::parse(&str) -> Playlist {epg_url from the #EXTM3U url-tvg / x-tvg-url attribute, channels}. Channel {id (stable hash of url+name), tvg_id, name, logo, group (group-title or EXTGRP), url, user_agent and referrer from #EXTVLCOPT http-user-agent / http-referrer, catchup, catchup_source, catchup_days}. Divider rows are filtered out.\n- xmltv::parse_window(reader, from_ms, to_ms) -> HashMap<tvg_id, Vec<Program{start_ms, end_ms, title, desc, category, icon}>>: streaming quick-xml, gzip via flate2 when the magic bytes match, keeping only now-2h..now+24h.\n- xtream: {server}/player_api.php?username&password&action=get_live_categories|get_live_streams, stream {server}/live/{u}/{p}/{stream_id}.m3u8, EPG {server}/xmltv.php?username&password.\n- Its own reqwest client: 30 s connect timeout, 5 redirects, 80 MB cap, per-source UA override (Harbor sends a VLC UA; Zeiler defaults to its own).\n\nStorage: ${data_dir}/iptv.json holding Vec<IptvSource{id uuid, name, kind M3u|Xtream, url?, epg_url?, xtream?{server, username, password}, user_agent?, favorites: Vec<String>}>, written through a new AppState::persist_iptv under persist_lock. Credentials are never logged and never returned to the webview in full.\n\nIPC in a new src-tauri/src/commands/iptv.rs, registered in lib.rs:\n- iptv_sources() -> [{id, name, kind, host, hasCredentials, hasEpg}]\n- iptv_source_add({name, kind, url?, epgUrl?, xtream?, userAgent?}) -> view (validated by one fetch)\n- iptv_source_remove(id)\n- iptv_channels({id, force?}) -> {channels:[{id, name, logo, group, tvgId, hasCatchup}], groups, fetchedAt} (6 h memory cache, as in Harbor)\n- iptv_epg({id, fromMs, toMs}) -> {[tvgId]: Program[]}\n- iptv_favorite_set({id, channelId, on})\n- iptv_resolve({sourceId, channelId, atMs?}) -> PlaybackRequest {url, title, headers, userAgent, referrer}, allowing only http/https schemes. The UI hands the result to player_embedded_start or player_play.\n\nUI (Playlists tab): an add-source form (M3U URL, or Xtream server/user/pass, optional EPG; the copy says Zeiler ships no channels), a group sidebar, a channel grid with logo and now/next, search and favorites. The EPG guide grid, catch-up UI, top-networks rows and multiview come later.\n\nNo default playlists and no iptv-org presets.",
+   "files": [
+    "crates/zeiler-iptv/Cargo.toml",
+    "crates/zeiler-iptv/src/lib.rs",
+    "crates/zeiler-iptv/src/m3u.rs",
+    "crates/zeiler-iptv/src/xmltv.rs",
+    "crates/zeiler-iptv/src/xtream.rs",
+    "src-tauri/src/commands/iptv.rs",
+    "src-tauri/src/commands/mod.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/state.rs",
+    "src-tauri/Cargo.toml",
+    "Cargo.toml",
+    "src/lib/iptv.ts",
+    "src/views/Live.tsx"
+   ]
+  },
+  {
+   "step": "9. Tests and verification",
+   "details": "Unit tests:\n- default_extra and filter_props\n- the built-in policy test (no stream resource)\n- find_catalog_addon validation\n- m3u, xmltv and xtream parsers with fixtures (including EXTVLCOPT headers, url-tvg, a gzipped EPG and divider rows)\n- the settings round-trip with the new fields\n- the meta-type fallback order\n\nExtend crates/zeiler-addon/tests/live.rs (#[ignore = \"network\"]) with: the Kitsu manifest parses and serves meta for kitsu:1; OpenSubtitles v3 returns subtitles for tt0111161; Cinemeta movie/year?genre=2026 loads.\n\nTypeScript: npx tsc --noEmit. Policy docs are updated in step 2.",
+   "files": [
+    "crates/zeiler-addon/tests/live.rs",
+    "crates/zeiler-iptv/tests",
+    "src-tauri/src/builtin.rs"
+   ]
+  }
+ ],
+ "risks": [
+  "Kitsu and OpenSubtitles v3 manifest details (ids, resources, types, catalog ids, genre options, idPrefixes) are from memory or Harbor's code and are UNVERIFIED. This container's proxy refused v3-cinemeta.strem.io (CONNECT 403). The snapshots must be fetched with network before implementing, and the plan adjusted.",
+  "Policy change: CONTRIBUTING.md:16-18 currently allows metadata-only built-ins. A built-in OpenSubtitles addon needs the owner's explicit approval and doc updates. WatchHub, Local Files and YouTube must stay out, because they are stream-resource addons or depend on Stremio's server.js.",
+  "Third-party dependence and terms: Cinemeta and OpenSubtitles v3 are run by Stremio; Anime Kitsu is a community addon on strem.fun (same operator as Torrentio) with no SLA. None publishes terms for third-party clients that I could find, and any of them could rate-limit or block a non-Stremio User-Agent.",
+  "Privacy: built-ins send browsing and watching signals (IMDb ids, and for subtitles a video hash and filename) to third parties. Each built-in needs a disclosure line and a switch.",
+  "Adult content can come from addon catalogs and from genre options (anime genre lists may include adult tags). It needs show_adult gating and a denylist, and false positives or negatives are possible.",
+  "Anime meta type mismatch: if the Kitsu catalog items' type ('anime') isn't declared for its meta resource, detail pages fall back to the preview until the type-retry ships.",
+  "Changing is_browsable would break existing tests and Search semantics, which is why the plan adds default_extra/is_boardable alongside it.",
+  "A row-key format change resets nothing persisted today, but home_rows keys must not include transport URLs (config secrets), hence keys built from manifest.id.",
+  "IPTV: playlists of 10k+ channels and EPGs over 100 MB (gzipped) need streaming parsers and time-window filtering to keep memory bounded. Provider credentials sit in URLs and stream paths, so they must be treated as secrets. Some providers reject unknown User-Agents. mpv must get headers from EXTVLCOPT. The legality of the source is the user's responsibility, and that has to be stated in the UI.",
+  "Concurrency: adding Kitsu catalogs, genre spotlight rows and year rows multiplies requests per room. Without the cache, concurrency cap and lazy loading, it could trip addon rate limits.",
+  "Shared-file contention with the other workstreams (player, subtitles, profile, marketplace) on state.rs Settings, types.ts, Settings.tsx, view.tsx, lib.rs and the docs."
+ ],
+ "effort": "L",
+ "external_services": [
+  {
+   "name": "Cinemeta (official Stremio metadata addon) \u2014 already built in",
+   "url": "https://v3-cinemeta.strem.io/manifest.json",
+   "auth": "none",
+   "shapes": "GET /catalog/{movie|series}/{top|year|imdbRating}[/genre=X&skip=N].json \u2192 {metas: MetaPreview[]} (year catalogs need genre=<year>; skip = items already loaded). GET /meta/{movie|series}/{tt\u2026}.json \u2192 {meta}. GET /addon_catalog/{all|movie|series|channel|tv}/{official|community}.json \u2192 {addons: Descriptor[]}. Answers 307 for paginated catalogs (client.rs comment).",
+   "notes": "id com.linvo.cinemeta. The fields here were checked against the bundled snapshot src-tauri/builtin/cinemeta-manifest.json (v3.0.14), not against the live service. Resources catalog/meta/addon_catalog; types movie/series; idPrefixes tt. Harbor uses it hardcoded (src/lib/cinemeta.ts) and doesn't seed it. Run by Stremio (Smart Code); I found no published third-party terms. Live check needs network (blocked here)."
+  },
+  {
+   "name": "OpenSubtitles v3 (official Stremio subtitles addon) \u2014 proposed built-in (subtitles kind)",
+   "url": "https://opensubtitles-v3.strem.io/manifest.json",
+   "auth": "none",
+   "shapes": "GET /subtitles/{movie|series}/{tt\u2026[:season:episode]}[/videoHash=H&videoSize=N&filename=F].json \u2192 {subtitles: [{id, url, lang (ISO-639-2, e.g. 'eng')}]}",
+   "notes": "UNVERIFIED from memory: id org.stremio.opensubtitlesv3, resources ['subtitles'], types movie/series, idPrefixes ['tt'], catalogs []. Harbor hardcodes this host, plus opensubtitles.strem.io and an unofficial mirror opensubtitles.stremio.homes (src/lib/subtitles/providers/opensubtitles-v3.ts:6-10). Its curated store lists a community 'OpenSubtitles v3 PRO' fork (curated.ts:303). Zeiler should use only the official host. The content is user-uploaded subtitles under OpenSubtitles terms, proxied by Stremio. Privacy: sends the IMDb id and optionally the file hash and name. Wiring it into playback needs a subtitles fan-out IPC (subtitles area)."
+  },
+  {
+   "name": "Anime Kitsu (community metadata addon) \u2014 proposed built-in (metadata kind)",
+   "url": "https://anime-kitsu.strem.fun/manifest.json",
+   "auth": "none",
+   "shapes": "GET /catalog/anime/{catalogId}[/genre=X&skip=N].json \u2192 {metas}. A search catalog with search required. GET /meta/{series|movie}/{kitsu:ID|mal:ID|anilist:ID|anidb:ID}.json \u2192 {meta: {\u2026, imdb_id?, videos: [{id, title, season, episode, released, thumbnail, imdb_id?, imdbSeason?, imdbEpisode?}]}} (video shape per Harbor anime-kitsu-addon.ts AnimeKitsuVideo).",
+   "notes": "id community.anime.kitsu (Harbor curated.ts:186, 'essential' rail; NOT seeded by Harbor, but Harbor calls it directly for anime meta). UNVERIFIED: catalog ids (e.g. kitsu-anime-trending/airing/popular/rating), which meta types are declared, whether genre options include adult tags, and the repository license. Metadata only, so the snapshot test must assert there is no stream resource. Community-run, with no SLA."
+  },
+  {
+   "name": "WatchHub (official Stremio 'where to watch' links) \u2014 NOT built in",
+   "url": "https://watchhub.strem.io/manifest.json",
+   "auth": "none",
+   "shapes": "GET /stream/{movie|series}/{tt\u2026}.json \u2192 {streams: [{name, title, externalUrl}]} linking to official services",
+   "notes": "UNVERIFIED that it still runs (id org.stremio.watchhub from memory). It is a stream-resource addon, so CONTRIBUTING's no-stream-addon rule excludes it from the built-ins even though it only returns legal external links. Offer it in the marketplace instead. Harbor doesn't seed it and only detects it if the user installed it (src/views/play-picker/picker-utils.ts:312)."
+  },
+  {
+   "name": "Stremio Local Files \u2014 NOT built in",
+   "url": "http://127.0.0.1:11470/local-addon/manifest.json",
+   "auth": "none",
+   "shapes": "Served by Stremio's streaming server (server.js), id org.stremio.local",
+   "notes": "Zeiler doesn't run server.js, so this URL can't work. A native Rust local-library 'virtual addon' would be a separate, later feature. Harbor has its own local library (src-tauri/src/local_lib.rs, src/lib/local-library.ts), not an addon."
+  },
+  {
+   "name": "YouTube channels addon \u2014 NOT built in",
+   "url": "https://v3-channels.strem.io/manifest.json",
+   "auth": "none",
+   "shapes": "type 'channel' catalog/meta; videos carry ytId streams",
+   "notes": "From memory (id com.linvo.stremiochannels), unverified. It serves streams, and ytId playback is deferred in Zeiler (ARCHITECTURE.md), so it belongs in the marketplace only."
+  },
+  {
+   "name": "User-supplied IPTV: M3U, Xtream Codes, XMLTV",
+   "url": "{user server}/player_api.php ; {user server}/get.php ; {user EPG URL}",
+   "auth": "Xtream username/password, or credentials embedded in the M3U URL (treat as secrets)",
+   "shapes": "player_api.php?username&password&action=get_live_categories \u2192 [{category_id, category_name}]; action=get_live_streams \u2192 [{stream_id, name, stream_icon, epg_channel_id, category_id, tv_archive}]. Stream URL {server}/live/{u}/{p}/{stream_id}.m3u8. M3U is #EXTM3U [url-tvg=\u2026] + #EXTINF:-1 tvg-id tvg-name tvg-logo group-title catchup catchup-source,Title. XMLTV is <channel id> / <programme start stop channel><title><desc><category><icon>.",
+   "notes": "Shapes taken from Harbor src/lib/iptv/{xtream,m3u,xmltv}.ts. Zeiler seeds no playlists. Harbor sends a VLC User-Agent because some providers block unknown clients."
+  }
+ ],
+ "harbor_files_to_adapt": [
+  {
+   "path": "src/lib/home-customization.ts",
+   "why": "Pure functions for row order/hide/rename; port almost verbatim with the MIT notice, backed by Settings.home_rows"
+  },
+  {
+   "path": "src/views/home/row-controls.tsx",
+   "why": "UI for row up/down/hide/rename in customize mode"
+  },
+  {
+   "path": "src/views/home/customize-bar.tsx",
+   "why": "Bar for entering and leaving customize mode and resetting"
+  },
+  {
+   "path": "src/views/anime.tsx",
+   "why": "isAnimeRow heuristic (l.94-107) to sort anime catalogs from series/movie addons into the Anime room and keep them out of Movies and Shows"
+  },
+  {
+   "path": "src/views/home.tsx",
+   "why": "Merge rules (l.92-130): exclude tv/channel rows from Home (l.114) and filter anime rows when there is a dedicated room"
+  },
+  {
+   "path": "src/lib/addons.ts",
+   "why": "normalizeName row-name dedup (l.110-118) as an optional 'hide duplicate rows' behavior"
+  },
+  {
+   "path": "src/components/genre-tiles.tsx",
+   "why": "GENRE_PALETTE colors for known genre names; tiles become manifest-driven in Zeiler"
+  },
+  {
+   "path": "src/views/filter/cinemeta-fallback.tsx",
+   "why": "Infinite-grid paging pattern (page 100, cap 600, sentinel at rootMargin 800px) for Browse.tsx"
+  },
+  {
+   "path": "src/lib/providers/anime-kitsu-addon.ts",
+   "why": "Meta type fallback (series then movie) for kitsu:/mal:/anilist:/anidb: ids, generalized in meta_get"
+  },
+  {
+   "path": "src/lib/addons-store/adult-filter.ts",
+   "why": "isAdultText term lists for hiding adult catalogs and genre options unless show_adult"
+  },
+  {
+   "path": "src/lib/iptv/m3u.ts",
+   "why": "M3U/EXTINF attribute parser, ported to Rust in crates/zeiler-iptv"
+  },
+  {
+   "path": "src/lib/iptv/divider-filter.ts",
+   "why": "Decorative-row filter for channel lists"
+  },
+  {
+   "path": "src/lib/iptv/xmltv.ts",
+   "why": "XMLTV parse, time format and findCurrent (now/next), ported to a streaming Rust parser"
+  },
+  {
+   "path": "src/lib/iptv/xtream.ts",
+   "why": "Xtream Codes URL detection, player_api calls and live stream URL building"
+  },
+  {
+   "path": "src/lib/iptv/catchup.ts",
+   "why": "Catch-up URL types (default/append/shift/flussonic/xtream) for a later phase"
+  },
+  {
+   "path": "src/lib/iptv/store.ts",
+   "why": "Size cap, timeouts, 6 h cache and per-HTTP-status error messages"
+  },
+  {
+   "path": "src/views/live/category-sidebar.tsx",
+   "why": "Group sidebar layout for the Playlists tab"
+  },
+  {
+   "path": "src/views/live/channel-grid.tsx",
+   "why": "Channel grid and empty/error blocks"
+  },
+  {
+   "path": "src/views/live/channel-card.tsx",
+   "why": "Channel card with logo and now/next"
+  },
+  {
+   "path": "src/views/live/playlist-empty.tsx",
+   "why": "Add-playlist empty state and form fields (M3U, Xtream, EPG)"
+  },
+  {
+   "path": "src/lib/iptv/favorites.tsx",
+   "why": "Favorites model (move persistence to iptv.json in Rust)"
+  }
+ ],
+ "shared_files_touched": [
+  "src-tauri/src/state.rs",
+  "src-tauri/src/lib.rs",
+  "src-tauri/src/commands/content.rs",
+  "src-tauri/src/commands/mod.rs",
+  "src-tauri/Cargo.toml",
+  "Cargo.toml",
+  "crates/zeiler-addon/src/manifest.rs",
+  "crates/zeiler-addon/tests/live.rs",
+  "src/lib/types.ts",
+  "src/lib/ipc.ts",
+  "src/lib/view.tsx",
+  "src/lib/catalogs.ts",
+  "src/lib/rows.ts",
+  "src/App.tsx",
+  "src/chrome/Sidebar.tsx",
+  "src/views/Settings.tsx",
+  "src/views/Home.tsx",
+  "src/views/Discover.tsx",
+  "src/views/TypeRoom.tsx",
+  "src/views/Filter.tsx",
+  "src/components/GenreTiles.tsx",
+  "README.md",
+  "CONTRIBUTING.md",
+  "docs/ARCHITECTURE.md",
+  "THIRD-PARTY-NOTICES.md"
+ ],
+ "verifiable_in_linux_container": "Partly.\n- Pure Rust unit tests run offline on Linux: `cargo test -p zeiler-addon` for default_extra/filter_props, and `cargo test -p zeiler-iptv` for the M3U/XMLTV/Xtream parsers with fixtures. src-tauri unit tests (builtin snapshot policy test, find_catalog_addon, settings round-trip) need the Tauri Linux system deps (webkit2gtk) to compile; if those are missing, put that logic in a domain crate or in tauri-free modules.\n- TypeScript can be checked with `npx tsc --noEmit` and by building the Vite UI.\n- NOT verifiable here: the live Kitsu and OpenSubtitles v3 manifests and responses, WatchHub availability, and Cinemeta 'year' catalog behavior. This container's proxy refused v3-cinemeta.strem.io (CONNECT 403), so the snapshots must be fetched, and `cargo test -p zeiler-addon --test live -- --ignored` run, on a machine with network.\n- Also not verifiable here: real IPTV providers and the Windows embedded player."
+}

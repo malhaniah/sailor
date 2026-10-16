@@ -23,10 +23,13 @@ jobs:
       - uses: actions/checkout@v7
       - name: Linux system deps
         if: runner.os == 'Linux'
+        # libmpv-dev: the embedded player's headless tests (Ubuntu 24.04 ships
+        # mpv 0.37, i.e. libmpv.so.2 with client API 2.2)
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils \
+            libmpv-dev
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -39,9 +42,60 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: swatinem/rust-cache@v2
+
+      # Windows: the pinned libmpv (libmpv-2.dll + the generated mpv.lib) for the
+      # embedded build. The cache key follows the script, which holds the pin.
+      - name: Cache libmpv
+        if: runner.os == 'Windows'
+        uses: actions/cache@v6
+        with:
+          path: src-tauri/libmpv
+          key: libmpv-${{ runner.os }}-${{ hashFiles('scripts/fetch-libmpv.mjs') }}
+      - name: Fetch libmpv
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # mpv.lib is generated with MSVC's lib.exe, which is not on a runner's PATH
+        # outside a developer prompt: find it with vswhere and put it there
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $libExe = & $vswhere -latest -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\lib.exe' | Select-Object -First 1
+          if (-not $libExe) { throw "lib.exe (MSVC build tools) not found" }
+          $env:PATH = "$(Split-Path $libExe);$env:PATH"
+          node scripts/fetch-libmpv.mjs
+
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+
+      # The embedded (libmpv) player. Linux links the distro libmpv.
+      - name: Clippy, embedded player (Linux)
+        if: runner.os == 'Linux'
+        run: cargo clippy -p zeiler-player --features embedded --all-targets --locked -- -D warnings
+      - name: Test, embedded player (Linux)
+        if: runner.os == 'Linux'
+        run: cargo test -p zeiler-player --features embedded --locked
+      # Windows: the shell's embedded code too. Check mode never links, hence
+      # ZEILER_SKIP_LIBMPV_CHECK.
+      - name: Clippy, embedded player and shell (Windows)
+        if: runner.os == 'Windows'
+        env:
+          ZEILER_SKIP_LIBMPV_CHECK: "1"
+        run: >-
+          cargo clippy -p zeiler -p zeiler-player --all-targets --locked
+          --features zeiler/embedded -- -D warnings
+      - name: Test, embedded player (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        # libmpv2-sys only emits `link-lib=mpv`: the linker finds mpv.lib through
+        # LIB, and the test executables load libmpv-2.dll from PATH (only the app
+        # links it DELAYLOAD, see src-tauri/build.rs)
+        run: |
+          $libmpv = Join-Path $env:GITHUB_WORKSPACE 'src-tauri\libmpv'
+          $env:LIB = "$libmpv;$env:LIB"
+          $env:PATH = "$libmpv;$env:PATH"
+          cargo test -p zeiler-player --features embedded --locked
 
   frontend:
     runs-on: ubuntu-24.04
@@ -53,3 +107,50 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+
+  # A Windows installer with built-in playback for every pull request, so it can be
+  # tried before a release. Unsigned, no updater artifacts, no secrets: download it
+  # from the run's "Artifacts".
+  windows-installer:
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # must match rust-toolchain.toml exactly
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: swatinem/rust-cache@v2
+        with:
+          # release-profile build; keep it apart from the rust job's debug cache
+          key: installer
+      - name: Cache libmpv
+        uses: actions/cache@v6
+        with:
+          path: src-tauri/libmpv
+          key: libmpv-${{ runner.os }}-${{ hashFiles('scripts/fetch-libmpv.mjs') }}
+      - name: Fetch libmpv
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $libExe = & $vswhere -latest -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\lib.exe' | Select-Object -First 1
+          if (-not $libExe) { throw "lib.exe (MSVC build tools) not found" }
+          $env:PATH = "$(Split-Path $libExe);$env:PATH"
+          node scripts/fetch-libmpv.mjs
+      # the release's Windows build minus tauri.release.conf.json (updater artifacts,
+      # which would need the signing key)
+      - name: Build the NSIS installer with built-in playback
+        run: >-
+          npm run tauri -- build --features embedded
+          --config src-tauri/tauri.embedded.conf.json --bundles nsis
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zeiler-windows-setup-pr${{ github.event.pull_request.number }}
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 14

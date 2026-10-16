@@ -19,13 +19,19 @@ tauri-build = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
 tauri-plugin-deep-link = { workspace = true }
+zeiler-account = { workspace = true }
 zeiler-addon = { workspace = true }
 zeiler-engine = { workspace = true }
 zeiler-player = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# DefaultOnError for nested settings groups (subtitles{}, skip{}, …), added in M0 so
+# later milestones do not all touch this file and Cargo.lock
+serde_with = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+# library timestamps (zeiler-account's item times); std only, like the workspace entry
+chrono = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

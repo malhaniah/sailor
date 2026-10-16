@@ -3,7 +3,15 @@ import { Sidebar } from "./chrome/Sidebar";
 import { Topbar } from "./chrome/Topbar";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { StoreProvider } from "./lib/store";
-import { type Frame, type RootView, ROOT_VIEWS, ViewProvider, useView } from "./lib/view";
+import { EmptyState } from "./components/ui";
+import {
+  type Frame,
+  type RootView,
+  ROOT_VIEWS,
+  ViewProvider,
+  unreachable,
+  useView,
+} from "./lib/view";
 import { AddonsView } from "./views/Addons";
 import { DetailView } from "./views/Detail";
 import { DiscoverView } from "./views/Discover";
@@ -30,9 +38,7 @@ function Shell() {
   const hideSidebar = top.kind === "picker" || top.kind === "settings";
   const rootFrame = stack.find((f) => ROOT_VIEWS.includes(f.kind as RootView));
   const root = (rootFrame?.kind ?? "home") as RootView;
-  const overlays = stack.filter(
-    (f) => f.kind === "meta" || f.kind === "filter" || f.kind === "picker" || f.kind === "settings",
-  );
+  const overlays = stack.filter(isOverlay);
 
   return (
     <div className="relative flex h-full">
@@ -73,7 +79,44 @@ function RootViewHost({ view }: { view: RootView }) {
       return <AddonsView />;
     case "settings":
       return <SettingsView />;
+    case "live":
+      return <ReservedView title="Live TV" />;
+    default:
+      return unreachable(view);
   }
+}
+
+/** Frames drawn over the root view (settings pushes on top as an overlay too). */
+function isOverlay(frame: Frame): boolean {
+  switch (frame.kind) {
+    case "meta":
+    case "filter":
+    case "picker":
+    case "settings":
+    case "browse":
+    case "addon-detail":
+      return true;
+    case "home":
+    case "discover":
+    case "movies":
+    case "shows":
+    case "anime":
+    case "library":
+    case "addons":
+    case "live":
+      return false;
+    default:
+      return unreachable(frame);
+  }
+}
+
+/** Placeholder for a reserved navigation name; nothing navigates here yet. */
+function ReservedView({ title }: { title: string }) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-canvas px-12">
+      <EmptyState title={title}>Not in Zeiler yet.</EmptyState>
+    </div>
+  );
 }
 
 function OverlayFrame({ frame }: { frame: Frame }) {
@@ -90,7 +133,21 @@ function OverlayFrame({ frame }: { frame: Frame }) {
           <SettingsView />
         </div>
       );
-    default:
+    case "browse":
+      return <ReservedView title="Browse" />;
+    case "addon-detail":
+      return <ReservedView title="Addon" />;
+    // root views render in RootViewHost
+    case "home":
+    case "discover":
+    case "movies":
+    case "shows":
+    case "anime":
+    case "library":
+    case "addons":
+    case "live":
       return null;
+    default:
+      return unreachable(frame);
   }
 }

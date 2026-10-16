@@ -1,0 +1,249 @@
+{
+ "area": "Stremio account sign-in, sync (addons + library/progress) and local profiles with customization",
+ "harbor_approach": "Everything runs in the webview (TypeScript). Rust is not involved. Requests go through @tauri-apps/plugin-http (src/lib/safe-fetch.ts). The capability allows any URL (src-tauri/capabilities/default.json, http:default with https://*/*) and the CSP is turned off (src-tauri/tauri.conf.json:29, \"csp\": null).\n\n1) API CLIENT\n- src/lib/stremio.ts:3-86. The base URL is https://api.strem.io/api/<method>. Every call is a POST with a JSON body. The response envelope is {\"result\": T} or {\"error\": {\"message\", \"code\"}}.\n- login (stremio.ts:44-50)\n  - Request: {email, password, facebook:false}\n  - Response: {authKey, user:{_id, email, fullname?, avatar?}}\n- logout(authKey) is defined at stremio.ts:52 but nothing calls it.\n- library(authKey) (stremio.ts:56-68)\n  - First calls datastoreMeta {authKey, collection:\"libraryItem\"}.\n  - Then calls datastoreGet {authKey, collection:\"libraryItem\", ids:[...all ids], all:true}.\n- libraryGetOne (stremio.ts:70-78) is datastoreGet with ids:[id].\n- libraryPut (stremio.ts:80-86) is datastorePut {authKey, collection:\"libraryItem\", changes:[item]}.\n- Addons (src/lib/addons.ts:88-104)\n  - addonCollectionGet {authKey, type:\"user\", update:false} returns {addons:[{manifest, transportUrl, flags}], lastModified}.\n  - addonCollectionSet {authKey, type:\"user\", addons:[{manifest, transportUrl}]}. This drops `flags`.\n- Cross-check with stremio-core (MIT; src/types/api/request.rs, response.rs, models/ctx/*):\n  - Request bodies carry a serde `type` tag: \"Login\", \"LoginWithToken\", \"Logout\", \"GetUser\", \"AddonCollectionGet\" with update:true, \"AddonCollectionSet\". Harbor leaves these out (or sends the legacy type:\"user\"), and the server evidently accepts both forms.\n  - datastoreMeta returns [[id, mtimeMillis:number], ...]. Harbor types it as [string, string]; this is harmless because it only reads the id.\n  - datastoreGet with ids:[] and all:true returns the whole library in one call.\n  - Write endpoints return {success:true}.\n  - API error code 1 on getUser means the session expired, and stremio-core logs out.\n  - The Link API (https://link.stremio.com/api/v2/create and /read) supports a sign-in flow without a password. Harbor does not use it, and does not use loginWithToken or getUser.\n\n2) SESSION AND STORAGE\n- src/lib/auth.tsx:21-46 stores {authKey, user} as plain JSON in localStorage under `harbor.auth.<profileId>`. There is no OS keychain.\n- signIn (auth.tsx:62-76) accepts a `remember` flag but ignores it, so the session is always kept.\n- signOut (auth.tsx:78-89) only deletes the localStorage key and never calls /api/logout.\n- Several files still read a legacy key `harbor.auth` that nothing writes any more: src/lib/addon-store.ts:31-40, src/lib/series-episodes.ts:89 and src/views/library/shared.tsx:188.\n- Backup export leaves out auth keys (src/lib/backup.ts:18-23).\n- User-supplied theme JS runs in the same origin through `new Function(code)()` (src/components/custom-code-mount.tsx:69,81). That code can read the authKey and the full user object, and can send them anywhere.\n\n3) ADDON SYNC\n- The catalog source is the account collection plus a local-only list `harbor.installed-addons`, de-duplicated by transportUrl (addons.ts:208-220; addons-store/store.ts:52).\n- Install and uninstall do a read-modify-write: addonCollectionGet, filter by manifest.id, then addonCollectionSet with the full list (addon-store.ts:42-53, 204-259).\n- There is no lastModified or conflict check, so the last writer wins on the whole list.\n- Because of the stale `harbor.auth` read above, pushToStremio finds no key and returns true. It therefore appears to skip the push while still reporting syncedToStremio:true.\n- Harbor seeds Torrentio. Zeiler must not copy that.\n- Settings > Account has a \"Synced addons\" card: count, logos, \"Sync now\" (which is only addonCollectionGet), and \"Manage\" (src/views/settings/account/synced-addons-card.tsx).\n\n4) LIBRARY, CONTINUE WATCHING AND PROGRESS\n- Reads re-fetch the whole library with no local cache:\n  - home.tsx:170-212 does so on mount, on focus, and every 30 s while visible.\n  - Shows, anime, calendar, library tabs and watchlist-sync do the same (watchlist-sync is src/lib/watchlist-sync.tsx).\n- Continue Watching is (!removed || temp) && timeOffset>0, sorted by _mtime (home.tsx:214-237).\n- Progress writes (src/views/player/hooks/use-stremio-sync.ts):\n  - Only for ids starting with tt (canonicalImdbId, :119-123).\n  - Every 5 s while playing if the position moved 4 s or more, and also on pause, unmount and pagehide (:7-9, 81-116).\n  - Each write is a GET of the item followed by a PUT.\n  - Conflict guard: skip the write if the remote _mtime is after the session start and the remote offset is more than our offset plus 60 s (:55-75).\n- writeLibraryItem (:165-234) builds the item, but its semantics differ from stremio-core:\n  - timeWatched is set equal to timeOffset instead of accumulated.\n  - timesWatched is never incremented.\n  - flaggedWatched is 1 above 85%; stremio-core uses time_watched > 0.7 \u00d7 duration.\n  - A new item gets removed:false and temp:true; stremio-core uses removed:true and temp:true. Titles played in Harbor therefore appear in the user's visible Stremio library.\n- Earlier Harbor writes broke the official Stremio apps. Harbor ships a \"Repair library\" tool that rewrites every item into stremio-core's exact schema (src/lib/stremio-library-repair.ts; UI at src/views/settings/advanced-panel.tsx:572-640, whose copy reads \"Run once if your Stremio app started crashing after Harbor synced playback\").\n- Watched episodes are decoded in src/lib/stremio-watched.ts:6-58. The decoder takes parts[1] as the length and does not inflate the zlib data. stremio-core's format is {anchorVideoId}:{len}:{base64(zlib(bits))}, parsed with rsplit, and series anchor ids contain colons, so Harbor's decoder is wrong for series.\n- Watchlist add/remove is local only (src/lib/watchlist.ts, `harbor.watchlist.v1`) plus Trakt; it is never written to Stremio.\n- Settings are not synced. stremio-core does not sync settings either; they are local-only there.\n\n5) LOCAL PROFILES (src/lib/profiles.tsx)\n- Storage is localStorage `harbor.profiles.v1` = {profiles, activeId}.\n- Profile fields are {id, name (max 32 chars), avatar (data URL or URL), color, isPrimary, shareStremioWith (profile id or null), passwordHash, hideContent {anime, liveTv, sports, adult}, lockedTabs, createdAt} (:28-39).\n- On first run one primary profile named \"Guest NNNN\" is created (:191-214).\n- Only the primary can create, delete or edit other profiles (picker-modal.tsx:80-103). Deleting a profile removes its auth key (:279-294).\n- By default a new profile shares the primary's Stremio session (:247-258). stremioSourceProfileId() resolves which profile's session to use (:347-355).\n- The PIN is a 4-digit code stored as SHA-256(\"harbor-profile-v1|\"+pin) with a static salt and checked client-side (src/lib/profile-password.ts). This is a UX lock, not security.\n- UI files:\n  - src/components/profile-picker/{picker-modal,profile-tile,editor-view,pin-entry,password-prompt}.tsx (\"Who's watching?\")\n  - src/chrome/sidebar/profile-chip.tsx (switch, edit, new profile, sign in/out)\n  - src/components/auth-modal.tsx (email/password, a \"Remember me\" toggle that has no effect, and \"Create account\" opening https://www.stremio.com/register)\n  - src/components/onboarding/stremio-step.tsx\n  - src/views/settings/account.tsx (identity card with avatar upload, name and colour; Stremio card with masked email plus Reveal, Stremio ID, Re-authenticate, Sign out; synced addons)\n- Avatars are resized in a canvas to at most 320 px WebP data URLs (src/views/settings/account/avatar-utils.ts). Alternatives are a Trakt avatar, the Stremio user.avatar as fallback, and a colour ring with 10 presets (PROFILE_COLORS).\n- Profile identity is copied into global settings by src/lib/profile-identity-sync.tsx. Other settings stay global (`harbor.settings`), not per profile.",
+ "zeiler_today": "Zeiler has no account, profile or library code at all. A search of src/ for profile, avatar, account or sign-in finds nothing.\n\n- Settings\n  - Settings is a single device-global struct in /home/user/sailor/src-tauri/src/state.rs:13-58: mpvPath, engine*, deleteOnStop, theme, instantPlay, hideAnime, hideLiveTv, builtinCinemeta, autoUpdate.\n  - It is persisted as JSON to <app_data_dir>/settings.json by atomic tmp+rename write_json (state.rs:230-241), serialized by persist_lock (state.rs:116-118, 191-201).\n  - A corrupt file is moved to *.corrupt.bak (state.rs:207-228).\n  - Commands are settings_get and settings_set, a full replace (/home/user/sailor/src-tauri/src/commands/settings.rs).\n- Addons\n  - Installed addons are Vec<Descriptor>, persisted to <app_data_dir>/addons.json.\n  - Identity is the transport URL (commands/addons.rs:168-178), the same as stremio-core.\n  - effective_addons() puts the bundled Cinemeta descriptor first, with flags official+protected (state.rs:65-76, 147-161).\n  - zeiler_addon::Descriptor and Manifest are typed and lenient. Unknown top-level manifest fields are dropped (crates/zeiler-addon/src/manifest.rs:11-63; only behaviorHints keeps extras at :259-260). Round-tripping an account's addon collection through them would therefore be lossy.\n  - All HTTP is in Rust (reqwest with native-tls, UA Zeiler/<ver>; crates/zeiler-addon/src/client.rs:94-104). The webview has a strict CSP whose connect-src is ipc only (src-tauri/tauri.conf.json), and there is no http, fs or store plugin (capabilities/default.json).\n  - IpcError kinds: invalidInput, addon, notFound, engine, player, storage (src-tauri/src/error.rs).\n- UI\n  - /home/user/sailor/src/lib/store.tsx has StoreProvider with AddonsContext, SettingsContext (optimistic save) and SearchContext.\n  - IPC wrappers are in src/lib/ipc.ts and mirror types in src/lib/types.ts:180-193.\n  - /home/user/sailor/src/views/Library.tsx is a placeholder EmptyState saying watchlist and continue-watching will come with the player milestone.\n  - The sidebar (src/chrome/Sidebar.tsx) has no profile chip.\n  - Settings (src/views/Settings.tsx:31) has sections player, engine, theme, content, integrations and about. There is no account section.\n  - Reusable UI primitives exist in src/components/ui.tsx: Modal, SectionCard, Toggle, ToggleRow, ChipPicker, Badge, CopyField.\n- Player\n  - The page (src/pages/Player.tsx) tracks time-pos, duration and eof-reached.\n  - Its route params carry only url/infoHash/title/startAt. There is no meta id, type or video id, so it cannot attribute progress to a library item yet.\n- Docs\n  - docs/ARCHITECTURE.md rejects stremio-core as a dependency, partly because it is hardwired to api.strem.io and sends SeekLog telemetry.\n  - Its milestones list \"library/continue-watching persistence\" for v0.2 and \"optional Stremio account sync (isolated, off by default)\" under Later.\n- Toolchain\n  - The workspace chrono dependency is std-only, without the serde or clock features.\n  - deny.toml allows MIT, Apache and ISC licences, which covers keyring, secrecy, argon2, flate2 and base64.",
+ "gaps": [
+  "No client for the Stremio account API: login, loginWithToken, the link.stremio.com code flow, getUser, logout, addonCollectionGet/Set, datastoreMeta/Get/Put.",
+  "No place to store a secret. Settings and addons are plain JSON in app_data_dir, and nothing is wired to the OS keychain.",
+  "No local library model at all. Nothing records what was played, where it stopped, a watchlist, or watched flags. Library sync needs a local, Stremio-compatible LibraryItem store first (this overlaps the v0.2 'library/continue-watching persistence' milestone).",
+  "The Player route has no metaId/type/videoId/name/poster params, so progress cannot be attributed to an item.",
+  "Typed Descriptor/Manifest drop unknown manifest fields. Pushing them back with addonCollectionSet would quietly strip data from the user's account, so the account layer needs raw-JSON descriptors.",
+  "No profiles: no profiles.json, no per-profile addons/library/prefs, no picker, no PIN, no avatar storage. AppState holds exactly one addons list and one settings struct.",
+  "No UI for any of it: sign-in modal, account section in Settings, sidebar profile chip, Who's-watching picker, profile editor, Library view tabs.",
+  "No session-expiry handling, no sync scheduler, and no flush of pending pushes on exit (lib.rs RunEvent::Exit flushes only the engine).",
+  "No port of stremio-core's watched-bitfield codec, which is needed to read and write per-episode watched state compatibly.",
+  "No privacy notice for account sync. Configured addon URLs may carry debrid keys, and enabling addon sync would upload them to the user's Stremio account.",
+  "CI/release Linux images lack libdbus-1-dev, which the keyring Secret Service backend needs."
+ ],
+ "implementation_plan": [
+  {
+   "step": "1. New domain crate crates/zeiler-account (no tauri dependency) for Stremio API types and codecs",
+   "details": "Why a separate crate: zeiler-addon is the stateless, GET-only addon protocol. The account API is credentialed, POST-based and tied to one host, and ARCHITECTURE.md asks for account sync to be 'isolated'. Keeping it in its own crate keeps credentials out of the addon client.\n\nDependencies (workspace): reqwest, serde, serde_json, serde_with, url, thiserror, tracing, tokio. Add these to the workspace:\n- chrono with the \"serde\" and \"clock\" features (local to this crate)\n- secrecy (SecretString) and zeroize\n- flate2 and base64 for the watched bitfield\n\ntypes.rs, mirroring stremio-core field-for-field (lenient in, strict out):\n- AuthKey(SecretString). Debug prints <SENSITIVE>.\n- UserSummary {id:\"_id\", email, avatar:Option<String>, premium_expire, last_modified}. Parse only these fields from the user object. Never keep `trakt`, which contains a Trakt access_token.\n- AuthResponse {authKey, user}.\n- RawDescriptor {manifest: serde_json::Value, transportUrl: Url, flags: {official, protected}}. Round-tripping it is lossless. Convert to zeiler_addon::Descriptor only for local use.\n- CollectionResponse {addons: VecSkipError<RawDescriptor>, lastModified: DateTime<Utc>}.\n- LibraryItemModified(String, i64 ms).\n- LibraryItem {_id, name, type, poster: Option<String> (DefaultOnError), posterShape, removed, temp, _ctime: Option<DateTime>, _mtime: DateTime, state: LibraryItemState, behaviorHints {defaultVideoId, featuredVideoId, hasScheduledVideos, isLive?}, #[serde(flatten)] extra: Map}.\n- LibraryItemState (camelCase, except `video_id`, which is snake_case): {lastWatched, timeWatched:u64, timeOffset:u64, overallTimeWatched:u64, timesWatched:u32, flaggedWatched:u32, duration:u64, video_id, watched: Option<String>, noNotif, + flatten extra}. Always serialize integers, never floats or nulls, for the numeric fields.\n- LinkCode {code, link, qrcode}.\n\nwatched.rs:\n- Port stremio-watched-bitfield (MIT; attribution header).\n- Format is `{anchorVideoId}:{anchorLen}:{base64(zlib(bitfield8))}`. Parse by popping from the right, because the anchor contains ':'.\n- Videos are ordered by (season, episode) as in LibraryItemState::watched_bitfield. Implement set_video, get_video, and resize-on-anchor.\n\nerror.rs:\n- AccountError {Http, Api{code,message}, SessionExpired, Json, TooLarge, LinkPending}.\n- Map API code 1 to SessionExpired.\n\nTests: golden JSON fixtures that copy stremio-core's library item, collection and user shapes. Assert exact output bytes, including integer types, RFC3339 _mtime, video_id spelling, and that unknown fields survive a round-trip.",
+   "files": [
+    "crates/zeiler-account/Cargo.toml",
+    "crates/zeiler-account/src/lib.rs",
+    "crates/zeiler-account/src/types.rs",
+    "crates/zeiler-account/src/watched.rs",
+    "crates/zeiler-account/src/error.rs",
+    "Cargo.toml"
+   ]
+  },
+  {
+   "step": "2. HTTP client: StremioApi in zeiler-account/src/client.rs",
+   "details": "Constructor: StremioApi::new(user_agent) with an overridable base (api: https://api.strem.io, link: https://link.stremio.com) so tests can point at a local mock server.\n\nReqwest settings:\n- HTTPS only.\n- redirects Policy::none.\n- 15 s timeout.\n- 32 MB streamed body cap; reuse the pattern in zeiler-addon client.rs:106-136.\n- An honest UA, Zeiler/<ver>. Never mimic Stremio's own clients.\n\nThe envelope is parsed strictly: exactly one of result or error.\n\nMethods (POST https://api.strem.io/api/<path>, body as stremio-core sends it):\n- login(email, &SecretString) -> AuthResponse\n  - path login, body {type:\"Login\", email, password, facebook:false}\n- login_with_token(token) -> AuthResponse\n  - path loginWithToken, body {type:\"LoginWithToken\", token}\n- logout(&AuthKey)\n  - path logout, body {type:\"Logout\", authKey}, returns {success:true}\n- get_user(&AuthKey) -> UserSummary\n  - path getUser, body {type:\"GetUser\", authKey}\n- addon_collection_get(&AuthKey) -> CollectionResponse\n  - path addonCollectionGet, body {type:\"AddonCollectionGet\", authKey, update:true}\n- addon_collection_set(&AuthKey, &[RawDescriptor])\n  - path addonCollectionSet, body {type:\"AddonCollectionSet\", authKey, addons}, returns {success:true}\n- datastore_meta(&AuthKey) -> Vec<LibraryItemModified>\n  - body {authKey, collection:\"libraryItem\"}\n- datastore_get(&AuthKey, ids, all) -> Vec<LibraryItem>\n  - body {authKey, collection:\"libraryItem\", ids, all}\n  - Skip invalid items, like stremio-core's VecSkipError.\n- datastore_put(&AuthKey, changes)\n  - body {authKey, collection:\"libraryItem\", changes}\n  - Batch in chunks of at most 50 items.\n- link_create() -> LinkCode\n  - GET https://link.stremio.com/api/v2/create?type=Create\n- link_read(code) -> Option<AuthKey>\n  - GET .../v2/read?type=Read&code=<code>\n  - None while the user has not approved yet.\n  - The query and envelope are inferred from stremio-core's serde_url_params encoding. Verify them against the live endpoint before shipping.\n\nDeliberately NOT implemented: register (open https://www.stremio.com/register instead), events, seekLog, getSkipGaps (belongs to the skip-intro work and is premium-only), dataExport, deleteUser, getModal, getNotification, and likes.stremio.com ratings.\n\nTests: unit tests against a local mock server (add wiremock or httpmock as a dev-dependency). Add tests/live.rs marked #[ignore], gated on ZEILER_STREMIO_EMAIL and ZEILER_STREMIO_PASSWORD, and never run it in CI.",
+   "files": [
+    "crates/zeiler-account/src/client.rs",
+    "crates/zeiler-account/tests/live.rs"
+   ]
+  },
+  {
+   "step": "3. Pure sync logic in zeiler-account/src/sync.rs (port stremio-core semantics; MIT attribution)",
+   "details": "Library functions:\n- plan_library_sync(local: &HashMap<id, (mtime, should_sync)>, remote: &[LibraryItemModified], now) -> (pull_ids, push_ids)\n  - Copy stremio-core plan_sync_with_api, comparing seconds-precision timestamps.\n  - should_sync = type != \"other\" && (!removed || mtime > now - 365 days).\n- merge_pulled(local, pulled)\n  - Accept an item if pulled.mtime >= local.mtime && pulled != local.\n  - Conflict policy is per-item last-writer-wins on _mtime, which is exactly what Stremio's own apps do. There is no field-level merge.\n- new_item_from_meta(meta)\n  - removed:true, temp:true, ctime and mtime = now, lastWatched = now.\n- set_in_library(item, bool)\n  - add: removed=false, temp=false\n  - remove: removed=true, temp=false\n- apply_playback_progress(item, video_id, time_ms, duration_ms, now). Copy models/player.rs TimeChanged:\n  - When the video changes: fold timeWatched into overallTimeWatched, then reset timeWatched and flaggedWatched.\n  - Otherwise: accumulate time_watched += time - time_offset.\n  - Advance timeOffset and duration only when time > timeOffset.\n  - Watched when flaggedWatched == 0 && duration > 0 && !isLive && timeWatched > 0.7 \u00d7 duration: set flaggedWatched=1, timesWatched += 1, and set the bit in the watched bitfield.\n  - If temp && timesWatched == 0, set removed=true; if removed, set temp=true.\n- mark_watched and mark_video_watched, mirroring LibraryItem::mark_as_watched and mark_video_as_watched.\n- is_in_continue_watching = type != other && (!removed || temp) && timeOffset > 0.\n\nAddon functions:\n- merge_addon_collections(local, remote, Strategy::{UseAccount, Merge, KeepLocal}). Merge means union by transportUrl, keeping account order first and appending local-only entries.\n- rebase_addon_op(remote, Op::{Add(RawDescriptor), Remove(Url)}). Never remove an entry whose flags.protected is set, and always keep flags byte-for-byte.\n\nThis step is fully unit-testable.",
+   "files": [
+    "crates/zeiler-account/src/sync.rs"
+   ]
+  },
+  {
+   "step": "4. Secure session storage in src-tauri (OS keychain, memory fallback)",
+   "details": "Trait SecretStore {get, set, delete}, with two implementations:\n- KeyringStore, using the keyring crate v3.\n  - Features: apple-native, windows-native, and sync-secret-service with crypto-rust (verify the exact feature names when implementing).\n  - service = \"io.zeiler.desktop\", account = \"stremio-auth:<profileId>\".\n  - The stored value is the authKey only. The 2.5 KB Windows Credential Manager limit is not an issue.\n- MemoryStore, used when \"Remember me\" is off or when the keychain errors (for example, no Secret Service daemon on Linux). The UI is told storage = \"memory\" and shows a notice.\n\nRules:\n- Never write the authKey to settings.json or profiles.json.\n- Never return it over IPC and never log it. Debug is redacted.\n- Passwords arrive as SecretString and are zeroized after the login call.\n\nAdd libdbus-1-dev and pkg-config to the apt lists in .github/workflows/ci.yml and release.yml. Debian packages already depend on libdbus-1-3 transitively through webkit.",
+   "files": [
+    "src-tauri/src/account/secret_store.rs",
+    "src-tauri/Cargo.toml",
+    "Cargo.toml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml"
+   ]
+  },
+  {
+   "step": "5. Profiles and per-profile data layout in AppState",
+   "details": "Store profiles in <app_data_dir>/profiles.json as {activeId, profiles:[Profile]}.\n\nProfile fields:\n- id: uuid\n- name (1-32 chars)\n- color: hex, from presets adapted from Harbor PROFILE_COLORS\n- avatar: \"none\" | \"custom\" | \"stremio\"\n- isPrimary\n- pinHash: Option<String>, Argon2id with a per-profile random salt (argon2 crate)\n- stremio: {mode: \"none\" | \"own\" | {shareWith: profileId}, userId?, email?, avatarUrl?, syncAddons: bool, syncLibrary: bool, addonsLastModified?, lastAddonsSync?, lastLibrarySync?}\n- prefs: {theme, instantPlay, hideAnime, hideLiveTv, plus future subtitle prefs}\n- createdAt\n\nPer-profile files live under <app_data_dir>/profiles/<id>/:\n- addons.json\n- library.json, a LibraryBucket {uid: Option<String>, items: HashMap<id, LibraryItem>}. This matches stremio-core's bucket keyed by uid, so libraries from different accounts never mix.\n- avatar.webp\n\nMigration, in the style of migrate_legacy_data:\n- On first run, create a primary profile and move the existing addons.json into profiles/<primary>/addons.json.\n- Theme, instantPlay, hideAnime and hideLiveTv become per-profile prefs.\n- mpvPath, engine settings, autoUpdate and builtinCinemeta stay device-global in settings.json.\n- settings_get and settings_set keep their current payload by merging device settings with the active profile's prefs, so the UI does not change.\n\nAppState.addons now holds the active profile's list. profile_select reloads it.\n\nShared Stremio sessions: if a profile shares the primary's session (mode shareWith), it resolves to that profile's keychain entry and that profile's library bucket.\n\nPIN rules:\n- Verified in Rust.\n- Attempts are rate-limited with backoff in memory.\n- profile_list returns `locked: bool`, never the hash.\n- Document it as a convenience lock: data on disk is not encrypted.",
+   "files": [
+    "src-tauri/src/profiles.rs",
+    "src-tauri/src/state.rs",
+    "src-tauri/src/commands/settings.rs"
+   ]
+  },
+  {
+   "step": "6. Tauri commands and background sync (src-tauri/src/commands/account.rs, profiles.rs, library.rs)",
+   "details": "Account commands:\n- account_status() -> {signedIn, user?: {id, email, avatarUrl?, premium: bool}, storage: \"os\" | \"memory\", sync: {addons, library, lastAddonsSync?, lastLibrarySync?, addonsLocked}}\n- account_login_password({email, password, remember}) -> AccountStatus\n- account_link_start() -> {code, link, qrcode}. Rust opens `link` with tauri-plugin-opener.\n- account_link_poll({code}) -> AccountStatus | {pending: true}. The UI polls every 3 s for up to 5 min; the result then goes through loginWithToken.\n- account_logout({removeSyncedData: bool})\n  - Best-effort POST /api/logout.\n  - Delete the keychain entry.\n  - Drop the bucket for that uid, or keep it as read-only local data if the user unticks the box.\n- account_refresh_user(): getUser. On SessionExpired, clear the session and emit `account-status`.\n- account_sync_now({addons, library}) -> SyncReport {pulled, pushed, addonsAdded, addonsRemoved, errors}\n- account_addons_diff() -> {accountOnly, localOnly, both}. Used for the first-sign-in dialog.\n- account_addons_apply({strategy})\n\nProfile commands:\n- profile_list\n- profile_create {name, color}\n- profile_update {id, patch}\n- profile_delete {id}. Primary only; also deletes the keychain entry and the profile directory.\n- profile_select {id, pin?}\n- profile_set_pin {id, currentPin?, newPin?}\n- profile_set_avatar {id, dataUrl}. Validate magic bytes (PNG, JPEG, WebP or GIF), allow at most 512 KB, and store the file. Avatars are returned as data: URLs, which the CSP img-src already allows.\n\nLibrary commands (local-first; sync is a layer on top):\n- library_list {filter: continueWatching | library | history}\n- library_set {id, type, name, poster, inLibrary}\n- library_mark_watched {id, videoId?, watched}\n- library_progress {metaId, type, videoId, name, poster, timeMs, durationMs}\n\nSync scheduler, a tokio task under a sync Mutex:\n- Runs at startup for the active profile: getUser, then a full pull with datastoreGet {ids:[], all:true} when the bucket is empty (otherwise plan, pull, push), then addonCollectionGet.\n- Runs every 15 min, and when the UI calls on window focus (debounced to at least 60 s).\n- Runs 5 s after local library mutations.\n- During playback, pushes the active item at most every 180 s (stremio-core PUSH_TO_LIBRARY_EVERY) and on pause, stop and end.\n- On RunEvent::Exit, flushes pending pushes with a 3 s timeout, next to the engine shutdown in lib.rs.\n\nAddon semantics while addon sync is on:\n- The account collection is the source of truth.\n- addon_add and addon_remove apply locally, then call addonCollectionGet, rebase_addon_op and addonCollectionSet. The server has no compare-and-swap, so a small race window remains; document it.\n- If a pull fails, set addonsLocked=true and refuse to push, mirroring stremio-core's addons_locked. This prevents overwriting the account with a stale list.\n- Never push Zeiler's built-in Cinemeta into an account that lacks it.\n- Keep entries Zeiler cannot use, such as Stremio's Local Files addon at 127.0.0.1:11470, which needs server.js. Show them greyed out instead of dropping them.\n\nEmit Tauri events `account-status` and `sync-status`. Add IpcError variants `auth` (wrong credentials), `sessionExpired`, `network` and `locked` (wrong PIN).",
+   "files": [
+    "src-tauri/src/commands/account.rs",
+    "src-tauri/src/commands/profiles.rs",
+    "src-tauri/src/commands/library.rs",
+    "src-tauri/src/commands/addons.rs",
+    "src-tauri/src/commands/mod.rs",
+    "src-tauri/src/account/mod.rs",
+    "src-tauri/src/library.rs",
+    "src-tauri/src/lib.rs",
+    "src-tauri/src/error.rs"
+   ]
+  },
+  {
+   "step": "7. Player hook for progress",
+   "details": "Add route params to #/player: metaId, type, videoId, name and poster. PlayPicker and Detail already have the meta and video.\n\nThe Player page throttles library_progress calls:\n- every 15 s locally while playing\n- on pause, end-file and unmount\n- startAt comes from the library item's timeOffset when it matches the same videoId\n\nRust owns the stremio-core arithmetic (step 3) and the push cadence (step 6). The external-mpv fallback records only a 'started' item until it gets an IPC position feed.",
+   "files": [
+    "src/pages/Player.tsx",
+    "src/views/PlayPicker.tsx",
+    "src/views/Detail.tsx",
+    "src/lib/player-ipc.ts"
+   ]
+  },
+  {
+   "step": "8. UI: providers, sign-in, profile picker/editor, account settings, sidebar chip, Library",
+   "details": "Providers (same pattern as store.tsx):\n- src/lib/account.tsx: AccountProvider exposing status, signInPassword, startLink, pollLink, signOut and syncNow, and listening to `account-status`.\n- src/lib/profiles.tsx: ProfilesProvider.\n- Add both to src/lib/ipc.ts and src/lib/types.ts.\n\nSignInModal (src/components/SignInModal.tsx, using Modal from ui.tsx):\n- Tab 1, \"Sign in with your browser\" (recommended): shows the code and the link. Show the QR only if `qrcode` is a data: URL or https image. It is the only option for Stremio accounts created through Facebook or Apple, and the password never touches Zeiler.\n- Tab 2, \"Email & password\": a Remember toggle that actually works (maps to keychain or memory).\n- A link to \"Create a Stremio account\" (opener).\n- Copy: \"Your password is sent only to api.strem.io. Zeiler is not affiliated with Stremio.\" Use no Stremio logo assets.\n- First successful sign-in on a profile with local addons opens the AddonImportDialog: a diff list showing p2p and adult hints, as in the existing install confirmation, with 'Use my Stremio addons', 'Merge and upload' and 'Keep Zeiler's, don't sync addons'.\n\nProfiles:\n- ProfilePicker overlay: \"Who's watching?\" shown at launch when more than one profile exists. Adapt Harbor's picker-modal and profile-tile layout with Zeiler tokens.\n- ProfileEditor:\n  - name\n  - avatar upload, resized with canvas to at most 320 px WebP (adapt Harbor avatar-utils.ts)\n  - 'Use Stremio avatar'\n  - colour ring presets\n  - PIN set, change and remove through PinEntry\n  - room toggles for hideAnime and hideLiveTv\n  - theme\n  - a Stremio account choice: none, own, or share with primary\n- Sidebar ProfileChip (bottom of src/chrome/Sidebar.tsx): avatar, name and masked email, plus a menu with switch profile, edit, sign in/out and Who's watching.\n\nSettings: new SectionId 'account' with these cards:\n- Profile\n- Stremio account: masked email with Reveal, user id, premium badge, Re-authenticate, and Sign out with a 'remove synced library from this device' checkbox\n- Sync: Addons and Library toggles, last synced times, a 'Sync now' button, an addonsLocked warning, and a one-line policy: 'newest change wins per title, like Stremio's apps'\n- Privacy: what is sent where\n\nLibrary view: tabs Continue Watching, Library and History, backed by library_list. Show a sign-in nudge when signed out.\n\nAddons view: badge 'From your Stremio account'. Show unsupported entries greyed out.",
+   "files": [
+    "src/lib/account.tsx",
+    "src/lib/profiles.tsx",
+    "src/lib/ipc.ts",
+    "src/lib/types.ts",
+    "src/lib/store.tsx",
+    "src/App.tsx",
+    "src/components/SignInModal.tsx",
+    "src/components/profile/ProfilePicker.tsx",
+    "src/components/profile/ProfileEditor.tsx",
+    "src/components/profile/PinEntry.tsx",
+    "src/components/profile/avatar-utils.ts",
+    "src/chrome/Sidebar.tsx",
+    "src/views/Settings.tsx",
+    "src/views/Library.tsx",
+    "src/views/Addons.tsx"
+   ]
+  },
+  {
+   "step": "9. Docs, notices, privacy",
+   "details": "- ARCHITECTURE.md: add zeiler-account to the workspace layout. Add an 'Account sync' section covering endpoints, opt-in (off until the user signs in), keychain storage, sync semantics, and the endpoints that are never called. Update the IPC surface and milestones.\n- THIRD-PARTY-NOTICES.md: credit stremio-core and stremio-watched-bitfield (MIT; the sync algorithm, LibraryItem schema and bitfield codec) and Harbor (MIT; profile picker, avatar resize and colour presets). Keep the MIT headers in the adapted files.\n- README: add a privacy paragraph. When signed in, Zeiler sends your email and password (or a link code), plus your library items (IMDb ids, titles, progress) and, if addon sync is on, your addon URLs (including any keys inside configured URLs) to Stremio's servers. Nothing goes anywhere else, and nothing is sent when signed out.",
+   "files": [
+    "docs/ARCHITECTURE.md",
+    "THIRD-PARTY-NOTICES.md",
+    "README.md",
+    "CONTRIBUTING.md"
+   ]
+  }
+ ],
+ "risks": [
+  "The API is private and undocumented. api.strem.io and link.stremio.com are documented only by stremio-core's MIT source, so Stremio can change or rate-limit them or block third-party clients at any time. Mirror stremio-core request shapes exactly, keep an honest UA, and degrade gracefully (sync errors never block local use).",
+  "Terms of service are unverified. I could not check Stremio's current Terms (https://www.stremio.com/tos) offline. The owner should read them before shipping. Practical mitigations: no analytics/events/seekLog/likes calls, stremio-core's cadence (180 s playback push, sync on start/focus) instead of Harbor's 5 s and 30 s polling, and no Stremio logos or wordmarks. Harbor ships a stremio-wordmark.png; Zeiler should not. Keep the existing trademark disclaimer.",
+  "Corrupting a user's real Stremio account. Malformed libraryItem writes crashed the official apps for Harbor users, which is why Harbor has a 'Repair library' tool. Harbor also drops addon `flags` on every addonCollectionSet. Mitigations: strict golden-fixture serialization tests, a raw-JSON round-trip for descriptors and unknown fields, never removing protected addons, the addonsLocked guard, and a dry-run diff before the first upload.",
+  "Secret leakage. Harbor keeps the authKey and the full user object (which may include a Trakt access_token) in localStorage, readable by theme JS run through new Function, with CSP off and the http plugin allowing https://*. Zeiler must keep the authKey only in Rust and the OS keychain, never send it over IPC, store only a UserSummary subset, and keep the strict CSP. The password crosses IPC once in the password flow; prefer the link flow.",
+  "Keychain availability. Headless or minimal Linux setups (no Secret Service daemon), Windows profiles with roaming restrictions, and macOS keychain prompts on unsigned builds can all fail. Fall back to a memory-only session with a visible notice. Never fall back to plaintext on disk.",
+  "Configured addon URLs often embed debrid or API keys. Turning on addon sync uploads them to the user's Stremio account (this is what Stremio itself does). Disclose it in the sync toggle copy.",
+  "Content-neutrality perception. Importing an account's addon collection can bring in stream addons the user installed in Stremio. That is the user's own choice and fits CONTRIBUTING's rule, but Zeiler must never add a stream addon to an account, and should show the import as an explicit, confirmable step.",
+  "Concurrency. addonCollectionSet replaces the whole list and has no compare-and-swap, so simultaneous edits in Stremio and Zeiler can lose one change. Library conflicts are last-writer-wins per item on _mtime, the same as Stremio, and clock skew on the user's machine affects which side wins. Use the server-provided mtimes when merging pulls.",
+  "Unverified details. The link API query format (type=Create, type=Read&code=), the `qrcode` field's form, the meaning of addonCollectionGet `update:true`, and whether api.strem.io requires the `type` tag all need checking against live endpoints. The opt-in live tests cover this.",
+  "Scope creep and coupling. Per-profile addons/settings change AppState and the settings payload. The migration must be idempotent and copy-not-move, like migrate_legacy_data. Splitting device settings from profile prefs risks UI regressions, so keep settings_get/settings_set merged for compatibility.",
+  "The PIN is not security. Disk data is unencrypted, so anyone with file access bypasses it. State this in the UI. Argon2id plus backoff only stops casual guessing."
+ ],
+ "effort": "XL",
+ "external_services": [
+  {
+   "name": "Stremio API (accounts, addon collection, library datastore)",
+   "url": "https://api.strem.io/api/<method>",
+   "auth": "Email and password (login), a link token (loginWithToken), then authKey in the JSON body of every call. There are no auth headers.",
+   "shapes": "Every call is a POST with a JSON body. The response is {\"result\":T} or {\"error\":{\"message\":string,\"code\":number}}.\n\n- login\n  - Request: {type:\"Login\",email,password,facebook:false}\n  - Response: {authKey,user:{_id,email,avatar?,fbId?,lastModified,dateRegistered,premium_expire?,gdpr_consent,trakt?}}\n- loginWithToken\n  - Request: {type:\"LoginWithToken\",token}\n  - Response: same as login\n- logout\n  - Request: {type:\"Logout\",authKey}\n  - Response: {success:true}\n- getUser\n  - Request: {type:\"GetUser\",authKey}\n  - Response: User. Error code 1 means the session expired.\n- addonCollectionGet\n  - Request: {type:\"AddonCollectionGet\",authKey,update:true}. Harbor sends {authKey,type:\"user\",update:false}.\n  - Response: {addons:[{manifest,transportUrl,flags:{official,protected}}],lastModified}\n- addonCollectionSet\n  - Request: {type:\"AddonCollectionSet\",authKey,addons:[...full list...]}\n  - Response: {success:true}\n- datastoreMeta\n  - Request: {authKey,collection:\"libraryItem\"}\n  - Response: [[id,mtimeMs],...]\n- datastoreGet\n  - Request: {authKey,collection:\"libraryItem\",ids:[...],all:bool}. Use ids:[] with all:true to get everything.\n  - Response: [LibraryItem]\n- datastorePut\n  - Request: {authKey,collection:\"libraryItem\",changes:[LibraryItem]}\n  - Response: {success:true}\n\nLibraryItem = {_id,name,type,poster?,posterShape,removed,temp,_ctime?,_mtime,state:{lastWatched?,timeWatched,timeOffset,overallTimeWatched,timesWatched,flaggedWatched,duration,video_id?,watched?,noNotif},behaviorHints:{defaultVideoId?,featuredVideoId?,hasScheduledVideos}}. Times are in ms and integers. `watched` = \"{anchorVideoId}:{len}:{base64(zlib(bits))}\".",
+   "notes": "Private API; the shapes are taken from stremio-core (MIT). Never call: events, seekLog, getSkipGaps (premium; skip-intro work), dataExport, deleteUser, register, getModal, getNotification."
+  },
+  {
+   "name": "Stremio Link API (password-less device sign-in)",
+   "url": "https://link.stremio.com/api/v2/create and https://link.stremio.com/api/v2/read",
+   "auth": "None to create a code. Reading returns an authKey once the user approves in the browser. That authKey is then exchanged through api.strem.io loginWithToken.",
+   "shapes": "- Create: GET /api/v2/create?type=Create returns {result:{code,link,qrcode}}.\n- Read: GET /api/v2/read?type=Read&code=<code> returns {result:{authKey}} after approval, and an error while pending.\n\nThe query encoding is inferred from stremio-core's serde_url_params of a `type`-tagged enum. Verify it live.",
+   "notes": "This is the recommended primary sign-in. The password never enters Zeiler, and it is the only path for Stremio accounts created through Facebook or Apple. Harbor does not implement it."
+  },
+  {
+   "name": "Stremio registration page",
+   "url": "https://www.stremio.com/register",
+   "auth": "None",
+   "shapes": "Opened in the system browser through tauri-plugin-opener. Zeiler makes no API call.",
+   "notes": "Do not implement the register API in-app; it requires GDPR consent fields."
+  },
+  {
+   "name": "Stremio user avatar host",
+   "url": "user.avatar (an arbitrary https URL from the user object)",
+   "auth": "None",
+   "shapes": "An image GET by the webview. The CSP img-src already allows https:.",
+   "notes": "Loading it reveals the user's IP to that host. It is only used if the profile chooses 'Use Stremio avatar'."
+  }
+ ],
+ "harbor_files_to_adapt": [
+  {
+   "path": "src/lib/stremio.ts",
+   "why": "Reference for endpoints and envelope handling only. Re-implement in Rust (zeiler-account/client.rs) with stremio-core-exact bodies; do not copy the TS."
+  },
+  {
+   "path": "src/lib/addons.ts (userAddons/setUserAddons, lines 88-104)",
+   "why": "Shows the addonCollection request shapes. Do not copy the flag-stripping map at line 101."
+  },
+  {
+   "path": "src/lib/addon-store.ts (pushToStremio, installFromUrl, uninstallAddon, lines 42-53 and 204-259)",
+   "why": "Read-modify-write pattern for addon install/uninstall. Adapt it as rebase_addon_op, keeping flags and protected entries, using the correct session source, and adding an addonsLocked guard."
+  },
+  {
+   "path": "src/views/player/hooks/use-stremio-sync.ts",
+   "why": "Lifecycle triggers worth keeping (pause, unmount, exit flush) and the 'remote is newer and further along' guard. Replace its item arithmetic with stremio-core's player.rs semantics and its 5 s cadence with 180 s plus events."
+  },
+  {
+   "path": "src/lib/stremio-library-repair.ts",
+   "why": "normalizeItem() is a compact checklist of the exact libraryItem schema the official apps require. Use it as test-fixture input for Zeiler's serializer, not as a feature."
+  },
+  {
+   "path": "src/lib/profiles.tsx",
+   "why": "Profile model (name max 32, color, avatar, isPrimary, shareStremioWith, content filters), primary-only management rules, stremioSourceProfileId resolution, and the PROFILE_COLORS presets. Port it to Rust persistence plus a thin React provider."
+  },
+  {
+   "path": "src/components/profile-picker/picker-modal.tsx, profile-tile.tsx, editor-view.tsx, pin-entry.tsx, password-prompt.tsx",
+   "why": "UI flows and layout for 'Who's watching?', create/edit/delete, PIN set/change/remove and the shared-vs-own Stremio account choice. Restyle with Zeiler tokens, and move PIN verification to Rust with Argon2id."
+  },
+  {
+   "path": "src/views/settings/account/avatar-utils.ts",
+   "why": "Canvas resize to at most 320 px WebP data URL. A small MIT helper to copy with attribution; Rust validates and stores the result."
+  },
+  {
+   "path": "src/views/settings/account.tsx and src/views/settings/account/synced-addons-card.tsx",
+   "why": "Account card UX: masked email with Reveal, Stremio ID, Re-authenticate, Sign out, synced-addon count and logos with 'Sync now' and 'Manage'."
+  },
+  {
+   "path": "src/components/auth-modal.tsx and src/components/onboarding/stremio-step.tsx",
+   "why": "Sign-in form UX: show/hide password, 'Create account' link, error display. Make the Remember toggle actually work and add the link-code tab."
+  },
+  {
+   "path": "src/chrome/sidebar/profile-chip.tsx",
+   "why": "Sidebar profile chip and menu: switch profile, edit, new profile, sign in/out of Stremio."
+  },
+  {
+   "path": "src/views/home.tsx (continueWatching memo, lines 214-237) and src/views/home/cw-section.tsx",
+   "why": "Continue Watching filter, de-duplication and the signed-out nudge. Zeiler should read from the local bucket instead of polling the API."
+  },
+  {
+   "path": "src/lib/backup.ts (isPortable, lines 18-23)",
+   "why": "Precedent for leaving auth keys out of any future settings export or backup."
+  }
+ ],
+ "shared_files_touched": [
+  "Cargo.toml",
+  "src-tauri/Cargo.toml",
+  "src-tauri/src/lib.rs",
+  "src-tauri/src/state.rs",
+  "src-tauri/src/error.rs",
+  "src-tauri/src/commands/mod.rs",
+  "src-tauri/src/commands/addons.rs",
+  "src-tauri/src/commands/settings.rs",
+  "src/lib/ipc.ts",
+  "src/lib/types.ts",
+  "src/lib/store.tsx",
+  "src/App.tsx",
+  "src/chrome/Sidebar.tsx",
+  "src/views/Settings.tsx",
+  "src/views/Library.tsx",
+  "src/views/Addons.tsx",
+  "src/views/PlayPicker.tsx",
+  "src/views/Detail.tsx",
+  "src/pages/Player.tsx",
+  "src/lib/player-ipc.ts",
+  ".github/workflows/ci.yml",
+  ".github/workflows/release.yml",
+  "docs/ARCHITECTURE.md",
+  "THIRD-PARTY-NOTICES.md",
+  "README.md"
+ ],
+ "verifiable_in_linux_container": "Mostly yes for the logic, no for the platform keychain.\n\nCheckable in a Linux container:\n- `cargo test -p zeiler-account` with golden JSON fixtures and a local mock HTTP server (wiremock or httpmock). This covers the envelope and error code 1 to SessionExpired, the exact libraryItem and collection serialization, raw descriptor round-trips, the watched-bitfield codec against stremio-core test vectors, plan_library_sync, merge_pulled, apply_playback_progress thresholds, and the addon merge/rebase strategies including protected flags.\n- src-tauri unit tests: profile migration (temp dirs, as in state.rs tests), PIN Argon2 and backoff, avatar validation, and sync scheduling using a MemoryStore SecretStore.\n- clippy, fmt, `npm run typecheck` and `npm run build` for the UI.\n\nOpt-in, never in CI: live checks against api.strem.io and link.stremio.com through tests/live.rs (#[ignore]), with a throwaway account supplied via env vars.\n\nNot checkable here:\n- The OS keychain backends (Windows Credential Manager, macOS Keychain, Linux Secret Service). A headless container usually has no Secret Service daemon unless gnome-keyring is started under dbus-run-session. Verify manually on Windows first.\n- The full sign-in UI flow and the link-code browser approval. These need a desktop session.\n- Whether official Stremio apps accept Zeiler-written library items. This needs a manual cross-check in Stremio's own apps after a sync."
+}

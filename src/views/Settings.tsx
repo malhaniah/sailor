@@ -8,7 +8,7 @@ import {
   PlugZap,
   Waves,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   ChipPicker,
@@ -17,18 +17,24 @@ import {
   Spinner,
   ToggleRow,
 } from "../components/ui";
-import {
-  errorMessage,
-  playerStatus,
-  updateCheck,
-  updateInstallNow,
-  updateStatus,
-} from "../lib/ipc";
+import { errorMessage, updateCheck, updateInstallNow, updateStatus } from "../lib/ipc";
+import { type PlayerBackends, playerBackends } from "../lib/player-ipc";
 import { useAddons, useSettings } from "../lib/store";
 import { THEME_PRESETS } from "../lib/theme";
-import type { PlayerStatus } from "../lib/types";
+import type { PlayerBackend } from "../lib/types";
 
-type SectionId = "player" | "engine" | "theme" | "content" | "integrations" | "about";
+/** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
+ * section shows only once it has a SECTIONS entry, so these stay hidden until then. */
+type ReservedSectionId = "account" | "subtitles" | "playback";
+
+type SectionId =
+  | "player"
+  | "engine"
+  | "theme"
+  | "content"
+  | "integrations"
+  | "about"
+  | ReservedSectionId;
 
 const SECTIONS: {
   group: string;
@@ -157,60 +163,167 @@ export function SettingsView() {
 
 // ---- sections -------------------------------------------------------------------------
 
+const IS_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+const IS_MAC = /mac os x|macintosh/i.test(navigator.userAgent);
+/** An example mpv location for this system (the path field's placeholder). */
+const MPV_PLACEHOLDER = IS_LINUX
+  ? "/usr/bin/mpv"
+  : IS_MAC
+    ? "/opt/homebrew/bin/mpv"
+    : "C:\\Program Files\\mpv\\mpv.exe";
+
+/** Arrow keys in a radio group: next (+1) or previous (-1) option. */
+const RADIO_STEPS: Record<string, number | undefined> = {
+  ArrowDown: 1,
+  ArrowRight: 1,
+  ArrowUp: -1,
+  ArrowLeft: -1,
+};
+
 function PlayerSection() {
   const { settings, save } = useSettings();
-  const [player, setPlayer] = useState<PlayerStatus | null>(null);
+  const [backends, setBackends] = useState<PlayerBackends | null>(null);
   const [path, setPath] = useState<string | null>(null);
 
   useEffect(() => {
-    playerStatus().then(setPlayer).catch(() => {});
+    playerBackends().then(setBackends).catch(() => {});
   }, []);
+  // follow the saved path only when it changes, so saving another setting here (the
+  // backend radios) does not wipe an unsaved edit in the path field
+  const loaded = settings !== null;
+  const savedPath = settings?.mpvPath ?? "";
   useEffect(() => {
-    if (settings) setPath(settings.mpvPath ?? "");
-  }, [settings]);
+    if (loaded) setPath(savedPath);
+  }, [loaded, savedPath]);
 
   if (!settings || path === null) return <Spinner label="Loading…" />;
+
+  const embedded = backends?.embedded;
+  const external = backends?.external;
+  const builtInAvailable = embedded?.available ?? false;
+  const choice = settings.playerBackend;
+  // mpv matters when it is chosen, or when nothing else can play
+  const mpvNeeded = choice === "external" || (backends !== null && !builtInAvailable);
+  const options: { id: PlayerBackend; label: string; sub: string; unavailable?: string }[] = [
+    {
+      id: "auto",
+      label: "Auto (recommended)",
+      // neutral until the check answers, so it never states the wrong player first
+      sub: !backends
+        ? "Plays videos the best way this computer allows."
+        : builtInAvailable
+          ? "Plays inside Zeiler, and switches to mpv if it ever has to."
+          : "Uses the best option on this computer — for now, mpv.",
+    },
+    {
+      id: "embedded",
+      label: "Built-in",
+      sub: "Plays inside the Zeiler window.",
+      // the one place the reason is shown
+      unavailable: backends && !builtInAvailable ? (embedded?.reason ?? "Not available here.") : undefined,
+    },
+    {
+      id: "external",
+      label: "External mpv",
+      sub: "Plays in its own mpv window, with your mpv settings. Zeiler's player screen controls it.",
+    },
+  ];
 
   return (
     <>
       <SectionCard
-        title="mpv"
-        description="Zeiler plays through mpv. Until the embedded player lands, a system-installed mpv window is used."
+        title="Where videos play"
+        description="Videos always start on Zeiler's player screen. Choose whether they play inside Zeiler or in a separate mpv window."
       >
-        <div className="flex items-center gap-2 text-[13.5px]">
-          <span className="text-ink-muted">Status:</span>
-          {player?.available ? (
-            <span className="flex items-center gap-1.5 font-medium text-accent">
-              <span className="h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_rgba(200,160,80,0.6)]" />
-              found — <span className="font-mono text-[11.5px]">{player.path}</span>
+        <div
+          role="radiogroup"
+          aria-label="Where videos play"
+          className="flex flex-col gap-2"
+          onKeyDown={(e) => {
+            // the ARIA radio pattern: arrows move to the previous/next enabled option
+            // and select it (one tab stop for the group)
+            const step = RADIO_STEPS[e.key];
+            if (!step) return;
+            e.preventDefault();
+            const enabled = options.filter((o) => !o.unavailable || o.id === choice);
+            const at = enabled.findIndex((o) => o.id === choice);
+            const next = enabled[(at + step + enabled.length) % enabled.length];
+            if (!next) return;
+            if (next.id !== choice) void save({ playerBackend: next.id });
+            e.currentTarget
+              .querySelector<HTMLElement>(`[data-backend="${next.id}"]`)
+              ?.focus();
+          }}
+        >
+          {options.map((option) => (
+            <BackendOption
+              key={option.id}
+              id={option.id}
+              label={option.label}
+              sub={option.sub}
+              selected={choice === option.id}
+              unavailable={option.unavailable}
+              onSelect={() => void save({ playerBackend: option.id })}
+            />
+          ))}
+        </div>
+        {choice === "embedded" && backends && !builtInAvailable && (
+          <p className="text-[12.5px] text-[oklch(0.75_0.12_25)]">
+            Videos can't play with this choice on this computer. Choose Auto or External mpv.
+          </p>
+        )}
+      </SectionCard>
+
+      <SectionCard
+        title="mpv"
+        description={
+          !backends
+            ? undefined
+            : builtInAvailable
+              ? "Only needed if you choose External mpv."
+              : "Zeiler plays videos with mpv on this computer."
+        }
+      >
+        <div className="text-[13.5px]">
+          {!backends ? (
+            <span className="text-ink-subtle">Looking for mpv…</span>
+          ) : external?.available ? (
+            <StatusOk>
+              Found <span className="font-mono text-[11.5px] font-normal">{external.path}</span>
+            </StatusOk>
+          ) : mpvNeeded ? (
+            <span className="font-medium text-[oklch(0.75_0.12_25)]">
+              Not found. Install mpv from mpv.io, or set where it is below.
             </span>
           ) : (
-            <span className="font-medium text-[oklch(0.75_0.12_25)]">
-              not found — install mpv or set a path below
-            </span>
+            <span className="text-ink-muted">Not installed.</span>
           )}
         </div>
         <div className="flex flex-col gap-1.5">
           <span className="text-[12px] font-medium uppercase tracking-[0.14em] text-ink-subtle">
-            mpv binary path (empty = search PATH)
+            mpv location — optional
           </span>
           <div className="flex gap-2">
             <input
               value={path}
               onChange={(e) => setPath(e.target.value)}
-              placeholder="C:\\tools\\mpv\\mpv.exe"
+              aria-label="mpv location"
+              placeholder={MPV_PLACEHOLDER}
               className="h-12 w-full rounded-xl border border-edge bg-canvas px-4 font-mono text-[12.5px] text-ink outline-none placeholder:text-ink-subtle focus:border-ink"
             />
             <button
               onClick={async () => {
                 await save({ mpvPath: path.trim() || null });
-                setPlayer(await playerStatus().catch(() => null));
+                setBackends(await playerBackends().catch(() => null));
               }}
               className="flex h-12 shrink-0 items-center rounded-xl bg-ink px-5 text-[13.5px] font-semibold text-canvas transition-transform hover:scale-[1.02] active:scale-[0.97]"
             >
               Save
             </button>
           </div>
+          <span className="text-[12px] text-ink-subtle">
+            Leave empty and Zeiler finds mpv on its own.
+          </span>
         </div>
       </SectionCard>
 
@@ -220,10 +333,67 @@ function PlayerSection() {
           sub="Pressing Play starts the first playable stream instead of always showing the picker. (The picker is always one click away.)"
           on={settings.instantPlay}
           onChange={(on) => void save({ instantPlay: on })}
-          lockReason={settings.instantPlay ? undefined : undefined}
         />
       </SectionCard>
     </>
+  );
+}
+
+function StatusOk({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 font-medium text-accent">
+      <span className="h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_rgba(200,160,80,0.6)]" />
+      <span>{children}</span>
+    </span>
+  );
+}
+
+/** One radio option, in the ToggleRow recipe. An unavailable option stays selectable
+ * only if it is already selected (so the user can see and change it). Only the selected
+ * option is a tab stop; the group's arrow keys move between them. */
+function BackendOption({
+  id,
+  label,
+  sub,
+  selected,
+  unavailable,
+  onSelect,
+}: {
+  id: PlayerBackend;
+  label: string;
+  sub: string;
+  selected: boolean;
+  unavailable?: string;
+  onSelect: () => void;
+}) {
+  const disabled = !!unavailable && !selected;
+  return (
+    <button
+      role="radio"
+      aria-checked={selected}
+      data-backend={id}
+      tabIndex={selected ? 0 : -1}
+      disabled={disabled}
+      onClick={onSelect}
+      className={`flex items-start gap-3 rounded-xl border bg-canvas/40 px-4 py-3 text-left transition-colors ${
+        selected ? "border-ink" : "border-edge-soft hover:border-edge"
+      } ${disabled ? "cursor-not-allowed opacity-60 hover:border-edge-soft" : ""}`}
+    >
+      <span
+        className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 ${
+          selected ? "border-ink" : "border-edge"
+        }`}
+      >
+        {selected && <span className="h-2.5 w-2.5 rounded-full bg-ink" />}
+      </span>
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-[14px] font-medium text-ink">{label}</span>
+        <span className="text-[12.5px] leading-snug text-ink-muted">{sub}</span>
+        {unavailable && (
+          <span className="text-[12.5px] leading-snug text-ink-muted">{unavailable}</span>
+        )}
+      </span>
+    </button>
   );
 }
 

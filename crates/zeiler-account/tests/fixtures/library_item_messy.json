@@ -1,0 +1,30 @@
+{
+  "_id": "tt0944947",
+  "name": "Game of Thrones",
+  "type": "series",
+  "poster": "not a url",
+  "posterShape": "wide",
+  "removed": 0,
+  "temp": "true",
+  "_ctime": null,
+  "_mtime": "2023-05-14T14:34:56.789+02:00",
+  "state": {
+    "lastWatched": "",
+    "timeWatched": 1800000.7,
+    "timeOffset": "1900000",
+    "overallTimeWatched": null,
+    "timesWatched": 2.0,
+    "flaggedWatched": false,
+    "video_id": "",
+    "watched": "garbage",
+    "noNotif": null,
+    "zLegacy": 1
+  },
+  "behaviorHints": {
+    "defaultVideoId": "",
+    "hasScheduledVideos": 1,
+    "isLive": false,
+    "extraHint": true
+  },
+  "aFutureField": { "x": 1 }
+}

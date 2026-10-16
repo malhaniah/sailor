@@ -20,7 +20,10 @@ jobs:
           - platform: ubuntu-22.04 # oldest glibc for AppImage portability
             args: ""
           - platform: windows-latest
-            args: ""
+            # built-in playback: libmpv in-process, bundled beside zeiler.exe
+            # (the CLI merges repeated --config in order; the release overlay is
+            # appended below)
+            args: "--features embedded --config src-tauri/tauri.embedded.conf.json"
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
@@ -40,6 +43,25 @@ jobs:
           targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
       - run: npm ci
+      # Windows: the pinned libmpv (libmpv-2.dll + the generated mpv.lib + NOTICE.txt)
+      - name: Cache libmpv
+        if: matrix.platform == 'windows-latest'
+        uses: actions/cache@v6
+        with:
+          path: src-tauri/libmpv
+          key: libmpv-${{ runner.os }}-${{ hashFiles('scripts/fetch-libmpv.mjs') }}
+      - name: Fetch libmpv
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        # mpv.lib is generated with MSVC's lib.exe: find it with vswhere
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $libExe = & $vswhere -latest -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\lib.exe' | Select-Object -First 1
+          if (-not $libExe) { throw "lib.exe (MSVC build tools) not found" }
+          $env:PATH = "$(Split-Path $libExe);$env:PATH"
+          node scripts/fetch-libmpv.mjs
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -51,12 +73,14 @@ jobs:
           releaseBody: |
             Zeiler — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Zeiler hosts no media, indexes no media, and ships no content addon: add your own stream addons on the Addons page.
 
-            **Playback needs mpv** (embedded playback is coming in a later release). Installed copies update themselves automatically.
+            **Playback:** on Windows, videos play right inside Zeiler — nothing else to install (mpv stays optional, for anyone who prefers their own mpv window). On macOS and Linux, Zeiler plays videos in an mpv window and gives you full controls on its player screen, so install mpv there; built-in playback for macOS is coming. Installed copies update themselves automatically.
 
             **Sailor is now Zeiler.** Sailor installs update to Zeiler on their own and keep your addons and settings. On Windows the update also removes Sailor. On macOS the app keeps the name `Sailor.app` in Applications: rename it to `Zeiler.app`, or replace it with the new `.dmg`.
 
             ### Windows
-            Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Install mpv with `winget install shinchiro.mpv`.
+            Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Playback is built in. Optional: to play in your own mpv window instead (Settings → Player → External mpv), install mpv with `winget install shinchiro.mpv`.
+
+            The built-in player uses libmpv/FFmpeg (LGPL-2.1-or-later), shipped as `libmpv-2.dll` beside `zeiler.exe`; its licence (`licenses\LGPL-2.1.txt`) and its versions, provenance and source offer (`licenses\libmpv-NOTICE.txt`) are installed with it; the source offer is also in [THIRD-PARTY-NOTICES.md](https://github.com/malhaniah/zeiler/blob/main/THIRD-PARTY-NOTICES.md).
 
             ### macOS
             Download the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Zeiler to Applications. Builds are not notarized: the first time, right-click Zeiler → **Open**, or allow it under System Settings → Privacy & Security. Install mpv with `brew install mpv`.

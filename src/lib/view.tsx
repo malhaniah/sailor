@@ -9,7 +9,11 @@ import {
   useMemo,
   useState,
 } from "react";
+import { playerActive } from "./playback-handoff";
 import type { MetaItem, MetaPreview, Video } from "./types";
+
+// Names reserved for later milestones (docs/ARCHITECTURE.md, "Navigation names") are
+// already in these unions so every switch handles them; nothing navigates to them yet.
 
 export type RootView =
   | "home"
@@ -19,7 +23,9 @@ export type RootView =
   | "anime"
   | "library"
   | "addons"
-  | "settings";
+  | "settings"
+  // reserved: Live TV (addon tv/channel catalogs, then user IPTV)
+  | "live";
 
 export const ROOT_VIEWS: RootView[] = [
   "home",
@@ -30,6 +36,7 @@ export const ROOT_VIEWS: RootView[] = [
   "library",
   "addons",
   "settings",
+  "live",
 ];
 
 export type Frame =
@@ -38,7 +45,47 @@ export type Frame =
   // installed addon serves meta for this id
   | { kind: "meta"; type: string; id: string; preview: MetaPreview }
   | { kind: "filter"; genre: string; type: string }
-  | { kind: "picker"; meta: MetaItem; video: Video | null };
+  | { kind: "picker"; meta: MetaItem; video: Video | null }
+  // reserved: catalog browser (filter's successor); fields may still change before it ships
+  | {
+      kind: "browse";
+      type: string;
+      transportUrl?: string;
+      catalogId?: string;
+      extra: { name: string; value: string }[];
+    }
+  // reserved: marketplace addon detail, keyed into the directory index
+  | { kind: "addon-detail"; key: string };
+
+/** Exhaustiveness guard: `default: return unreachable(x)` fails to compile when a
+ * RootView or Frame kind is added without a case. */
+export function unreachable(value: never): never {
+  throw new Error(`Unhandled view: ${JSON.stringify(value)}`);
+}
+
+/** Overlay frames, which Escape pops (root views never pop; settings has its own close). */
+function popsOnEscape(frame: Frame): boolean {
+  switch (frame.kind) {
+    case "meta":
+    case "filter":
+    case "picker":
+    case "browse":
+    case "addon-detail":
+      return true;
+    case "home":
+    case "discover":
+    case "movies":
+    case "shows":
+    case "anime":
+    case "library":
+    case "addons":
+    case "settings":
+    case "live":
+      return false;
+    default:
+      return unreachable(frame);
+  }
+}
 
 const STACK_MAX = 30;
 
@@ -99,16 +146,14 @@ export function ViewProvider({ children }: { children: ReactNode }) {
     };
   }, [stack, push, setView, goBack]);
 
-  // Escape pops overlay frames (never a root view).
+  // Escape pops overlay frames (never a root view). Not while the Player screen is up:
+  // the shell stays mounted underneath it, and the player's own Escape goes back.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || playerActive()) return;
       const target = e.target as HTMLElement | null;
       if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
-      const top = value.top;
-      if (top.kind === "meta" || top.kind === "filter" || top.kind === "picker") {
-        value.goBack();
-      }
+      if (popsOnEscape(value.top)) value.goBack();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
