@@ -118,10 +118,13 @@ export interface PlaybackSession {
   stopAndLeave: () => Promise<void>;
   /**
    * Follow this session's events (only those of its own player, as the page sees them);
-   * returns the unsubscribe function.
+   * returns the unsubscribe function. `run` counts the page's player starts: the events
+   * after Play again carry a higher one than those before it.
    */
-  subscribeEvents: (listener: (event: PlayerEvent) => void) => () => void;
+  subscribeEvents: (listener: PlayerEventListener) => () => void;
 }
+
+export type PlayerEventListener = (event: PlayerEvent, run: number) => void;
 
 export function usePlaybackSession(
   launch: PlayerLaunch,
@@ -136,7 +139,7 @@ export function usePlaybackSession(
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
-  const listeners = useRef(new Set<(event: PlayerEvent) => void>());
+  const listeners = useRef(new Set<PlayerEventListener>());
   const actions = useRef<{ playAgain: () => void; stopAndLeave: () => Promise<void> }>({
     playAgain: () => undefined,
     stopAndLeave: async () => leavePlayer(),
@@ -149,6 +152,8 @@ export function usePlaybackSession(
     // set while our own Stop runs, so the shutdown it causes is not shown as "closed"
     let stopping = false;
     let request: PlaybackRequest | null = null;
+    // player_start calls so far (Play again makes another): the run events belong to
+    let run = 0;
     const source = launch.source;
     const torrentHash = source.kind === "torrent" ? source.infoHash : null;
     // the cleanup and a late start/resolve may both drop it: remove it once
@@ -173,7 +178,7 @@ export function usePlaybackSession(
       // events of a session left playing by an earlier launch, until ours replaces it
       if (player.state === "idle" || player.state === "gone") return;
       if (!applyClockEvent(clock, event)) dispatch(event);
-      for (const listener of [...listeners.current]) listener(event);
+      for (const listener of [...listeners.current]) listener(event, run);
       switch (event.type) {
         case "file-loaded":
         case "playback-restart":
@@ -213,6 +218,7 @@ export function usePlaybackSession(
       if (!request) return;
       setPhase({ kind: "loading", label: "Starting playback…" });
       player = { state: "starting" };
+      run += 1;
       setVideoBehind(false);
       let result;
       try {
@@ -347,7 +353,7 @@ export function usePlaybackSession(
 
   const playAgain = useCallback(() => actions.current.playAgain(), []);
   const stopAndLeave = useCallback(() => actions.current.stopAndLeave(), []);
-  const subscribeEvents = useCallback((listener: (event: PlayerEvent) => void) => {
+  const subscribeEvents = useCallback((listener: PlayerEventListener) => {
     listeners.current.add(listener);
     return () => {
       listeners.current.delete(listener);
