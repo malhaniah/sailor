@@ -1,18 +1,17 @@
 # Feature plan handoff
 
 How to pick up the feature plan locally. Written when the cloud session handed over on
-2026-10-16, and updated after M4a, M4b, M5 and M6 were finished locally the same day.
+2026-10-16, and updated after M4a, M4b, M5 and M6 were finished locally and released as
+v0.2.0 the same day.
 
 ## Where things stand
 
-- **Released:** v0.1.3, the first release named Zeiler. It has Windows, both macOS builds
-  and, for the first time, Linux (.deb, .rpm, .AppImage).
-- **Work in progress:** branch `claude/blissful-newton-kbhlcn`, open as draft PR #4. CI is
-  green on Windows, macOS and Linux. The `windows-installer` job uploads an installer with
-  built-in playback as an artifact you can try. Nothing in PR #4 is released yet.
-- **M6** is one commit on `claude/awesome-archimedes-ad66bd`, on top of the local branch
-  `m5-on-m4b` (PR #5 M4b, then PR #6 M5 rebased onto it). It is not pushed. Once #5 and
-  #6 are merged into main, rebase it onto main.
+- **Released:** v0.2.0, with every milestone below (M0 to M6): Zeiler's own player screen,
+  built-in playback on Windows, the library with Continue Watching, the Kitsu and
+  OpenSubtitles built-ins, and subtitles and audio controls. Before it, v0.1.3 was the first
+  release named Zeiler.
+- **Merged through:** PR #4 (M0 to M4a), #5 (M4b), #6 (M5) and #7 (M6 and the v0.2.0
+  version bump). Everything below is on main.
 
 | Commit | Milestone | What it did |
 |---|---|---|
@@ -23,8 +22,8 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 | `21887d4` | M3 | Built-in (embedded libmpv) playback is the Windows default; CI covers it; the Windows installer artifact; licensing |
 | `1bf37c9` | M4a | `crates/zeiler-account` (stremio-core-compatible LibraryItem, watched bitfield, progress rules, video order, sorts), `library.json` under `profile_dir()`, `library_*` commands + `library://changed`, progress tracked in Rust from player events via `player_start`'s `context`; three review rounds with adversarial verification |
 | `d085e4c` | M4b | The library on screen (`src/lib/library.tsx` provider and hooks, re-read on `library://changed`): My Library tabs (Continue Watching / Library / History, the six sorts), a Continue Watching row on Home with dismiss, Detail's Add to Library and watched marks (title, season, episode; only released episodes), Resume / Continue on Play, a "Resume from 12:34" prompt in the stream picker, progress bars on posters; two reviews plus a check of their fixes |
-| PR #6 (rebased onto M4b) | M5 | Built-ins: Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) snapshots next to Cinemeta, `scripts/refresh-builtin-manifests.mjs`, each built-in trimmed to its role (Kitsu's own `subtitles`, which redirect to OSv3, are dropped) and streams embedded in a built-in's meta stripped; dedupe by URL or snapshot manifest id; `builtinKitsu`/`builtinOpensubtitles` (an older settings file inherits `builtinCinemeta`, Kitsu also off with `hideAnime`) with Settings → Content switches and disclosures; `find_meta` retries `kitsu:`/`mal:`/`anilist:`/`anidb:` ids as series/movie/anime without re-asking an unreachable addon; policy text now "metadata or subtitles only, switchable, never streams"; two reviews with adversarial verification |
-| M6 commit on `claude/awesome-archimedes-ad66bd` | M6 | Subtitles and audio. `subtitles_get` fan-out with the stream's hash, size and file name. `zeiler-addon/src/subfile.rs`: http(s) only, 10 MiB cap also after gunzip, archives and web pages refused, BOM / UTF-8 / `chardetng` decoding, and only text that *starts* as SRT, WebVTT, ASS or MicroDVD (a saved file is local to mpv, which would follow an EDL's or CUE sheet's paths). Files go to `<cache_dir>/subs/` and are added with `player_subtitle_add`/`_reencode`/`_pick_local` (dialog plugin from Rust only) or a window drop, on both backends, never for a file that changed meanwhile. `sid`/`slang`/`alang` are set before load from the settings and the title's remembered choices (`player-prefs.json`, LRU 200). The UI ranks candidates and makes a language-first automatic pick (`src/lib/subtitles.ts`, `useTracks.ts`). Subtitle menu (sources, language rail, Off/On, inline errors, file, encoding, delay, quick style) and audio menu (tracks, delay); keys s, z/x, [/]. Settings → Subtitles & audio with nested `subtitles{}`/`audio{}` groups read per field, merge-patched and strict at any depth (`settings_groups.rs`). The OpenSubtitles disclosure now describes when it is asked. Two reviews with adversarial refuters; ten findings confirmed and fixed |
+| `02ffc1b` | M5 | Built-ins: Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) snapshots next to Cinemeta, `scripts/refresh-builtin-manifests.mjs`, each built-in trimmed to its role (Kitsu's own `subtitles`, which redirect to OSv3, are dropped) and streams embedded in a built-in's meta stripped; dedupe by URL or snapshot manifest id; `builtinKitsu`/`builtinOpensubtitles` (an older settings file inherits `builtinCinemeta`, Kitsu also off with `hideAnime`) with Settings → Content switches and disclosures; `find_meta` retries `kitsu:`/`mal:`/`anilist:`/`anidb:` ids as series/movie/anime without re-asking an unreachable addon; policy text now "metadata or subtitles only, switchable, never streams"; two reviews with adversarial verification |
+| `1d1fd8f` | M6 | Subtitles and audio. `subtitles_get` fan-out with the stream's hash, size and file name. `zeiler-addon/src/subfile.rs`: http(s) only, 10 MiB cap also after gunzip, archives and web pages refused, BOM / UTF-8 / `chardetng` decoding, and only text that *starts* as SRT, WebVTT, ASS or MicroDVD (a saved file is local to mpv, which would follow an EDL's or CUE sheet's paths). Files go to `<cache_dir>/subs/` and are added with `player_subtitle_add`/`_reencode`/`_pick_local` (dialog plugin from Rust only) or a window drop, on both backends, never for a file that changed meanwhile. `sid`/`slang`/`alang` are set before load from the settings and the title's remembered choices (`player-prefs.json`, LRU 200). The UI ranks candidates and makes a language-first automatic pick (`src/lib/subtitles.ts`, `useTracks.ts`). Subtitle menu (sources, language rail, Off/On, inline errors, file, encoding, delay, quick style) and audio menu (tracks, delay); keys s, z/x, [/]. Settings → Subtitles & audio with nested `subtitles{}`/`audio{}` groups read per field, merge-patched and strict at any depth (`settings_groups.rs`). The OpenSubtitles disclosure now describes when it is asked. Two reviews with adversarial refuters; ten findings confirmed and fixed |
 
 ## Decisions already made by the owner
 
