@@ -5,6 +5,35 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# One release run at a time: a draft does not hold its tag, so two runs for the same
+# version would each create a draft.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  # The release's text, and also latest.json's "notes" (tauri-action writes its
+  # releaseBody there)
+  RELEASE_BODY: |-
+    Zeiler — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Zeiler hosts no media, indexes no media, and ships no content addon: add your own stream addons on the Addons page.
+
+    **Playback:** on Windows, videos play right inside Zeiler — nothing else to install (mpv stays optional, for anyone who prefers their own mpv window). On macOS and Linux, Zeiler plays videos in an mpv window and gives you full controls on its player screen, so install mpv there; built-in playback for macOS is coming. Installed copies update themselves automatically.
+
+    **Sailor is now Zeiler.** Sailor installs update to Zeiler on their own and keep your addons and settings. On Windows the update also removes Sailor. On macOS the app keeps the name `Sailor.app` in Applications: rename it to `Zeiler.app`, or replace it with the new `.dmg`.
+
+    ### Windows
+    Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Playback is built in. Optional: to play in your own mpv window instead (Settings → Player → External mpv), install mpv with `winget install shinchiro.mpv`.
+
+    The built-in player uses libmpv (mpv: LGPL-2.1-or-later) with FFmpeg (built as LGPL-3.0-or-later), shipped as `libmpv-2.dll` beside `zeiler.exe`. Installed with it in `licenses\`: the licence texts, the notices of the libraries inside it (`libmpv-THIRD-PARTY.txt`), and its versions, provenance and source offer (`libmpv-NOTICE.txt`). The source offer is also in [THIRD-PARTY-NOTICES.md](https://github.com/malhaniah/zeiler/blob/main/THIRD-PARTY-NOTICES.md).
+
+    ### macOS
+    Download the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Zeiler to Applications. Builds are not notarized: the first time, right-click Zeiler → **Open**, or allow it under System Settings → Privacy & Security. Install mpv with `brew install mpv`.
+
+    ### Linux
+    - Debian/Ubuntu: `sudo apt install ./Zeiler_*_amd64.deb` (pulls in mpv automatically)
+    - Fedora/openSUSE: install the `.rpm`, plus mpv (Fedora: from RPM Fusion)
+    - Anything else: make the `.AppImage` executable and run it; install mpv from your distro
+
 jobs:
   # The pinned libmpv for the Windows build (libmpv-2.dll + the generated mpv.lib +
   # NOTICE.txt), fetched before anything is built: if it cannot be had, nothing is
@@ -44,7 +73,7 @@ jobs:
   # built for it (cargo-about over Cargo.lock, with that target's features) and of the
   # npm packages in the interface (Vite's report). cargo-about only reads metadata and
   # crate sources, so one Linux job writes all four files (no cargo-about build exists
-  # for the Intel macOS runner); each publish job bundles its own.
+  # for the Intel macOS runner); each build bundles its own.
   licenses:
     runs-on: ubuntu-24.04
     steps:
@@ -61,7 +90,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-about@0.9.2
-      # one per publish target below, with the features its build passes
+      # one per build target below, with the features its build passes
       - name: Generate THIRD-PARTY-LICENSES.txt for each target
         run: |
           node scripts/third-party-licenses.mjs --target aarch64-apple-darwin \
@@ -78,11 +107,67 @@ jobs:
           path: third-party-licenses/
           if-no-files-found: error
 
-  publish:
-    needs: [libmpv, licenses]
+  # The release the builds upload to, as a draft: nothing reaches releases/latest,
+  # where the updater reads latest.json, until `publish` below has seen every
+  # platform in it. The version's release is reused if it exists: a draft (also one
+  # seeded by hand, e.g. with a locally built installer), or a published release with
+  # no latest.json yet. A published one is outside the gate, since its latest.json
+  # goes live as each build adds to it: seed a draft instead.
+  draft:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      id: ${{ steps.release.outputs.id }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: release
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('node:fs');
+            // tauri-action's __VERSION__: no tauri config sets a version, so it is the workspace's
+            const version = fs.readFileSync('Cargo.toml', 'utf8')
+              .match(/^\[workspace\.package\][^[]*?^version = "([^"]+)"/m)?.[1];
+            if (!version) throw new Error('no [workspace.package] version in Cargo.toml');
+            const tag = `v${version}`;
+            if (context.eventName === 'push' && context.ref !== `refs/tags/${tag}`) {
+              throw new Error(`${context.ref} was pushed, but Cargo.toml's version is ${version}`);
+            }
+            const { owner, repo } = context.repo;
+            // target_commitish: a tag that does not exist yet is made at publish time,
+            // on the commit built here. tag_name also goes into the update of a reused
+            // draft: an update without one can change a draft's tag (tauri-action#1285)
+            const fields = {
+              owner, repo, tag_name: tag, target_commitish: context.sha,
+              name: `Zeiler ${tag}`, body: process.env.RELEASE_BODY,
+              // the updater reads releases/latest, which skips pre-releases
+              prerelease: false,
+            };
+            const releases = await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 });
+            const forTag = releases.filter((r) => r.tag_name === tag);
+            let release = forTag.find((r) => !r.draft) ?? forTag[0];
+            if (!release) {
+              release = (await github.rest.repos.createRelease({ ...fields, draft: true })).data;
+            } else {
+              if (!release.draft) {
+                const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id, per_page: 100 });
+                if (assets.some((a) => a.name === 'latest.json')) {
+                  throw new Error(`${tag} is already published with a latest.json. To finish the run that built it, re-run its failed jobs; to release again, bump the version.`);
+                }
+              }
+              await github.rest.repos.updateRelease({ ...fields, release_id: release.id });
+            }
+            core.setOutput('id', release.id);
+            core.setOutput('version', version);
+
+  build:
+    needs: [libmpv, licenses, draft]
     permissions:
       contents: write
     strategy:
+      # the other builds still upload to the draft, so only the failed one needs a re-run
       fail-fast: false
       matrix:
         include:
@@ -145,30 +230,62 @@ jobs:
           # signs the updater packages; the matching public key is in tauri.conf.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
-          tagName: v__VERSION__
-          releaseName: "Zeiler v__VERSION__"
-          releaseBody: |
-            Zeiler — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Zeiler hosts no media, indexes no media, and ships no content addon: add your own stream addons on the Addons page.
-
-            **Playback:** on Windows, videos play right inside Zeiler — nothing else to install (mpv stays optional, for anyone who prefers their own mpv window). On macOS and Linux, Zeiler plays videos in an mpv window and gives you full controls on its player screen, so install mpv there; built-in playback for macOS is coming. Installed copies update themselves automatically.
-
-            **Sailor is now Zeiler.** Sailor installs update to Zeiler on their own and keep your addons and settings. On Windows the update also removes Sailor. On macOS the app keeps the name `Sailor.app` in Applications: rename it to `Zeiler.app`, or replace it with the new `.dmg`.
-
-            ### Windows
-            Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Playback is built in. Optional: to play in your own mpv window instead (Settings → Player → External mpv), install mpv with `winget install shinchiro.mpv`.
-
-            The built-in player uses libmpv (mpv: LGPL-2.1-or-later) with FFmpeg (built as LGPL-3.0-or-later), shipped as `libmpv-2.dll` beside `zeiler.exe`. Installed with it in `licenses\`: the licence texts, the notices of the libraries inside it (`libmpv-THIRD-PARTY.txt`), and its versions, provenance and source offer (`libmpv-NOTICE.txt`). The source offer is also in [THIRD-PARTY-NOTICES.md](https://github.com/malhaniah/zeiler/blob/main/THIRD-PARTY-NOTICES.md).
-
-            ### macOS
-            Download the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Zeiler to Applications. Builds are not notarized: the first time, right-click Zeiler → **Open**, or allow it under System Settings → Privacy & Security. Install mpv with `brew install mpv`.
-
-            ### Linux
-            - Debian/Ubuntu: `sudo apt install ./Zeiler_*_amd64.deb` (pulls in mpv automatically)
-            - Fedora/openSUSE: install the `.rpm`, plus mpv (Fedora: from RPM Fusion)
-            - Anything else: make the `.AppImage` executable and run it; install mpv from your distro
-          # not a draft: tauri-action must be able to attach assets to an already
-          # published release (e.g. one seeded with a locally built installer).
-          # Not a pre-release: the updater reads releases/latest, which skips them.
-          releaseDraft: false
-          prerelease: false
+          # upload to the draft; given a releaseId, tauri-action looks nothing up by
+          # tag (with releaseDraft it would refuse a published release), and it merges
+          # its entry into the draft's latest.json through the API
+          releaseId: ${{ needs.draft.outputs.id }}
+          releaseBody: ${{ env.RELEASE_BODY }}
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+
+  # Publishes the draft only once every build has succeeded and latest.json has all
+  # four platforms, each pointing at an asset of this release. A failed build skips
+  # this job; builds that finish together can also drop each other's entries (each
+  # one rewrites latest.json from the copy it read). The release then stays a draft,
+  # and releases/latest, the updater's latest.json, stays on the previous release.
+  publish:
+    needs: [draft, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ needs.draft.outputs.id }}
+          VERSION: ${{ needs.draft.outputs.version }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const release_id = Number(process.env.RELEASE_ID);
+            const version = process.env.VERSION;
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id, per_page: 100 });
+            const asset = assets.find((a) => a.name === 'latest.json');
+            if (!asset) throw new Error('not publishing: the release has no latest.json');
+            const { data } = await github.request('GET /repos/{owner}/{repo}/releases/assets/{asset_id}', {
+              owner, repo, asset_id: asset.id, headers: { accept: 'application/octet-stream' },
+            });
+            const latest = JSON.parse(Buffer.from(data).toString());
+            // v0.2.0's entries, from the macOS arm64, macOS x64, Linux and Windows builds
+            const platforms = [
+              'darwin-aarch64', 'darwin-aarch64-app',
+              'darwin-x86_64', 'darwin-x86_64-app',
+              'linux-x86_64', 'linux-x86_64-appimage', 'linux-x86_64-deb', 'linux-x86_64-rpm',
+              'windows-x86_64', 'windows-x86_64-nsis',
+            ];
+            // tauri-action writes each asset's API URL, which stays the same once published
+            const urls = new Set(assets.map((a) => a.url));
+            const problems = [];
+            if (latest.version !== version) problems.push(`latest.json is for ${latest.version}, not ${version}`);
+            for (const p of platforms) {
+              const entry = latest.platforms?.[p];
+              if (!entry?.signature) problems.push(`latest.json has no ${p}`);
+              else if (!urls.has(entry.url)) problems.push(`latest.json's ${p} points at ${entry.url}, which is not in this release`);
+            }
+            if (problems.length) {
+              throw new Error(`not publishing: ${problems.join('; ')}. Re-run the build of each platform named (this job runs again after it).`);
+            }
+            // the tag again, as `draft` gave it: an update without one can change a draft's tag
+            // (why tauri-action no longer edits drafts, tauri-action#1285)
+            await github.rest.repos.updateRelease({
+              owner, repo, release_id, tag_name: `v${version}`, target_commitish: context.sha,
+              draft: false, prerelease: false,
+            });
