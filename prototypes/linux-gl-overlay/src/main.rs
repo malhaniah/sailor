@@ -20,32 +20,40 @@ use webkit2gtk::{WebViewExt, SettingsExt};
 
 static FRAMES: AtomicU64 = AtomicU64::new(0);
 
-/// GL entry points: GLX's or EGL's loader, whichever this process has.
+/// GL entry points from the loader of the context that is current: GDK's GL context
+/// is GLX on X11 and EGL on Wayland. Asking EGL for a GLX context's functions (WebKit
+/// has initialized EGL in this process) gives entry points that draw nothing.
 fn get_proc_address(_: &(), name: &str) -> *mut c_void {
     type Loader = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
+    type Current = unsafe extern "C" fn() -> *mut c_void;
     let name = CString::new(name).unwrap();
     unsafe {
-        for (lib, sym) in [
-            (c"libEGL.so.1", c"eglGetProcAddress"),
-            (c"libGL.so.1", c"glXGetProcAddressARB"),
-        ] {
+        let sym = |lib: &std::ffi::CStr, sym: &std::ffi::CStr| {
             let handle = libc::dlopen(lib.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
-            if handle.is_null() {
+            if handle.is_null() { std::ptr::null_mut() } else { libc::dlsym(handle, sym.as_ptr()) }
+        };
+        for (lib, current, loader) in [
+            (c"libGL.so.1", c"glXGetCurrentContext", c"glXGetProcAddressARB"),
+            (c"libEGL.so.1", c"eglGetCurrentContext", c"eglGetProcAddress"),
+        ] {
+            let current = sym(lib, current);
+            let loader = sym(lib, loader);
+            if current.is_null() || loader.is_null() {
                 continue;
             }
-            let loader = libc::dlsym(handle, sym.as_ptr());
-            if loader.is_null() {
+            if std::mem::transmute::<*mut c_void, Current>(current)().is_null() {
                 continue;
             }
-            let loader: Loader = std::mem::transmute(loader);
-            let f = loader(name.as_ptr());
-            if !f.is_null() {
-                return f;
+            if !LOADER_LOGGED.swap(true, Ordering::Relaxed) {
+                println!("PROTO: GL loader {}", lib.to_string_lossy());
             }
+            return std::mem::transmute::<*mut c_void, Loader>(loader)(name.as_ptr());
         }
         libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr())
     }
 }
+
+static LOADER_LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn gl_get_integer(pname: u32) -> i32 {
     type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
