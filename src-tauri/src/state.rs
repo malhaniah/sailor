@@ -47,6 +47,13 @@ pub struct Settings {
     /// Use the built-in Cinemeta metadata addon (catalogs, details, episode lists).
     /// Metadata only — it serves no streams.
     pub builtin_cinemeta: bool,
+    /// Use the built-in Anime Kitsu metadata addon (anime catalogs and details for
+    /// Kitsu, MyAnimeList, AniList and AniDB ids). Metadata only: the subtitles its
+    /// manifest declares are left out (see `builtin.rs`).
+    pub builtin_kitsu: bool,
+    /// Use the built-in OpenSubtitles v3 addon (subtitles for IMDb titles). Subtitles
+    /// only.
+    pub builtin_opensubtitles: bool,
     /// Download updates in the background and install them on the next launch.
     pub auto_update: bool,
     /// Which player `player_start` uses when asked for `auto`: `auto` (built-in when
@@ -69,6 +76,8 @@ impl Default for Settings {
             hide_anime: false,
             hide_live_tv: false,
             builtin_cinemeta: true,
+            builtin_kitsu: true,
+            builtin_opensubtitles: true,
             auto_update: true,
             player_backend: PlayerBackend::Auto,
         }
@@ -87,6 +96,8 @@ impl Serialize for Settings {
 impl<'de> Deserialize<'de> for Settings {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let object = Map::<String, Value>::deserialize(deserializer)?;
+        let has_kitsu = object.contains_key("builtinKitsu");
+        let has_opensubtitles = object.contains_key("builtinOpensubtitles");
         let mut settings = Settings::default();
         for (key, value) in object {
             match settings.with_key(&key, value) {
@@ -96,6 +107,15 @@ impl<'de> Deserialize<'de> for Settings {
                     warn!(key = %key, error = %e, "invalid stored setting; using its default");
                 }
             }
+        }
+        // A file from before these built-ins existed: someone who had switched off the
+        // only built-in (Cinemeta) doesn't get two new third-party hosts switched on by
+        // an update, and someone who hid the Anime room doesn't get anime rows.
+        if !has_kitsu {
+            settings.builtin_kitsu = settings.builtin_cinemeta && !settings.hide_anime;
+        }
+        if !has_opensubtitles {
+            settings.builtin_opensubtitles = settings.builtin_cinemeta;
         }
         Ok(settings)
     }
@@ -213,7 +233,8 @@ impl AppState {
     }
 
     /// The addons in effect: enabled built-ins first (each skipped when the user
-    /// installed the same transport URL), then the user's addons in install order.
+    /// installed the same addon: same transport URL or manifest id), then the user's
+    /// addons in install order.
     pub async fn effective_addons(&self) -> Vec<Descriptor> {
         let user = self.addons.read().await.clone();
         let settings = self.settings.read().await.clone();
@@ -363,6 +384,53 @@ mod tests {
                 .is_err(),
             "patch stays strict"
         );
+    }
+
+    #[test]
+    fn builtin_toggles_default_on_and_are_lenient_per_key() {
+        let defaults = Settings::default();
+        assert!(defaults.builtin_kitsu && defaults.builtin_opensubtitles);
+        let value = serde_json::to_value(&defaults).unwrap();
+        assert_eq!(value["builtinKitsu"], true);
+        assert_eq!(value["builtinOpensubtitles"], true);
+
+        // a settings.json from before these keys existed: on, unless its owner had
+        // switched the only built-in off (or hid the Anime room, for Kitsu)
+        let old: Settings = serde_json::from_value(json!({"builtinCinemeta": true})).unwrap();
+        assert!(old.builtin_kitsu && old.builtin_opensubtitles);
+        let empty: Settings = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(empty, defaults);
+        let opted_out: Settings =
+            serde_json::from_value(json!({"builtinCinemeta": false})).unwrap();
+        assert!(!opted_out.builtin_kitsu && !opted_out.builtin_opensubtitles);
+        let no_anime: Settings = serde_json::from_value(json!({"hideAnime": true})).unwrap();
+        assert!(!no_anime.builtin_kitsu);
+        assert!(no_anime.builtin_opensubtitles);
+        // once stored, a key is the user's own choice
+        let chosen: Settings = serde_json::from_value(json!({
+            "builtinCinemeta": false,
+            "hideAnime": true,
+            "builtinKitsu": true,
+            "builtinOpensubtitles": true
+        }))
+        .unwrap();
+        assert!(chosen.builtin_kitsu && chosen.builtin_opensubtitles);
+
+        // a bad value resets only that toggle
+        let stored: Settings = serde_json::from_value(json!({
+            "builtinKitsu": "off",
+            "builtinOpensubtitles": false
+        }))
+        .unwrap();
+        assert!(stored.builtin_kitsu, "bad value → default");
+        assert!(!stored.builtin_opensubtitles);
+
+        let patched = defaults
+            .patched(json!({"builtinKitsu": false, "builtinOpensubtitles": false}))
+            .unwrap();
+        assert!(!patched.builtin_kitsu && !patched.builtin_opensubtitles);
+        assert!(patched.builtin_cinemeta);
+        assert!(defaults.patched(json!({"builtinKitsu": 0})).is_err());
     }
 
     #[tokio::test]

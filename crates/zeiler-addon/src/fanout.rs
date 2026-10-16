@@ -69,6 +69,9 @@ pub struct MetaLookup {
     pub asked: Vec<String>,
     /// `"<addon>: <reason>"` for each asked addon that failed before a success.
     pub errors: Vec<String>,
+    /// The transport URL of the addon that answered (not sent to the UI).
+    #[serde(skip)]
+    pub source: Option<Url>,
 }
 
 /// Ask every supporting addon for the meta object in parallel and return the first
@@ -82,6 +85,104 @@ pub async fn first_meta(
     id: &str,
     per_addon_timeout: Duration,
 ) -> MetaLookup {
+    let addons: Vec<_> = addons.iter().collect();
+    meta_attempt(client, &addons, r#type, id, per_addon_timeout, false)
+        .await
+        .lookup
+}
+
+/// Id prefixes of the anime databases (Kitsu, MyAnimeList, AniList, AniDB) that anime
+/// metadata addons serve.
+const ANIME_ID_PREFIXES: [&str; 4] = ["kitsu:", "mal:", "anilist:", "anidb:"];
+/// The types an anime id's meta is also looked up under, in this order. Anime addons file
+/// a title as `series` or `movie` while catalogs list it as `anime` (or the other way
+/// round), and a catalog item's type need not be one its meta addon declares.
+const ANIME_META_TYPES: [&str; 3] = ["series", "movie", "anime"];
+
+/// The types to look an id's meta up under, in order: the requested type, then for an
+/// anime id each other type of [`ANIME_META_TYPES`].
+pub fn meta_types_to_try<'a>(r#type: &'a str, id: &str) -> Vec<&'a str> {
+    let mut types = vec![r#type];
+    if ANIME_ID_PREFIXES
+        .iter()
+        .any(|prefix| id.starts_with(prefix))
+    {
+        types.extend(ANIME_META_TYPES.into_iter().filter(|t| *t != r#type));
+    }
+    types
+}
+
+/// [`first_meta`] under each type of [`meta_types_to_try`] in turn, until one finds the
+/// meta (for a non-anime id that is just the requested type). `asked` lists every addon
+/// asked under any type, and the errors of a retry name the type. An addon that could
+/// not be reached (no connection, or no answer in time) is not asked again, so a dead
+/// addon costs one timeout, not one per type.
+pub async fn find_meta(
+    client: &AddonClient,
+    addons: &[Descriptor],
+    r#type: &str,
+    id: &str,
+    per_addon_timeout: Duration,
+) -> MetaLookup {
+    let mut candidates: Vec<_> = addons.iter().collect();
+    let mut lookup = MetaLookup {
+        meta: None,
+        asked: Vec::new(),
+        errors: Vec::new(),
+        source: None,
+    };
+    for (attempt, meta_type) in meta_types_to_try(r#type, id).into_iter().enumerate() {
+        let MetaAttempt {
+            lookup: found,
+            unreachable,
+        } = meta_attempt(
+            client,
+            &candidates,
+            meta_type,
+            id,
+            per_addon_timeout,
+            attempt > 0,
+        )
+        .await;
+        for name in found.asked {
+            if !lookup.asked.contains(&name) {
+                lookup.asked.push(name);
+            }
+        }
+        lookup.errors.extend(found.errors);
+        if found.meta.is_some() {
+            lookup.meta = found.meta;
+            lookup.source = found.source;
+            break;
+        }
+        candidates.retain(|d| !unreachable.contains(&d.transport_url));
+    }
+    lookup
+}
+
+/// One meta lookup under one type, plus the addons that could not be reached.
+struct MetaAttempt {
+    lookup: MetaLookup,
+    unreachable: Vec<Url>,
+}
+
+enum MetaFailure {
+    /// No connection, or no answer in time.
+    Unreachable(String),
+    /// The addon answered, with an error.
+    Failed(String),
+}
+
+/// The body of [`first_meta`]. `name_the_type` labels each error `<addon> (<type>)`, for
+/// the retries of [`find_meta`].
+async fn meta_attempt(
+    client: &AddonClient,
+    addons: &[&Descriptor],
+    r#type: &str,
+    id: &str,
+    per_addon_timeout: Duration,
+    name_the_type: bool,
+) -> MetaAttempt {
     let path = ResourcePath::new("meta", r#type, id);
     let supporting: Vec<_> = addons
         .iter()
@@ -98,34 +199,54 @@ pub async fn first_meta(
                     .await
                 {
                     Ok(Ok(response)) => Ok(response.meta),
-                    Ok(Err(e)) => Err(e.to_string()),
-                    Err(_) => Err("timed out".to_string()),
+                    Ok(Err(e)) if e.is_unreachable() => {
+                        Err(MetaFailure::Unreachable(e.to_string()))
+                    }
+                    Ok(Err(e)) => Err(MetaFailure::Failed(e.to_string())),
+                    Err(_) => Err(MetaFailure::Unreachable("timed out".to_string())),
                 }
             })
         })
         .collect();
 
-    let mut lookup = MetaLookup {
-        meta: None,
-        asked: supporting.iter().map(|d| d.manifest.name.clone()).collect(),
-        errors: Vec::new(),
+    let mut attempt = MetaAttempt {
+        lookup: MetaLookup {
+            meta: None,
+            asked: supporting.iter().map(|d| d.manifest.name.clone()).collect(),
+            errors: Vec::new(),
+            source: None,
+        },
+        unreachable: Vec::new(),
     };
     for (handle, addon) in handles.iter_mut().zip(&supporting) {
-        if lookup.meta.is_some() {
+        if attempt.lookup.meta.is_some() {
             handle.abort();
             continue;
         }
+        let name = if name_the_type {
+            format!("{} ({})", addon.manifest.name, r#type)
+        } else {
+            addon.manifest.name.clone()
+        };
         match handle.await {
-            Ok(Ok(meta)) => lookup.meta = Some(meta),
-            Ok(Err(reason)) => lookup
+            Ok(Ok(meta)) => {
+                attempt.lookup.meta = Some(meta);
+                attempt.lookup.source = Some(addon.transport_url.clone());
+            }
+            Ok(Err(MetaFailure::Failed(reason))) => {
+                attempt.lookup.errors.push(format!("{name}: {reason}"));
+            }
+            Ok(Err(MetaFailure::Unreachable(reason))) => {
+                attempt.lookup.errors.push(format!("{name}: {reason}"));
+                attempt.unreachable.push(addon.transport_url.clone());
+            }
+            Err(_) => attempt
+                .lookup
                 .errors
-                .push(format!("{}: {reason}", addon.manifest.name)),
-            Err(_) => lookup
-                .errors
-                .push(format!("{}: request was cancelled", addon.manifest.name)),
+                .push(format!("{name}: request was cancelled")),
         }
     }
-    lookup
+    attempt
 }
 
 #[cfg(test)]
@@ -187,5 +308,219 @@ mod tests {
         assert_eq!(lookup.asked, vec!["Broken Meta"]);
         assert_eq!(lookup.errors.len(), 1);
         assert!(lookup.errors[0].starts_with("Broken Meta: "));
+    }
+
+    #[test]
+    fn anime_ids_are_retried_under_the_other_anime_types() {
+        assert_eq!(
+            meta_types_to_try("anime", "kitsu:1"),
+            ["anime", "series", "movie"]
+        );
+        assert_eq!(
+            meta_types_to_try("series", "mal:5114"),
+            ["series", "movie", "anime"]
+        );
+        assert_eq!(
+            meta_types_to_try("movie", "anilist:1"),
+            ["movie", "series", "anime"]
+        );
+        assert_eq!(
+            meta_types_to_try("other", "anidb:1"),
+            ["other", "series", "movie", "anime"]
+        );
+        assert_eq!(meta_types_to_try("series", "tt0108778"), ["series"]);
+        assert_eq!(meta_types_to_try("movie", "kitsu"), ["movie"], "not an id");
+    }
+
+    /// A loopback addon for offline tests. It answers `GET` with the body `routes` gives
+    /// the meta path for (404 otherwise), or never answers when `hang` is set, and logs
+    /// every requested path.
+    struct Loopback {
+        transport_url: Url,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Loopback {
+        async fn start(routes: &[(&str, &str, &str)], hang: bool) -> Loopback {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let transport_url = Url::parse(&format!(
+                "http://{}/manifest.json",
+                listener.local_addr().unwrap()
+            ))
+            .unwrap();
+            let routes: Vec<(String, String)> = routes
+                .iter()
+                .map(|(r#type, id, body)| {
+                    let path = ResourcePath::new("meta", *r#type, *id);
+                    let url = crate::request::build_resource_url(&transport_url, &path).unwrap();
+                    (url.path().to_owned(), (*body).to_owned())
+                })
+                .collect();
+            let requests: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+            let log = std::sync::Arc::clone(&requests);
+            tokio::spawn(async move {
+                loop {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let routes = routes.clone();
+                    let log = std::sync::Arc::clone(&log);
+                    tokio::spawn(async move {
+                        let mut head = Vec::new();
+                        let mut chunk = [0u8; 1024];
+                        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                            match socket.read(&mut chunk).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => head.extend_from_slice(&chunk[..n]),
+                            }
+                        }
+                        let head = String::from_utf8_lossy(&head);
+                        let path = head.split_whitespace().nth(1).unwrap_or("").to_owned();
+                        log.lock().unwrap().push(path.clone());
+                        if hang {
+                            std::future::pending::<()>().await;
+                        }
+                        let (status, body) = routes
+                            .iter()
+                            .find(|(p, _)| *p == path)
+                            .map_or(("404 Not Found", ""), |(_, body)| ("200 OK", body));
+                        let response = format!(
+                            "HTTP/1.1 {status}\r\ncontent-type: application/json\r\n\
+                             content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = socket.write_all(response.as_bytes()).await;
+                    });
+                }
+            });
+            Loopback {
+                transport_url,
+                requests,
+            }
+        }
+
+        fn addon(&self, name: &str, types: &str) -> Descriptor {
+            serde_json::from_str(&format!(
+                r#"{{ "manifest": {{ "id": "{name}", "name": "{name}", "types": {types},
+                     "idPrefixes": ["kitsu"], "resources": ["meta"], "catalogs": [] }},
+                     "transportUrl": "{}" }}"#,
+                self.transport_url
+            ))
+            .unwrap()
+        }
+
+        /// The requested meta types, in order.
+        fn requested_types(&self) -> Vec<String> {
+            self.requests
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|path| path.split('/').nth(2).unwrap_or("").to_owned())
+                .collect()
+        }
+    }
+
+    const BEBOP: &str =
+        r#"{ "meta": { "id": "kitsu:1", "type": "series", "name": "Cowboy Bebop" } }"#;
+
+    #[tokio::test]
+    async fn an_anime_meta_is_found_under_the_type_its_addon_serves() {
+        let server = Loopback::start(&[("movie", "kitsu:1", BEBOP)], false).await;
+        // declares series and movie, not the catalog's "anime"; 404s for series
+        let addons = vec![server.addon("Anime", r#"["series", "movie"]"#)];
+        let client = AddonClient::for_loopback_tests();
+
+        let lookup = find_meta(&client, &addons, "anime", "kitsu:1", Duration::from_secs(5)).await;
+
+        assert_eq!(lookup.meta.unwrap().name, "Cowboy Bebop");
+        assert_eq!(server.requested_types(), ["series", "movie"]);
+        assert_eq!(lookup.asked, ["Anime"], "listed once");
+        assert_eq!(lookup.errors.len(), 1);
+        assert!(
+            lookup.errors[0].starts_with("Anime (series): "),
+            "{:?}",
+            lookup.errors
+        );
+    }
+
+    #[tokio::test]
+    async fn the_requested_type_is_tried_first_and_a_hit_stops_the_retries() {
+        let server = Loopback::start(&[("anime", "kitsu:1", BEBOP)], false).await;
+        let addons = vec![server.addon("Anime", r#"["anime", "series", "movie"]"#)];
+        let client = AddonClient::for_loopback_tests();
+
+        let lookup = find_meta(&client, &addons, "anime", "kitsu:1", Duration::from_secs(5)).await;
+
+        assert!(lookup.meta.is_some());
+        assert_eq!(server.requested_types(), ["anime"]);
+        assert!(lookup.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_addon_that_timed_out_is_not_asked_again() {
+        let dead = Loopback::start(&[], true).await;
+        let alive = Loopback::start(&[("series", "kitsu:1", BEBOP)], false).await;
+        let addons = vec![
+            dead.addon("Dead", r#"["anime", "series", "movie"]"#),
+            alive.addon("Alive", r#"["anime", "series", "movie"]"#),
+        ];
+        let client = AddonClient::for_loopback_tests();
+
+        let lookup = find_meta(&client, &addons, "anime", "kitsu:1", Duration::from_secs(1)).await;
+
+        assert!(lookup.meta.is_some());
+        assert_eq!(
+            dead.requested_types(),
+            ["anime"],
+            "one timeout, not one per type"
+        );
+        assert_eq!(alive.requested_types(), ["anime", "series"]);
+        assert_eq!(lookup.asked, ["Dead", "Alive"]);
+        assert_eq!(lookup.errors[0], "Dead: timed out");
+    }
+
+    /// A connection error counts like a timeout: the client's own connect timeout (10 s)
+    /// fires before the lookup's, and a host that refuses now refuses for every type.
+    #[tokio::test]
+    async fn an_addon_that_cannot_be_connected_to_is_not_asked_again() {
+        let closed = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap()
+        }; // dropped: connections are refused
+        let gone: Descriptor = serde_json::from_str(&format!(
+            r#"{{ "manifest": {{ "id": "gone", "name": "Gone", "types": ["anime", "series", "movie"],
+                 "idPrefixes": ["kitsu"], "resources": ["meta"], "catalogs": [] }},
+                 "transportUrl": "http://{closed}/manifest.json" }}"#
+        ))
+        .unwrap();
+        let client = AddonClient::for_loopback_tests();
+
+        let lookup = find_meta(&client, &[gone], "anime", "kitsu:1", Duration::from_secs(5)).await;
+
+        assert!(lookup.meta.is_none());
+        assert_eq!(lookup.asked, ["Gone"]);
+        assert_eq!(lookup.errors.len(), 1, "asked once: {:?}", lookup.errors);
+    }
+
+    #[tokio::test]
+    async fn a_non_anime_id_is_asked_under_its_type_only() {
+        let server = Loopback::start(&[], false).await;
+        let mut addon = server.addon("Movies", r#"["movie", "series"]"#);
+        addon.manifest.id_prefixes = Some(vec!["tt".into()]);
+        let client = AddonClient::for_loopback_tests();
+
+        let lookup = find_meta(
+            &client,
+            &[addon],
+            "movie",
+            "tt0111161",
+            Duration::from_secs(5),
+        )
+        .await;
+
+        assert!(lookup.meta.is_none());
+        assert_eq!(server.requested_types(), ["movie"]);
+        assert_eq!(lookup.asked, ["Movies"]);
+        assert_eq!(lookup.errors.len(), 1);
     }
 }

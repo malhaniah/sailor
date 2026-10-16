@@ -13,3 +13,11 @@ pub enum AddonError {
     #[error("{0}")]
     Other(String),
 }
+
+impl AddonError {
+    /// The addon could not be reached (no connection, or no answer in time), as opposed
+    /// to answering with an error: asking the same host again right away won't help.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(self, AddonError::Http(e) if e.is_connect() || e.is_timeout())
+    }
+}

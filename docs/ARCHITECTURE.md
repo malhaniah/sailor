@@ -14,7 +14,7 @@ addon URLs. This document records the load-bearing decisions and the shape of th
 | Protocol client | Hand-rolled `zeiler-addon` crate | `stremio-core` is git-only (frozen 0.1.0), framework-shaped (Elm runtime + static `Env`), hardwired to api.strem.io (incl. unauthenticated SeekLog telemetry), and assumes Stremio's `server.js` for torrents. The protocol surface is small; we mirror stremio-core's lenient serde semantics (MIT, referenced with attribution). |
 | Torrent engine | librqbit, in-process | Pure Rust, Apache-2.0, first-class streaming (sequential priority + HTTP Range endpoint). Pinned to a git rev of `main` until 9.0.2 ships (crates.io 9.0.1 lacks three Windows fixes: NTFS sparse marking #681, DHT death on UDP 10054 #690, stream-during-init #689). |
 | Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM, the default on Windows releases; macOS render-API NSOpenGLView next) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, macOS for now, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is the `embedded` cargo feature: Windows release builds turn it on and ship a hash-pinned LGPL `libmpv-2.dll` (`scripts/fetch-libmpv.mjs`); plain dev builds leave it off. See "Player backends". |
-| Content neutrality | No seeded stream addons; one built-in metadata addon | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only Cinemeta — metadata only, from a manifest snapshot compiled into the app (`src-tauri/builtin/`), switchable in Settings → Content. Stream addons are installed by user-pasted URL only, behind a confirmation dialog showing the manifest (name, version, resources, p2p/adult hints). |
+| Content neutrality | No seeded stream addons; built-ins are metadata or subtitles only, switchable, never streams | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only metadata and subtitle addons — Cinemeta and Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) — from manifest snapshots compiled into the app (`src-tauri/builtin/`), each switchable in Settings → Content. A test fails the build if a built-in declares a `stream` resource. Stream addons are installed by user-pasted URL only, behind a confirmation dialog showing the manifest (name, version, resources, p2p/adult hints). |
 | Updates | tauri-plugin-updater, install on next launch | Signed (minisign) packages from `releases/latest/download/latest.json`; releases are therefore regular, not pre-releases. Checked at launch (installed immediately, before the user starts anything) and every 6 h (downloaded to the cache, installed on the next launch). Signing key: `TAURI_SIGNING_PRIVATE_KEY` secret; release builds pass `--config src-tauri/tauri.release.conf.json` to emit updater artifacts. Dev builds never self-update. |
 
 ## Workspace layout
@@ -166,7 +166,9 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   `addon_list()` → Descriptor[] (built-ins first, then the user's addons)
 - Content: `catalog_load { args: { transportUrl, type, id, extra } }` → `{ metas }` ·
   `meta_get { type, id }` → `{ meta, asked, errors }` (first successful Meta across
-  supporting addons) · `streams_get { type, id }` → per-addon stream groups (parallel
+  supporting addons; an anime id — `kitsu:`, `mal:`, `anilist:`, `anidb:` — that finds
+  none under its type is retried as series, movie and anime, never re-asking an addon that
+  timed out) · `streams_get { type, id }` → per-addon stream groups (parallel
   fan-out)
 - Engine: `engine_resolve { request: { infoHash, fileIdx?, sources, filename?,
   fileMustInclude } }` → `{ streamUrl, infoHash, fileIdx, fileName, fileSize }` ·
@@ -244,8 +246,22 @@ profile's folder); re-creatable caches go under the cache dir. The first such st
 the library, `library.json` (`{ version, uid, items }`, see "Library and progress").
 
 Built-in addons are a table in `src-tauri/src/builtin.rs` (transport URL, compiled-in
-manifest snapshot from `src-tauri/builtin/`, an enabled-by-settings predicate). A test
-asserts that no built-in declares a `stream` resource.
+manifest snapshot from `src-tauri/builtin/`, an enabled-by-settings predicate): Cinemeta,
+Anime Kitsu, then OpenSubtitles v3, ahead of the user's addons, so meta asks Cinemeta
+(`tt` ids) and Kitsu (`kitsu`/`mal`/`anilist`/`anidb` ids) first. A built-in the user
+installed too is left out and their copy is used in their order, matched by transport URL
+or by the manifest id in the snapshot (so a configured install or another host of the same
+addon counts). Tests assert that no built-in declares a `stream` resource, and that each
+declares only `catalog`, `meta`, `addon_catalog` or `subtitles`. Each entry also names
+its role, the resources Zeiler uses from it, and its descriptor keeps only those (and its
+catalog lists only when the role has catalogs; http artwork is fetched over https): Kitsu's
+manifest declares subtitles too, which redirect to OpenSubtitles v3, so they are left out
+and the OpenSubtitles switch covers every built-in subtitle request. A meta answered by a
+built-in loses any streams embedded in its videos (`MetaLookup.source` says who answered;
+`builtin::without_builtin_streams`), since the manifest tests can't see those.
+`scripts/refresh-builtin-manifests.mjs` refreshes the snapshots (network; `--check` only
+reports): it keeps each one byte for byte as served and refuses one whose id changed, that
+declares anything else, or that comes from a redirect.
 
 ### Settings schema
 
@@ -263,8 +279,11 @@ Reserved key map — names are fixed now; each key is added only when its featur
 | --- | --- |
 | Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
 | Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, `showAdult` (the single adult flag and age gate, also used by the marketplace), `hideP2pAddons`, `homeRows`, `subtitles{}` (languages, auto-load, style), `audio{}` (languages, normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
-| Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, `builtinOpensubtitles`, `builtinKitsu` |
+| Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, **`builtinKitsu`**, **`builtinOpensubtitles`** |
 
+A settings file from before `builtinKitsu` and `builtinOpensubtitles` existed takes them
+from `builtinCinemeta` (Kitsu is also off when `hideAnime` is on), so an update never
+switches on a third-party host for someone who had switched off the only built-in.
 Per-profile keys live in `settings.json` until local profiles exist, then move into the
 profile store. There is no `profile{}` group in Settings.
 

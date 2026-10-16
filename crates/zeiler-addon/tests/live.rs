@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use url::Url;
-use zeiler_addon::{AddonClient, ResourcePath, aggregate_streams, first_meta};
+use zeiler_addon::{AddonClient, ResourcePath, aggregate_streams, find_meta, first_meta};
 
 fn cinemeta() -> Url {
     Url::parse("https://v3-cinemeta.strem.io/manifest.json").unwrap()
@@ -99,6 +99,8 @@ async fn opensubtitles_manifest_and_subtitles() {
     let client = AddonClient::new().unwrap();
     let transport = Url::parse("https://opensubtitles-v3.strem.io/manifest.json").unwrap();
     let manifest = client.manifest(&transport).await.unwrap();
+    // the built-in matches the user's own install by this id (src-tauri/src/builtin.rs)
+    assert_eq!(manifest.id, "org.stremio.opensubtitlesv3");
     assert!(manifest.is_resource_supported(&ResourcePath::new(
         "subtitles",
         "series",
@@ -113,6 +115,50 @@ async fn opensubtitles_manifest_and_subtitles() {
         .unwrap();
     assert!(!response.subtitles.is_empty());
     assert!(response.subtitles.iter().all(|s| !s.url.is_empty()));
+}
+
+fn kitsu() -> Url {
+    Url::parse("https://anime-kitsu.strem.fun/manifest.json").unwrap()
+}
+
+#[tokio::test]
+#[ignore = "network"]
+async fn kitsu_manifest_parses_and_serves_anime_catalogs() {
+    let client = AddonClient::new().unwrap();
+    let manifest = client.manifest(&kitsu()).await.unwrap();
+    // the built-in matches the user's own install by this id (src-tauri/src/builtin.rs)
+    assert_eq!(manifest.id, "community.anime.kitsu");
+    let trending = manifest
+        .catalogs
+        .iter()
+        .find(|c| c.r#type == "anime" && c.is_browsable())
+        .expect("a browsable anime catalog");
+    let page = client
+        .catalog(
+            &kitsu(),
+            &ResourcePath::new("catalog", "anime", &trending.id),
+        )
+        .await
+        .unwrap();
+    assert!(!page.metas.is_empty());
+    assert!(page.metas.iter().all(|m| m.id.starts_with("kitsu:")));
+}
+
+/// The Detail page asks with the catalog item's type; anime ids are retried under the
+/// other types until an addon answers.
+#[tokio::test]
+#[ignore = "network"]
+async fn kitsu_meta_is_found_for_anime_ids() {
+    let client = AddonClient::new().unwrap();
+    let addons = vec![client.descriptor(&kitsu()).await.unwrap()];
+    for id in ["kitsu:1", "mal:1"] {
+        let lookup = find_meta(&client, &addons, "anime", id, Duration::from_secs(15)).await;
+        let meta = lookup
+            .meta
+            .unwrap_or_else(|| panic!("{id}: {:?}", lookup.errors));
+        assert_eq!(meta.name, "Cowboy Bebop");
+        assert!(!meta.videos.is_empty());
+    }
 }
 
 /// The common "catalog addon + stream addon, no metadata addon" setup: details are
