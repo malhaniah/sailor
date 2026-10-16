@@ -22,11 +22,17 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
-use crate::{PlaybackRequest, redact_url};
+use crate::{PlaybackRequest, mpv_error, redact_url};
 
 /// Minimum spacing between forwarded `time-pos` changes. mpv fires this every
 /// frame; the UI only needs it a few times a second.
 const TIME_POS_THROTTLE: Duration = Duration::from_millis(200);
+
+/// How close to the end of the throttle window a held `time-pos` may be
+/// flushed. Windows mpv rounds wait timeouts down to whole milliseconds, so a
+/// wait for the rest of the window can wake just short of it; without slack the
+/// loop would spin on zero-length waits until the window closes.
+const FLUSH_SLACK: Duration = Duration::from_millis(2);
 
 /// Properties observed on behalf of the UI. Node-shaped properties (lists) are
 /// observed as strings — mpv serializes them to JSON, and libmpv2 ≥ 5 has no
@@ -87,6 +93,39 @@ pub enum PlayerEvent {
     Shutdown,
 }
 
+/// Readable text for a libmpv2 error. Its own `Display` is just `Debug`
+/// (`Raw(-13)`), and these messages reach the UI.
+fn readable(e: &libmpv2::Error) -> String {
+    match e {
+        libmpv2::Error::Raw(code) => format!("{} (mpv error {code})", mpv_error::describe(*code)),
+        libmpv2::Error::VersionMismatch { linked, loaded } => format!(
+            "incompatible libmpv: it provides client API {}.{}, Zeiler needs {}.x",
+            loaded >> 16,
+            loaded & 0xffff,
+            linked >> 16
+        ),
+        libmpv2::Error::InvalidUtf8 => "mpv returned text that is not valid UTF-8".into(),
+        libmpv2::Error::Null => "a value passed to mpv contains a NUL character".into(),
+    }
+}
+
+/// [`readable`] for `Mpv::with_initializer` failures. The initializer only sets
+/// literal options, so there `Null` means mpv_create() failed, and -4 is
+/// mpv_initialize()'s catch-all — with force-window set, a video output that
+/// could not be created.
+fn readable_init(e: &libmpv2::Error) -> String {
+    match e {
+        libmpv2::Error::Null => "libmpv could not create a player instance \
+                                 (out of memory, or the LC_NUMERIC locale is not \"C\")"
+            .into(),
+        libmpv2::Error::Raw(code @ libmpv2::mpv_error::InvalidParameter) => format!(
+            "mpv failed to start, most likely because no video output could be created \
+             for the window (mpv error {code})"
+        ),
+        other => readable(other),
+    }
+}
+
 fn end_file_reason(reason: libmpv2::EndFileReason) -> &'static str {
     use libmpv2::mpv_end_file_reason as r;
     match reason {
@@ -118,7 +157,8 @@ impl EmbeddedPlayer {
     /// `wid`: native parent window handle (HWND on Windows) that mpv embeds its
     /// video child window into. Must be set pre-init, hence a constructor
     /// argument. `events` receives the event stream; it is called from the
-    /// event thread and must not block.
+    /// event thread (and from the actor thread for a load that fails
+    /// synchronously) and must not block.
     pub fn spawn(
         wid: Option<i64>,
         events: impl Fn(PlayerEvent) + Send + Sync + 'static,
@@ -217,22 +257,24 @@ fn actor_thread(
     }) {
         Ok(mpv) => Arc::new(mpv),
         Err(e) => {
-            let _ = init_tx.send(Err(EmbeddedError::Init(e.to_string())));
+            let _ = init_tx.send(Err(EmbeddedError::Init(readable_init(&e))));
             return;
         }
     };
 
     for (i, (name, format)) in OBSERVED.iter().enumerate() {
         if let Err(e) = mpv.observe_property(name, *format, i as u64) {
-            warn!(property = name, error = %e, "mpv observe_property failed");
+            warn!(property = name, error = %readable(&e), "mpv observe_property failed");
         }
     }
 
+    let events = Arc::new(events);
     {
         let mpv = Arc::clone(&mpv);
+        let events = Arc::clone(&events);
         if let Err(e) = std::thread::Builder::new()
             .name("mpv-events".into())
-            .spawn(move || event_thread(mpv, events))
+            .spawn(move || event_thread(mpv, &*events))
         {
             let _ = init_tx.send(Err(EmbeddedError::Init(format!(
                 "failed to spawn event thread: {e}"
@@ -248,9 +290,13 @@ fn actor_thread(
         match cmd {
             Cmd::Load(request) => {
                 if let Err(e) = load(&mpv, &request) {
-                    warn!(error = %e, "mpv load failed");
-                    // Surfaced via the event stream too (end-file/error), but a
-                    // bad loadfile argument fails synchronously only here.
+                    // Stream failures arrive later on the event stream, but a bad
+                    // argument (e.g. a NUL byte in an addon-supplied header)
+                    // fails synchronously here — forward it, or the UI waits
+                    // for a file that never starts.
+                    let message = readable(&e);
+                    warn!(error = %message, "mpv load failed");
+                    events(PlayerEvent::Error { message });
                 }
             }
             Cmd::SetProperty(name, value) => {
@@ -267,7 +313,7 @@ fn actor_thread(
                     }
                 };
                 if let Err(e) = result {
-                    warn!(property = %name, error = %e, "mpv set_property failed");
+                    warn!(property = %name, error = %readable(&e), "mpv set_property failed");
                 }
             }
             Cmd::Command(args) => {
@@ -276,7 +322,7 @@ fn actor_thread(
                 }
                 let tail: Vec<&str> = args[1..].iter().map(String::as_str).collect();
                 if let Err(e) = mpv.command(&args[0], &tail) {
-                    warn!(command = %args[0], error = %e, "mpv command failed");
+                    warn!(command = %args[0], error = %readable(&e), "mpv command failed");
                 }
             }
             Cmd::Quit => break,
@@ -319,14 +365,33 @@ fn load(mpv: &Mpv, request: &PlaybackRequest) -> Result<(), libmpv2::Error> {
 
 fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
     let mut last_time_pos: Option<Instant> = None;
+    // A time-pos change inside the throttle window is held, not dropped, and
+    // forwarded once the window has passed: a seek while paused is followed by
+    // no further updates, so dropping it would strand the UI on the old position.
+    let mut held_time_pos: Option<Value> = None;
     loop {
-        match mpv.wait_event(0.5) {
+        let timeout = match (&held_time_pos, last_time_pos) {
+            (Some(_), Some(prev)) => TIME_POS_THROTTLE.saturating_sub(prev.elapsed()),
+            _ => Duration::from_millis(500),
+        };
+        let next = mpv.wait_event(timeout.as_secs_f64());
+        if last_time_pos.is_some_and(|prev| prev.elapsed() + FLUSH_SLACK >= TIME_POS_THROTTLE)
+            && let Some(value) = held_time_pos.take()
+        {
+            last_time_pos = Some(Instant::now());
+            events(PlayerEvent::Property {
+                name: "time-pos".into(),
+                value,
+            });
+        }
+        match next {
             None => {}
             Some(Err(e)) => {
-                // Includes end-of-file on error (a failed stream), surfaced to
-                // the UI as an error rather than a silent stop.
+                // Includes end-of-file on error (a failed stream): libmpv2
+                // reports it as an Err in place of the EndFile event. Surfaced
+                // to the UI as an error rather than a silent stop.
                 events(PlayerEvent::Error {
-                    message: e.to_string(),
+                    message: readable(&e),
                 });
             }
             Some(Ok(event)) => match event {
@@ -335,15 +400,6 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
                     break;
                 }
                 Event::PropertyChange { name, change, .. } => {
-                    if name == "time-pos" {
-                        let now = Instant::now();
-                        if last_time_pos
-                            .is_some_and(|prev| now.duration_since(prev) < TIME_POS_THROTTLE)
-                        {
-                            continue;
-                        }
-                        last_time_pos = Some(now);
-                    }
                     let value = match change {
                         PropertyData::Str(s) | PropertyData::OsdStr(s) => {
                             if JSON_PROPS.contains(&name) {
@@ -356,12 +412,23 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
                         PropertyData::Int64(i) => json!(i),
                         PropertyData::Double(d) => json!(d),
                     };
+                    if name == "time-pos" {
+                        if last_time_pos.is_some_and(|prev| prev.elapsed() < TIME_POS_THROTTLE) {
+                            held_time_pos = Some(value);
+                            continue;
+                        }
+                        last_time_pos = Some(Instant::now());
+                        held_time_pos = None;
+                    }
                     events(PlayerEvent::Property {
                         name: name.to_string(),
                         value,
                     });
                 }
-                Event::StartFile => events(PlayerEvent::StartFile),
+                Event::StartFile => {
+                    held_time_pos = None; // belongs to the previous file
+                    events(PlayerEvent::StartFile);
+                }
                 Event::FileLoaded => events(PlayerEvent::FileLoaded),
                 Event::Seek => events(PlayerEvent::Seek),
                 Event::PlaybackRestart => events(PlayerEvent::PlaybackRestart),
@@ -373,4 +440,71 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
         }
     }
     debug!("mpv event thread exiting");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_errors_read_as_text_with_the_code() {
+        let e = libmpv2::Error::Raw(libmpv2::mpv_error::LoadingFailed);
+        assert_eq!(
+            readable(&e),
+            "the stream could not be opened (mpv error -13)"
+        );
+    }
+
+    #[test]
+    fn every_bound_error_code_has_text() {
+        use libmpv2::mpv_error as code;
+        let fallback = mpv_error::describe(i32::MIN);
+        for c in [
+            code::EventQueueFull,
+            code::NoMem,
+            code::Uninitialized,
+            code::InvalidParameter,
+            code::OptionNotFound,
+            code::OptionFormat,
+            code::OptionError,
+            code::PropertyNotFound,
+            code::PropertyFormat,
+            code::PropertyUnavailable,
+            code::PropertyError,
+            code::Command,
+            code::LoadingFailed,
+            code::AoInitFailed,
+            code::VoInitFailed,
+            code::NothingToPlay,
+            code::UnknownFormat,
+            code::Unsupported,
+            code::NotImplemented,
+            code::Generic,
+        ] {
+            assert_ne!(mpv_error::describe(c), fallback, "mpv error {c}");
+        }
+    }
+
+    #[test]
+    fn init_failures_name_their_likely_cause() {
+        assert!(readable_init(&libmpv2::Error::Null).contains("could not create a player"));
+        assert!(
+            readable_init(&libmpv2::Error::Raw(libmpv2::mpv_error::InvalidParameter))
+                .contains("no video output could be created")
+        );
+        let other = libmpv2::Error::Raw(libmpv2::mpv_error::OptionError);
+        assert_eq!(readable_init(&other), readable(&other));
+    }
+
+    #[test]
+    fn version_mismatch_names_both_versions() {
+        let e = libmpv2::Error::VersionMismatch {
+            linked: libmpv2::MPV_CLIENT_API_VERSION,
+            loaded: 1 << 16 | 109,
+        };
+        assert_eq!(
+            readable(&e),
+            "incompatible libmpv: it provides client API 1.109, Zeiler needs 2.x"
+        );
+    }
 }
