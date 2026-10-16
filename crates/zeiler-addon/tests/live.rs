@@ -4,7 +4,10 @@
 use std::time::Duration;
 
 use url::Url;
-use zeiler_addon::{AddonClient, ResourcePath, aggregate_streams, find_meta, first_meta};
+use zeiler_addon::{
+    AddonClient, ExtraValue, ResourcePath, aggregate_streams, aggregate_subtitles, fetch_subtitle,
+    find_meta, first_meta,
+};
 
 fn cinemeta() -> Url {
     Url::parse("https://v3-cinemeta.strem.io/manifest.json").unwrap()
@@ -115,6 +118,44 @@ async fn opensubtitles_manifest_and_subtitles() {
         .unwrap();
     assert!(!response.subtitles.is_empty());
     assert!(response.subtitles.iter().all(|s| !s.url.is_empty()));
+}
+
+/// The fan-out with a file's extras, and one subtitle downloaded and normalized the way
+/// the player gets it (`player_subtitle_add`).
+#[tokio::test]
+#[ignore = "network"]
+async fn opensubtitles_subtitles_download_and_decode() {
+    let client = AddonClient::new().unwrap();
+    let transport = Url::parse("https://opensubtitles-v3.strem.io/manifest.json").unwrap();
+    let addon = client.descriptor(&transport).await.unwrap();
+    let extra = [ExtraValue {
+        name: "filename".into(),
+        value: "Friends.S01E01.1080p.BluRay.x265.mkv".into(),
+    }];
+    let groups = aggregate_subtitles(
+        &client,
+        &[addon],
+        "series",
+        "tt0108778:1:1",
+        &extra,
+        Duration::from_secs(20),
+    )
+    .await;
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].error, None);
+    let english = groups[0]
+        .subtitles
+        .iter()
+        .find(|s| s.lang == "eng")
+        .expect("an English subtitle");
+    let url = Url::parse(&english.url).unwrap();
+    let file = fetch_subtitle(&client, &url, None).await.unwrap();
+    assert_eq!(file.encoding, "UTF-8", "OpenSubtitles v3 serves UTF-8");
+    assert!(
+        file.text.contains("-->"),
+        "a timed text: {:?}",
+        &file.text[..200.min(file.text.len())]
+    );
 }
 
 fn kitsu() -> Url {

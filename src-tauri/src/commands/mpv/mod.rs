@@ -25,6 +25,7 @@
 //! The pre-M2 command names stay as thin aliases for one release (`aliases.rs`).
 
 pub mod aliases;
+pub mod subtitles;
 pub mod validate;
 
 #[cfg(all(windows, feature = "embedded"))]
@@ -66,6 +67,8 @@ use crate::error::IpcError;
 use crate::library::LibraryState;
 use crate::library::progress::{PlaybackContext, SessionProgress};
 use crate::state::AppState;
+use crate::subtitles::SubtitleStore;
+use crate::subtitles::prefs::{PlayerPrefs, TitlePrefs};
 
 /// The Tauri event carrying every [`PlayerEvent`].
 pub const PLAYER_EVENT: &str = "player://event";
@@ -95,6 +98,9 @@ pub struct PlayerState {
     surface: imp::Surface,
     /// Library progress of the playback in session `.0` (absent: not tracked).
     progress: Mutex<Option<(u64, Arc<SessionProgress>)>>,
+    /// Counts files started (`player_start`, `player_load`), so work for one file (a
+    /// subtitle download) is never applied to the next.
+    loads: AtomicU64,
 }
 
 #[derive(Clone)]
@@ -154,6 +160,11 @@ impl PlayerState {
     pub fn close_progress(&self) -> Option<oneshot::Receiver<()>> {
         let closing = self.progress.lock().unwrap().take();
         closing.and_then(|(_, progress)| progress.close())
+    }
+
+    /// How many files have been started so far (see `loads`).
+    fn load_count(&self) -> u64 {
+        self.loads.load(Ordering::SeqCst)
     }
 
     /// Whether the running session (if any) is embedded.
@@ -269,12 +280,20 @@ pub async fn player_start(
     context: Option<serde_json::Value>,
 ) -> Result<StartResult, IpcError> {
     check_request(&mut request)?;
+    let settings = state.settings.read().await.clone();
     let preference = match backend.unwrap_or_default() {
-        PlayerBackend::Auto => state.settings.read().await.player_backend,
+        PlayerBackend::Auto => settings.player_backend,
         explicit => explicit,
     };
     let context = checked_context(context);
-    start(&app, &state, &player, request, preference, context).await
+    let title = title_prefs(&app, context.as_ref()).await;
+    request.options = crate::subtitles::player_options(&settings, context.as_ref(), title.as_ref());
+    let started = start(&app, &state, &player, request, preference, context).await?;
+    // the subtitle look (only what the user set; a refusal costs only that field)
+    if let Ok(session) = player.session() {
+        let _ = subtitles::apply_style(&session, &settings.subtitles.style).await;
+    }
+    Ok(started)
 }
 
 /// Load another file into the running player (same window, same backend). Progress
@@ -282,16 +301,24 @@ pub async fn player_start(
 #[tauri::command]
 pub async fn player_load(
     app: AppHandle,
+    state: State<'_, AppState>,
     player: State<'_, PlayerState>,
     mut request: PlaybackRequest,
     context: Option<serde_json::Value>,
 ) -> Result<(), IpcError> {
     check_request(&mut request)?;
     let context = checked_context(context);
+    let title = title_prefs(&app, context.as_ref()).await;
+    request.options = crate::subtitles::player_options(
+        &*state.settings.read().await,
+        context.as_ref(),
+        title.as_ref(),
+    );
     let _op = player.op.lock().await;
     let active = player
         .active()
         .ok_or_else(|| IpcError::Player("Nothing is playing.".into()))?;
+    player.loads.fetch_add(1, Ordering::SeqCst);
     player.track(active.id, progress(&app, context));
     active.session.load(request).await.map_err(session_error)
 }
@@ -314,6 +341,9 @@ pub async fn player_stop(
         .is_none_or(|active| stop_matches(active.session.backend(), only))
     {
         player.close_progress();
+        if let Some(store) = app.try_state::<SubtitleStore>() {
+            store.purge();
+        }
     }
     player.stop_session(only);
     // `only: "external"` leaves a built-in video playing: keep its surface
@@ -401,6 +431,11 @@ async fn start(
     let id = player.next_id.fetch_add(1, Ordering::SeqCst) + 1;
     // from here on, events of the session being replaced are dropped
     player.current.store(id, Ordering::SeqCst);
+    player.loads.fetch_add(1, Ordering::SeqCst);
+    // the replaced session's subtitle files go with it
+    if let Some(store) = app.try_state::<SubtitleStore>() {
+        store.purge();
+    }
     // and its progress is closed before this playback's can start
     player.track(id, progress(app, context));
     // A built-in session that is replaced leaves its surface set up: a new built-in
@@ -485,6 +520,13 @@ fn checked_context(context: Option<serde_json::Value>) -> Option<PlaybackContext
             None
         }
     }
+}
+
+/// What the user chose for this title before (subtitles off, or a subtitle or audio
+/// language), so mpv's own track selection follows it from the start.
+async fn title_prefs(app: &AppHandle, context: Option<&PlaybackContext>) -> Option<TitlePrefs> {
+    let prefs = app.try_state::<PlayerPrefs>()?;
+    prefs.get(&context?.meta.id).await.ok().flatten()
 }
 
 /// A progress tracker for `context`, if there is one and it is not live TV.

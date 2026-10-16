@@ -197,6 +197,69 @@ export interface Settings {
   autoUpdate: boolean;
   /** Which player `player_start` uses for "auto" (Rust `zeiler_player::PlayerBackend`). */
   playerBackend: PlayerBackend;
+  /** Rust `settings_groups::SubtitleSettings`. A patch names only the fields it changes. */
+  subtitles: SubtitleSettings;
+  /** Rust `settings_groups::AudioSettings`. */
+  audio: AudioSettings;
+}
+
+export interface SubtitleSettings {
+  /** Preferred subtitle languages (ISO 639-1 or BCP-47), most preferred first; empty =
+   * the system language, then English. */
+  langs: string[];
+  /** Show the best subtitle in a preferred language when a file starts. */
+  autoLoad: boolean;
+  style: SubtitleStyle;
+}
+
+/** How text subtitles look; null = mpv's default (or external mpv's own config). Values
+ * are mpv's, checked by Rust against the player's property rules. */
+export interface SubtitleStyle {
+  /** sub-scale, 0.3–3 */
+  scale: number | null;
+  font: string | null;
+  bold: boolean | null;
+  /** #RRGGBB or #AARRGGBB (alpha first, as mpv reads it) */
+  color: string | null;
+  outlineColor: string | null;
+  /** 0–10 */
+  outlineSize: number | null;
+  borderStyle: "outline-and-shadow" | "opaque-box" | "background-box" | null;
+  backColor: string | null;
+  shadowOffset: number | null;
+  /** sub-pos, 0–150 (100 = the bottom of the video) */
+  pos: number | null;
+  marginY: number | null;
+  /** "force" applies the style to styled (ASS) subtitles too */
+  assOverride: "no" | "yes" | "scale" | "force" | "strip" | null;
+}
+
+export interface AudioSettings {
+  /** Preferred audio languages; empty = the file's default track. */
+  langs: string[];
+  /** Used instead of `langs` for anime (Kitsu, MyAnimeList, AniList, AniDB titles). */
+  animeLangs: string[];
+}
+
+/** A settings update: top-level keys, and for the groups only the fields that change. */
+export type SettingsPatch = {
+  [K in keyof Settings]?: Settings[K] extends unknown[]
+    ? Settings[K]
+    : Settings[K] extends object
+      ? DeepPartial<Settings[K]>
+      : Settings[K];
+};
+
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends unknown[] ? T[K] : T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
+/** One addon's answer to `subtitles_get` (Rust `zeiler_addon::AddonSubtitles`). */
+export interface AddonSubtitles {
+  transportUrl: string;
+  addonName: string;
+  subtitles: Subtitle[];
+  error?: string | null;
 }
 
 /** Player backend preference. */

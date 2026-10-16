@@ -59,7 +59,8 @@ pub struct PlaybackRequest {
     /// right before `loadfile` — e.g. preferred audio/subtitle languages from settings.
     /// Never deserialized, so the webview cannot inject mpv options through a request;
     /// only Rust code fills this in. Options persist in the core across loads, so the
-    /// shell sends its full set with every load.
+    /// shell sends its full set with every load. One that mpv refuses (an older
+    /// external mpv may not know it) is logged and skipped; the file still loads.
     #[serde(skip)]
     pub options: Vec<(String, String)>,
 }
@@ -270,6 +271,16 @@ impl Session {
         match self {
             #[cfg(feature = "embedded")]
             Session::Embedded(player) => player.command(args).map_err(embedded_error),
+            Session::External(player) => player.command(args).await,
+        }
+    }
+
+    /// Run a command and wait for mpv's answer, on either backend: for commands whose
+    /// failure must reach the user, such as `sub-add`. Callers validate it first.
+    pub async fn command_checked(&self, args: Vec<String>) -> Result<(), SessionError> {
+        match self {
+            #[cfg(feature = "embedded")]
+            Session::Embedded(player) => player.command_checked(args).await,
             Session::External(player) => player.command(args).await,
         }
     }

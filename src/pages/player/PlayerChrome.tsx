@@ -15,6 +15,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CopyField } from "../../components/ui";
 import { ControlsBar } from "./ControlsBar";
 import type { Backend, MpvState, Phase } from "./mpv-state";
+import type { Tracks } from "./useTracks";
 import { type PlaybackClock, useClock } from "./playback-clock";
 import { BackButton, CenterCard, ClosedCard, Spinner } from "./states";
 import { TorrentStats } from "./TorrentStats";
@@ -25,6 +26,7 @@ export function PlayerChrome({
   backend,
   videoBehind,
   mpv,
+  tracks,
   clock,
   notice,
   dismissNotice,
@@ -40,6 +42,7 @@ export function PlayerChrome({
   /** the built-in video is running behind the page (see usePlaybackSession) */
   videoBehind: boolean;
   mpv: MpvState;
+  tracks: Tracks;
   clock: PlaybackClock;
   notice: string | null;
   dismissNotice: () => void;
@@ -213,6 +216,7 @@ export function PlayerChrome({
           clock={clock}
           ended={phase.kind === "ended"}
           mpv={mpv}
+          tracks={tracks}
           controls={controls}
           shown={controlsShown}
           onPoke={poke}

@@ -1,4 +1,5 @@
 import {
+  Captions,
   Check,
   Compass,
   Info,
@@ -22,13 +23,15 @@ import { type PlayerBackends, playerBackends } from "../lib/player-ipc";
 import { useAddons, useSettings } from "../lib/store";
 import { THEME_PRESETS } from "../lib/theme";
 import type { PlayerBackend } from "../lib/types";
+import { SubtitlesSection } from "./SubtitleSettings";
 
 /** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
  * section shows only once it has a SECTIONS entry, so these stay hidden until then. */
-type ReservedSectionId = "account" | "subtitles" | "playback";
+type ReservedSectionId = "account" | "playback";
 
 type SectionId =
   | "player"
+  | "subtitles"
   | "engine"
   | "theme"
   | "content"
@@ -48,6 +51,12 @@ const SECTIONS: {
         label: "Player & quality",
         icon: MonitorPlay,
         sub: "How Zeiler plays what your addons find.",
+      },
+      {
+        id: "subtitles",
+        label: "Subtitles & audio",
+        icon: Captions,
+        sub: "Which subtitles and audio play, and how subtitles look.",
       },
       {
         id: "engine",
@@ -150,6 +159,7 @@ export function SettingsView() {
           </header>
 
           {active === "player" && <PlayerSection />}
+          {active === "subtitles" && <SubtitlesSection />}
           {active === "engine" && <EngineSection />}
           {active === "theme" && <ThemeSection />}
           {active === "content" && <ContentSection />}
@@ -543,7 +553,7 @@ const BUILTIN_ADDONS: {
     name: "OpenSubtitles v3",
     transportUrl: "https://opensubtitles-v3.strem.io/manifest.json",
     manifestId: "org.stremio.opensubtitlesv3",
-    sub: "Subtitles · Subtitles for movies and series. When Zeiler looks for subtitles, Stremio's opensubtitles-v3.strem.io gets the title's IMDb id and, if the stream names them, the file's name, size and hash.",
+    sub: "Subtitles · Subtitles for movies and series in the player's Subtitles menu. When Zeiler looks for subtitles (as a video starts, see Subtitles & audio), Stremio's opensubtitles-v3.strem.io gets the title's IMDb id and, if the stream names them, the file's name, size and hash. A subtitle is downloaded from it only when it is shown.",
   },
 ];
 

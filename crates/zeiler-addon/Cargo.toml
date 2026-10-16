@@ -19,6 +19,10 @@ reqwest = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
+# subtitle files (subfile.rs): gzip, encoding detection and decoding
+flate2 = { workspace = true }
+encoding_rs = { workspace = true }
+chardetng = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

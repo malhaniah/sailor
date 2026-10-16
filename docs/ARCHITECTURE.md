@@ -125,10 +125,11 @@ backend setting says.
     control (`ExternalRemote.tsx`): the title's art fills the window, dimmed; title,
     episode and source at the top; the same `ControlsBar` as embedded docked at the
     bottom — play/pause, seek bar with elapsed/total time and the buffered range
-    (`demuxer-cache-time`), volume and mute, audio and subtitle menus from
-    `track-list` (subtitles with Off), speed, fullscreen of the mpv window
+    (`demuxer-cache-time`), volume and mute, the audio and subtitle menus (see
+    "Subtitles and audio"), speed, fullscreen of the mpv window
     (`cycle fullscreen`) and Stop. Shortcuts while Zeiler has focus: Space, ←/→ (5 s),
-    ↑/↓ (volume 5), m, f, Escape (back). When the user closes mpv (`shutdown`) the page
+    ↑/↓ (volume 5), m, f, s (next subtitle), z/x (subtitle delay −/+0.1 s), [ / ]
+    (slower/faster), Escape (back). When the user closes mpv (`shutdown`) the page
     says "mpv was closed" with Back and Play again. When embedded fell back to mpv,
     a dismissible notice gives `fallbackReason`. If mpv's IPC never came up
     (`remoteControl: false`) the page shows the passive "Playing in mpv" card instead.
@@ -154,7 +155,86 @@ backend setting says.
   a position tick re-renders only the seek bar and readouts), `mpv-state.ts`,
   `PlayerChrome.tsx` (embedded), `surface-sync.ts` (embedded surface after window
   changes), `ExternalRemote.tsx` (external), `ControlsBar.tsx` (both), `states.tsx`,
-  `TorrentStats.tsx`. Later player features add files here.
+  `TorrentStats.tsx`, `useTracks.ts` (subtitles and audio), `SubtitleMenu.tsx`,
+  `AudioMenu.tsx`, `menu.tsx` (the popup and its rows). Later player features add files
+  here.
+
+## Subtitles and audio
+
+Every subtitle reaches mpv as a UTF-8 file Zeiler wrote itself; the webview can never
+run `sub-add` (see "Validation policy").
+
+- **Sources.** Embedded tracks (`track-list`), the subtitles a stream lists, every
+  subtitle addon (`subtitles_get`: the built-in OpenSubtitles v3 while it is on, and any
+  the user installed; Kitsu as a built-in declares none), a file the user picks
+  (`player_subtitle_pick_local`: the OS dialog of `tauri-plugin-dialog`, opened from
+  Rust; no dialog permission is granted to the webview) or drops on the window (Rust
+  handles the drop while a player runs, extensions srt/ass/ssa/vtt/sub, and emits
+  `subtitles://dropped`). The addons are asked with the stream's `videoHash`,
+  `videoSize` and `filename` while the video opens when a subtitle will show by itself
+  (automatic subtitles on, or a subtitle remembered for the title, and the title not
+  remembered as "off"), otherwise only when the Subtitles menu first opens (Settings
+  says so).
+- **Files** (`crates/zeiler-addon/src/subfile.rs`, `src-tauri/src/subtitles/`). A link
+  is http(s) only, followed through redirects, capped at 10 MiB (and a gzip file at 10
+  MiB unpacked), 20 s. Gzip is unpacked by its magic bytes; ZIP, RAR and 7z archives,
+  web pages and binary data are refused with a reason the menu shows. A byte-order mark
+  decides the encoding, else the menu's encoding choice, else valid UTF-8 (a stray
+  invalid byte does not count against it), else `chardetng`'s guess. The text must
+  *start* as a subtitle — `WEBVTT`, an `[Script Info]` header (ASS/SSA), a MicroDVD
+  frame line, or a SubRip cue (number and timing) — or it is refused: mpv reads a file
+  by its content, and a file Zeiler saved is local to mpv, so an mpv EDL, a CUE sheet or
+  a playlist served as a "subtitle" would make mpv open the local files or network shares
+  it names (mpv refuses that for content it fetched itself). The result goes to
+  `<cache_dir>/subs/<random>.<ext>`, emptied at startup and whenever a session starts or
+  stops, and is added with `sub-add <path> select|auto <title> <lang>` on whichever
+  backend plays; the title is flattened to one line of at most 120 characters and the
+  language must be a language code. An add that finishes after the file changed is not
+  applied (the shell counts loads). The UI finds the new track by the returned file
+  name in `external-filename`; "read as another encoding" adds the same subtitle again
+  (`player_subtitle_reencode`) and removes the old track.
+- **Ranking and the automatic pick** (`src/lib/subtitles.ts`). Languages are compared as
+  ISO 639-1 codes (`pt-BR` kept), mapped from ISO 639-2 and OpenSubtitles' own codes
+  through `src/lib/languages.json`, the table Rust also uses for mpv. Candidates are
+  ranked by preferred language (an exact region first), then source (the stream's own,
+  then addons in their order), then how well a label matches the stream's file name
+  (release group, source, resolution; hearing-impaired last). A moment after each
+  `file-loaded`, when a subtitle may show by itself and the user has not picked one for
+  the file: language by language, for the first preferred language that has a full (not
+  forced) subtitle anywhere, keep what mpv picked if it is in that language, else select
+  an embedded track in it, else download its best candidate. While the addons are still
+  answering, the pick waits unless it already has a subtitle in the first preferred
+  language; a candidate whose download fails gives way to the next (three tries).
+  Preferred languages are the title's remembered one, then `subtitles.langs`, else the
+  system language and English. The title's delay, speed and audio track apply at once.
+- **Languages for mpv.** `player_start` and `player_load` read the title's remembered
+  choices and set, before loading: `sid=no` when the title is remembered as "off" or
+  automatic subtitles are off with nothing remembered, else `sid=auto` (always sent:
+  options stay set in a core across loads); `alang` (the title's audio language, then
+  `audio.langs`, or for anime `audio.animeLangs`) and `slang` (the title's subtitle
+  language, then `subtitles.langs`), each language in every form (`ar,ara`;
+  `fr,fre,fra`), and only when there are some, so external mpv keeps its own lists. So
+  mpv's own selection already follows the user when the file opens. A pre-load option
+  mpv refuses is logged and skipped, never fatal.
+- **Style.** `subtitles.style` fields are mpv property values, checked by the same rules
+  as property writes. Only fields the user set are applied, after the session starts
+  (`sub-outline-*` first, then mpv < 0.38's `sub-border-*`); unset means mpv's look, or
+  external mpv's config. Styled (ASS) subtitles keep their own look unless the user
+  turns on `assOverride: "force"`. The player's quick style (size, position, background)
+  applies at once (`player_set_sub_style`, which answers with what mpv refused, shown as
+  a notice) and is saved as a one-field settings patch. The background box needs
+  `sub-border-style` (mpv 0.38+); an older external mpv keeps its outline. Only external
+  mpv reports refusals; the built-in core is the pinned libmpv, which has every property.
+- **Per title** (`player-prefs.json` under `profile_dir()`, the 200 titles used last):
+  the subtitle language picked (or "off") and the audio language, when the user picks
+  them; the subtitle delay and the speed whenever they change and settle (also from
+  keys in the external mpv window). The next file of the title starts with them.
+- **Menus** (`SubtitleMenu.tsx`, `AudioMenu.tsx`). Subtitles: Off/On, a language rail,
+  tabs by source (in the video, addons, files), tags (Forced, SDH, Default, format,
+  addon), a spinner while a subtitle downloads and its error inline, "Load from file…",
+  the encoding of an added subtitle, the delay (±0.1/±0.5 s), and the quick style.
+  Audio: tracks by language with title, channels (Stereo, 5.1, 7.1), codec and
+  Default/File, and the audio delay. Both work the same on either backend.
 
 ## Tauri IPC surface
 
@@ -169,7 +249,10 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   supporting addons; an anime id — `kitsu:`, `mal:`, `anilist:`, `anidb:` — that finds
   none under its type is retried as series, movie and anime, never re-asking an addon that
   timed out) · `streams_get { type, id }` → per-addon stream groups (parallel
-  fan-out)
+  fan-out) · `subtitles_get { type, id, videoHash?, videoSize?, filename? }` →
+  per-addon subtitle groups `{ transportUrl, addonName, subtitles, error? }` (parallel
+  fan-out, 10 s per addon; the stream's file hints go along as the extras, each left out
+  when malformed; see "Subtitles and audio")
 - Engine: `engine_resolve { request: { infoHash, fileIdx?, sources, filename?,
   fileMustInclude } }` → `{ streamUrl, infoHash, fileIdx, fileName, fileSize }` ·
   `engine_stats { infoHash }` → librqbit stats JSON · `engine_remove { infoHash,
@@ -187,6 +270,15 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   width, height } }` (embedded video rect, physical px) · `player_surface_refresh()`
   (re-assert the embedded surface after a window change; no-op unless built-in video
   plays)
+- Subtitles (`commands/mpv/subtitles.rs`; see "Subtitles and audio"):
+  `player_subtitle_add { request: { url, lang?, label?, select?, encoding? } }` →
+  `{ file, format, encoding }` (download, normalize, `sub-add`) ·
+  `player_subtitle_reencode { file, encoding? }` → the same (the subtitle again, read
+  as another encoding) · `player_subtitle_pick_local()` → the same, or null when the
+  dialog is cancelled · `player_set_sub_style { style }` → the mpv properties it refused
+  (style fields, applied live) ·
+  `player_prefs_get { metaId }` → `{ metaId, subLang, audioLang, subDelaySec, rate }`
+  or null · `player_prefs_set { metaId, patch }` → the same
 - Deprecated player aliases (one release; `commands/mpv/aliases.rs`; the UI no longer
   calls any of them): `player_status()` →
   `{ available, path? }` (= `player_backends().external`) ·
@@ -203,9 +295,10 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   whole title) ·
   `library_clear_progress { id }` → LibraryEntry or null
 - Settings: `settings_get()` → Settings · `settings_patch { patch }` → Settings (merges
-  the given top-level keys server-side; unknown keys and wrongly typed values are
-  rejected) · `settings_set { settings }` → Settings (**deprecated**, replaces every
-  setting; kept for one release)
+  the given top-level keys server-side, a group such as `subtitles` field by field;
+  unknown keys and wrongly typed or out-of-range values, at any depth, are rejected) ·
+  `settings_set { settings }` → Settings (**deprecated**, replaces every setting; kept
+  for one release)
 - Updates: `update_status()` → `{ current, ready? }` · `update_check()` → new version or
   null · `update_install_now()`
 
@@ -227,6 +320,8 @@ Events (named `<domain>://<event>`, rare notifications only):
   tagged; see "Player backends")
 - `library://changed` — `{ ids }`, the library items that changed, after every committed
   change (the user's, or saved playback progress)
+- `subtitles://dropped` — `{ name, added }` or `{ name, error }`: how a subtitle file
+  dropped on the window went (only while a player runs)
 
 High-frequency data (engine stats, player position) will move to `tauri::ipc::Channel`
 subscriptions when the embedded player lands.
@@ -268,17 +363,29 @@ declares anything else, or that comes from a redirect.
 `settings.json` is additive only: a new key always has a default, and an existing key
 never changes name or type. Reading is lenient per top-level key — a wrongly typed value
 resets just that setting to its default (with a warning) instead of moving the whole file
-aside — while `settings_patch` is strict. Nested groups must be lenient per field inside
-(serde_with `DefaultOnError` where the type's `Default` is the intended default),
-otherwise one bad sub-field resets the whole group. Settings are mirrored wholesale to
-the webview, so secrets (Stremio authKey, IPTV credentials) never go here.
+aside — while `settings_patch` is strict. Nested groups are lenient per field inside,
+otherwise one bad sub-field resets the whole group: `src-tauri/src/settings_groups.rs`
+reads every settings object (the top level and each group) key by key from its defaults,
+each key strictly typed and checked, keeping the default of a key that does not fit (so
+a default of `true` stays `true`, which `DefaultOnError` could not do). A patch merges an
+object value into its group field by field (arrays replace), so a writer names only what
+it changes, and it is refused unless every value it names survives that read unchanged —
+an unknown field, a wrong type or an out-of-range value at any depth. Settings are
+mirrored wholesale to the webview, so secrets (Stremio authKey, IPTV credentials) never
+go here.
+
+The groups so far: `subtitles { langs, autoLoad, style { scale, font, bold, color,
+outlineColor, outlineSize, borderStyle, backColor, shadowOffset, pos, marginY,
+assOverride } }` (style values are mpv's, checked by the player's property rules; every
+style field `null` by default) and `audio { langs, animeLangs }` (`animeLangs` defaults
+to `["ja"]`).
 
 Reserved key map — names are fixed now; each key is added only when its feature ships:
 
 | Scope | Keys (existing **bold**) |
 | --- | --- |
 | Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
-| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, `showAdult` (the single adult flag and age gate, also used by the marketplace), `hideP2pAddons`, `homeRows`, `subtitles{}` (languages, auto-load, style), `audio{}` (languages, normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
+| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, `showAdult` (the single adult flag and age gate, also used by the marketplace), `hideP2pAddons`, `homeRows`, **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages; later normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
 | Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, **`builtinKitsu`**, **`builtinOpensubtitles`** |
 
 A settings file from before `builtinKitsu` and `builtinOpensubtitles` existed takes them
@@ -445,7 +552,8 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
   Reads: diagnostics (codecs, fps, bitrates, drops, cache, `mpv-version`) and the
   observed set. Never exposed: `loadfile`, `sub-add`, `af`, `vf`, `glsl-shaders`, `run`,
   `script-message`, `keybind`, `define-section`; features that need them get dedicated,
-  validated commands.
+  validated commands (subtitles: `player_subtitle_*`, which add only files Zeiler wrote,
+  and `player_set_sub_style`, whose fields pass the same property rules).
 
 ## Navigation names
 
@@ -453,7 +561,8 @@ The frontend navigates with a frame stack (`src/lib/view.tsx`). Every switch ove
 `RootView` or `Frame` kinds ends in `unreachable(x)`, so a new kind that is not handled
 everywhere fails `tsc`. Reserved now, unreachable from the UI until their milestones:
 root view `live`; frames `browse` (catalog browser) and `addon-detail` (marketplace).
-Reserved Settings section ids: `account`, `subtitles`, `playback`.
+Reserved Settings section ids: `account`, `playback` (`subtitles` is in use since M6:
+Settings → Subtitles & audio).
 
 The Player is not a frame: it is the `#/player?h=<id>` hash route, drawn over the
 still-mounted shell (see "Playback entry point"). The frame stack is untouched while it
@@ -464,9 +573,15 @@ is up; leaving the player pops the history entry it pushed.
 - Strict CSP (no remote script/style; `img-src https: http:` because addon posters are
   arbitrary hosts; loopback wildcards for the engine stream only).
 - Least-privilege capabilities; no fs/shell/http plugin — the webview can only invoke our
-  typed commands. Player property writes, reads and commands pass the allow-list tables
-  in `commands/mpv/validate.rs`; stream URLs, headers and tokens reach mpv over its
-  private IPC connection, never argv.
+  typed commands. The dialog plugin is registered for Rust's own subtitle file picker
+  only; no capability grants the webview its commands. Player property writes, reads and
+  commands pass the allow-list tables in `commands/mpv/validate.rs`; stream URLs,
+  headers and tokens reach mpv over its private IPC connection, never argv.
+- Subtitle downloads are http(s) only and capped (10 MiB, also unpacked); archives, web
+  pages and any text that does not start as a subtitle format (an mpv EDL, a CUE sheet,
+  a playlist) are refused, because a saved file is local to mpv; files land under the
+  cache dir with random names, and only those are ever handed to `sub-add`. A local
+  file must be a regular file and is read no further than the cap.
 - Addons are untrusted JSON: stream/external URLs are scheme-allow-listed before reaching
   mpv or the OS (mpv would happily open `file://`); `proxyHeaders` are treated as
   attacker-controlled; infoHashes validated as 40-char hex.

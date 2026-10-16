@@ -5,8 +5,8 @@ use url::Url;
 
 use crate::client::AddonClient;
 use crate::manifest::Descriptor;
-use crate::request::ResourcePath;
-use crate::resource::{MetaItem, Stream};
+use crate::request::{ExtraValue, ResourcePath};
+use crate::resource::{MetaItem, Stream, Subtitle};
 
 /// One addon's answer to a stream fan-out, attributed for display.
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +52,58 @@ pub async fn aggregate_streams(
                     transport_url: d.transport_url.clone(),
                     addon_name: d.manifest.name.clone(),
                     streams,
+                    error,
+                }
+            }
+        });
+    futures::future::join_all(tasks).await
+}
+
+/// One addon's answer to a subtitles fan-out, attributed for display.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonSubtitles {
+    pub transport_url: Url,
+    pub addon_name: String,
+    pub subtitles: Vec<Subtitle>,
+    pub error: Option<String>,
+}
+
+/// Ask every addon that serves subtitles for this type and video id, in parallel, like
+/// [`aggregate_streams`]. `extra` carries what the stream says about the file
+/// (`videoHash`, `videoSize`, `filename`, in that order, as Stremio's apps send them);
+/// it goes into each request's extra segment. Results come back in addon order, one
+/// entry per supporting addon.
+pub async fn aggregate_subtitles(
+    client: &AddonClient,
+    addons: &[Descriptor],
+    r#type: &str,
+    video_id: &str,
+    extra: &[ExtraValue],
+    per_addon_timeout: Duration,
+) -> Vec<AddonSubtitles> {
+    let mut path = ResourcePath::new("subtitles", r#type, video_id);
+    path.extra = extra.to_vec();
+    let tasks = addons
+        .iter()
+        .filter(|d| d.manifest.is_resource_supported(&path))
+        .map(|d| {
+            let path = path.clone();
+            async move {
+                let outcome = tokio::time::timeout(
+                    per_addon_timeout,
+                    client.subtitles(&d.transport_url, &path),
+                )
+                .await;
+                let (subtitles, error) = match outcome {
+                    Ok(Ok(response)) => (response.subtitles, None),
+                    Ok(Err(e)) => (Vec::new(), Some(e.to_string())),
+                    Err(_) => (Vec::new(), Some("timed out".to_string())),
+                };
+                AddonSubtitles {
+                    transport_url: d.transport_url.clone(),
+                    addon_name: d.manifest.name.clone(),
+                    subtitles,
                     error,
                 }
             }
@@ -342,6 +394,15 @@ mod tests {
 
     impl Loopback {
         async fn start(routes: &[(&str, &str, &str)], hang: bool) -> Loopback {
+            let routes: Vec<_> = routes
+                .iter()
+                .map(|(r#type, id, body)| (ResourcePath::new("meta", *r#type, *id), *body))
+                .collect();
+            Self::serve(&routes, hang).await
+        }
+
+        /// Answers each of `routes` (any resource) with its body, 404 otherwise.
+        async fn serve(routes: &[(ResourcePath, &str)], hang: bool) -> Loopback {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -352,9 +413,8 @@ mod tests {
             .unwrap();
             let routes: Vec<(String, String)> = routes
                 .iter()
-                .map(|(r#type, id, body)| {
-                    let path = ResourcePath::new("meta", *r#type, *id);
-                    let url = crate::request::build_resource_url(&transport_url, &path).unwrap();
+                .map(|(path, body)| {
+                    let url = crate::request::build_resource_url(&transport_url, path).unwrap();
                     (url.path().to_owned(), (*body).to_owned())
                 })
                 .collect();
@@ -500,6 +560,115 @@ mod tests {
         assert!(lookup.meta.is_none());
         assert_eq!(lookup.asked, ["Gone"]);
         assert_eq!(lookup.errors.len(), 1, "asked once: {:?}", lookup.errors);
+    }
+
+    fn subtitles_addon(name: &str, transport_url: &Url) -> Descriptor {
+        serde_json::from_str(&format!(
+            r#"{{ "manifest": {{ "id": "{name}", "name": "{name}", "types": ["movie", "series"],
+                 "idPrefixes": ["tt"], "resources": ["subtitles"], "catalogs": [] }},
+                 "transportUrl": "{transport_url}" }}"#
+        ))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn subtitles_are_asked_with_the_file_extras_and_attributed_per_addon() {
+        let extra = [
+            ExtraValue {
+                name: "videoHash".into(),
+                value: "8e245d9679d31e12".into(),
+            },
+            ExtraValue {
+                name: "videoSize".into(),
+                value: "1351620608".into(),
+            },
+            ExtraValue {
+                name: "filename".into(),
+                value: "Show S01E01 1080p.mkv".into(),
+            },
+        ];
+        let mut path = ResourcePath::new("subtitles", "series", "tt1:1:1");
+        path.extra = extra.to_vec();
+        // one entry lacks its url: skipped, not fatal
+        let good = Loopback::serve(
+            &[(
+                path,
+                r#"{ "subtitles": [
+                    { "id": "1", "url": "https://subs.example/1.srt", "lang": "eng" },
+                    { "id": "2", "lang": "ara" },
+                    { "id": "3", "url": "https://subs.example/3.srt", "lang": null, "SubEncoding": "UTF-8" }
+                ] }"#,
+            )],
+            false,
+        )
+        .await;
+        let broken = Loopback::serve(&[], false).await;
+        let mut meta_only = good.addon("Meta", r#"["series"]"#);
+        meta_only.manifest.id_prefixes = Some(vec!["tt".into()]);
+        let addons = vec![
+            subtitles_addon("Good", &good.transport_url),
+            meta_only,
+            subtitles_addon("Broken", &broken.transport_url),
+        ];
+        let client = AddonClient::for_loopback_tests();
+
+        let results = aggregate_subtitles(
+            &client,
+            &addons,
+            "series",
+            "tt1:1:1",
+            &extra,
+            Duration::from_secs(5),
+        )
+        .await;
+
+        let names: Vec<_> = results.iter().map(|r| r.addon_name.as_str()).collect();
+        assert_eq!(names, ["Good", "Broken"], "only subtitle addons, in order");
+        assert_eq!(results[0].error, None);
+        let urls: Vec<_> = results[0]
+            .subtitles
+            .iter()
+            .map(|s| s.url.as_str())
+            .collect();
+        assert_eq!(
+            urls,
+            ["https://subs.example/1.srt", "https://subs.example/3.srt"]
+        );
+        assert_eq!(
+            results[0].subtitles[1].lang, "",
+            "a null lang reads as empty"
+        );
+        assert!(results[1].subtitles.is_empty());
+        assert!(
+            results[1]
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("404"))
+        );
+        assert_eq!(
+            good.requests.lock().unwrap().as_slice(),
+            [
+                "/subtitles/series/tt1%3A1%3A1/videoHash=8e245d9679d31e12&videoSize=1351620608&filename=Show%20S01E01%201080p.mkv.json"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn no_subtitle_request_for_an_id_no_addon_serves() {
+        let server = Loopback::serve(&[], false).await;
+        let addons = vec![subtitles_addon("OpenSubtitles", &server.transport_url)];
+        let client = AddonClient::for_loopback_tests();
+        let results = aggregate_subtitles(
+            &client,
+            &addons,
+            "anime",
+            "kitsu:1:1",
+            &[],
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(results.is_empty());
+        assert!(server.requests.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

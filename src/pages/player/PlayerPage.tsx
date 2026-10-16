@@ -27,7 +27,8 @@
  * (position/duration/pause/buffering store), mpv-state.ts (slower mpv state + phase),
  * PlayerChrome.tsx (embedded), ExternalRemote.tsx (external), ControlsBar.tsx (both),
  * states.tsx (status cards, title labels), surface-sync.ts (embedded surface after
- * window changes), TorrentStats.tsx.
+ * window changes), TorrentStats.tsx, useTracks.ts (subtitles and audio: sources, the
+ * automatic pick, per-title choices), SubtitleMenu.tsx, AudioMenu.tsx, menu.tsx.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { leavePlayer, type PlayerLaunch, reportLaunchFailed } from "../../lib/playback-handoff";
@@ -39,6 +40,7 @@ import { PlayerChrome } from "./PlayerChrome";
 import { NothingToPlay, UncontrolledPlayback } from "./states";
 import { useSurfaceSync } from "./surface-sync";
 import { usePlaybackSession } from "./usePlaybackSession";
+import { useTracks } from "./useTracks";
 
 /** `hash` is the player route this page was mounted for (the page is keyed by it). */
 export function PlayerPage({ hash }: { hash: string }) {
@@ -76,6 +78,12 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
 
   const session = usePlaybackSession(launch, clock, sendGeometry);
   const { phase, backend, mpv, videoBehind } = session;
+  const tracks = useTracks({
+    launch,
+    mpv,
+    running: phase.kind === "playing" || phase.kind === "ended",
+    subscribeEvents: session.subscribeEvents,
+  });
 
   // While a built-in video runs, the document must not paint a background — the
   // native video window sits directly behind the webview. Not before player_start has
@@ -141,6 +149,7 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
         launch={launch}
         phase={phase}
         mpv={mpv}
+        tracks={tracks}
         clock={clock}
         notice={session.notice}
         dismissNotice={session.dismissNotice}
@@ -161,6 +170,7 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
       backend={backend}
       videoBehind={videoBehind}
       mpv={mpv}
+      tracks={tracks}
       clock={clock}
       notice={session.notice}
       dismissNotice={session.dismissNotice}

@@ -227,6 +227,81 @@ fn request_headers_apply_to_one_stream_only() {
     player.quit();
 }
 
+/// (f) Subtitles the shell adds (`sub-add` through `command_checked`) show up in the
+/// track list as an external, selected track with their title and language, and a
+/// file mpv cannot open comes back as an error the UI can show. A pre-load option the
+/// core does not know costs only itself: the file still loads.
+#[tokio::test]
+async fn subtitles_are_added_as_selected_external_tracks() {
+    let dir = std::env::temp_dir().join(format!("zeiler-embedded-subs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let srt = dir.join("0b9e-test.srt");
+    std::fs::write(&srt, "1\n00:00:00,000 --> 00:00:05,000\nمرحبا — hello\n\n").unwrap();
+
+    let (player, rx) = spawn();
+    player
+        .load(PlaybackRequest {
+            options: vec![
+                ("no-such-option".into(), "1".into()),
+                ("slang".into(), "ar,ara".into()),
+            ],
+            ..request("av://lavfi:testsrc=duration=5")
+        })
+        .unwrap();
+    wait_for(&rx, "file-loaded", |e| {
+        (*e == PlayerEvent::FileLoaded).then_some(())
+    });
+
+    let path = srt.to_string_lossy().to_string();
+    player
+        .command_checked(vec![
+            "sub-add".into(),
+            path.clone(),
+            "select".into(),
+            "Zeiler test".into(),
+            "ar".into(),
+        ])
+        .await
+        .expect("mpv accepts the file");
+    // the track list and `sid` change in either order
+    let (mut track, mut sid) = (None::<Value>, None::<Value>);
+    wait_for(&rx, "the added subtitle in the track list, selected", |e| {
+        if let Some(tracks) = property(e, "track-list").and_then(Value::as_array) {
+            track = tracks.iter().find(|t| t["type"] == "sub").cloned();
+        }
+        if let Some(value) = property(e, "sid") {
+            sid = Some(value.clone());
+        }
+        let selected = track.as_ref().is_some_and(|t| t["selected"] == json!(true));
+        (selected && sid.as_ref().is_some_and(|s| *s != json!("no"))).then_some(())
+    });
+    let (track, sid) = (track.unwrap(), sid.unwrap());
+    assert_eq!(track["external"], json!(true), "{track}");
+    assert_eq!(track["title"], json!("Zeiler test"));
+    assert_eq!(track["lang"], json!("ar"));
+    assert_eq!(track["selected"], json!(true));
+    let filename = track["external-filename"].as_str().unwrap_or_default();
+    assert!(
+        filename.replace('\\', "/").ends_with("/0b9e-test.srt"),
+        "{filename}"
+    );
+    assert_eq!(sid, json!(track["id"].to_string()));
+
+    let missing = player
+        .command_checked(vec![
+            "sub-add".into(),
+            dir.join("missing.srt").to_string_lossy().to_string(),
+            "auto".into(),
+        ])
+        .await;
+    assert!(
+        matches!(&missing, Err(zeiler_player::SessionError::Mpv(m)) if m.contains("mpv error")),
+        "{missing:?}"
+    );
+    player.quit();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// (e) Quitting shuts the core down and says so.
 #[test]
 fn quit_reports_shutdown() {

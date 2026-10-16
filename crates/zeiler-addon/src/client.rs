@@ -45,6 +45,13 @@ impl AddonClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, url: Url) -> Result<T, AddonError> {
+        let body = self.get_bytes(url, MAX_RESPONSE_BYTES).await?;
+        Ok(serde_json::from_slice(&body)?)
+    }
+
+    /// GET `url` and return its body, refusing a non-success status and a body over
+    /// `limit` bytes.
+    pub(crate) async fn get_bytes(&self, url: Url, limit: usize) -> Result<Vec<u8>, AddonError> {
         let response = self.http.get(url.clone()).send().await?;
         let status = response.status();
         if !status.is_success() {
@@ -54,11 +61,9 @@ impl AddonClient {
             });
         }
         if let Some(len) = response.content_length()
-            && len > MAX_RESPONSE_BYTES as u64
+            && len > limit as u64
         {
-            return Err(AddonError::TooLarge {
-                limit_bytes: MAX_RESPONSE_BYTES,
-            });
+            return Err(AddonError::TooLarge { limit_bytes: limit });
         }
         // Stream the body and enforce the cap incrementally: with gzip/chunked responses
         // content_length() is None, and the cap must bound decompressed allocation, not
@@ -66,14 +71,12 @@ impl AddonClient {
         let mut body = Vec::new();
         let mut response = response;
         while let Some(chunk) = response.chunk().await? {
-            if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
-                return Err(AddonError::TooLarge {
-                    limit_bytes: MAX_RESPONSE_BYTES,
-                });
+            if body.len() + chunk.len() > limit {
+                return Err(AddonError::TooLarge { limit_bytes: limit });
             }
             body.extend_from_slice(&chunk);
         }
-        Ok(serde_json::from_slice(&body)?)
+        Ok(body)
     }
 
     /// Fetch and parse a manifest from its transport URL.

@@ -14,11 +14,15 @@ mod fanout;
 mod manifest;
 mod request;
 mod resource;
+mod subfile;
 
 pub use client::{AddonClient, MAX_RESPONSE_BYTES};
+// encoding overrides are named by encoding_rs labels (`Encoding::for_label`)
+pub use encoding_rs::Encoding;
 pub use error::AddonError;
 pub use fanout::{
-    AddonStreams, MetaLookup, aggregate_streams, find_meta, first_meta, meta_types_to_try,
+    AddonStreams, AddonSubtitles, MetaLookup, aggregate_streams, aggregate_subtitles, find_meta,
+    first_meta, meta_types_to_try,
 };
 pub use manifest::{
     Descriptor, DescriptorFlags, ExtraProp, Manifest, ManifestBehaviorHints, ManifestCatalog,
@@ -32,4 +36,8 @@ pub use resource::{
     AddonCatalogResponse, CatalogResponse, MetaBehaviorHints, MetaItem, MetaLink, MetaPreview,
     MetaResponse, PosterShape, ProxyHeaders, Stream, StreamBehaviorHints, StreamSource,
     StreamsResponse, Subtitle, SubtitlesResponse, Video,
+};
+pub use subfile::{
+    MAX_SUBTITLE_BYTES, SubtitleError, SubtitleFile, SubtitleFormat, decode_subtitle,
+    fetch_subtitle,
 };

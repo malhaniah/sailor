@@ -5,7 +5,8 @@
  * the same code drives either backend; only fullscreen differs (the caller passes it).
  *
  * Keys work while the Zeiler window has focus: Space play/pause (replay once ended),
- * ←/→ seek 5 s, ↑/↓ volume ±5, m mute, f fullscreen, Escape back. A focused text field
+ * ←/→ seek 5 s, ↑/↓ volume ±5, m mute, f fullscreen, s next subtitle, z/x subtitle
+ * delay −/+0.1 s, [ / ] slower/faster, Escape back. A focused text field
  * keeps its own keys, and so does the focused volume slider for the arrows; the seek
  * bar does not (its native step is a fraction of a second), so ←/→ still seek 5 s after
  * a click on it. An open menu takes Escape first (it closes, see ControlsBar).
@@ -16,6 +17,17 @@ import type { MpvState } from "./mpv-state";
 import type { PlaybackClock } from "./playback-clock";
 
 export const SEEK_STEP_SEC = 5;
+/** The z/x subtitle delay step, in seconds. */
+export const SUB_DELAY_STEP = 0.1;
+/** The speeds the menu offers and [ / ] step through. */
+export const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+/** How long a z/x or [ / ] step builds on the previous one rather than on mpv's value. */
+const CHAIN_MS = 1000;
+
+interface Asked {
+  value: number;
+  at: number;
+}
 export const VOLUME_STEP = 5;
 /** The volume slider's and the ↑ key's ceiling (mpv's default volume-max is 130). */
 export const VOLUME_MAX = 100;
@@ -38,6 +50,18 @@ export interface PlayerControls {
   seekBy: (deltaSec: number) => void;
   changeVolume: (delta: number) => void;
   toggleMute: () => void;
+  /** the next subtitle track (and Off), as mpv orders them */
+  cycleSubtitles: () => void;
+  stepSubDelay: (deltaSec: number) => void;
+  /** the next speed of SPEEDS up (+1) or down (-1) */
+  stepSpeed: (direction: 1 | -1) => void;
+}
+
+/** The speed after a [ or ] from `current`. */
+export function nextSpeed(current: number, direction: 1 | -1): number {
+  const faster = SPEEDS.find((s) => s > current + 1e-3);
+  const slower = [...SPEEDS].reverse().find((s) => s < current - 1e-3);
+  return (direction > 0 ? faster : slower) ?? current;
 }
 
 export function usePlayerControls({
@@ -91,9 +115,54 @@ export function usePlayerControls({
     poke();
   }, [poke]);
 
+  // Steps pressed faster than mpv reports them build on the last one asked for, not on
+  // a value mpv has not caught up with yet; after a pause mpv's own value counts again
+  // (it may have changed elsewhere, e.g. keys in the external mpv window).
+  const asked = useRef<{ subDelay?: Asked; speed?: Asked }>({});
+  const base = (name: "subDelay" | "speed") => {
+    const last = asked.current[name];
+    return last && Date.now() - last.at < CHAIN_MS ? last.value : latest.current[name];
+  };
+  const ask = (name: "subDelay" | "speed", value: number) => {
+    asked.current[name] = { value, at: Date.now() };
+  };
+
+  const cycleSubtitles = useCallback(() => {
+    void playerCommand("cycle", "sid").catch(() => undefined);
+    poke();
+  }, [poke]);
+
+  const stepSubDelay = useCallback(
+    (deltaSec: number) => {
+      const next = Math.min(600, Math.max(-600, Math.round((base("subDelay") + deltaSec) * 1000) / 1000));
+      ask("subDelay", next);
+      void playerSetProperty("sub-delay", next).catch(() => undefined);
+      poke();
+    },
+    [poke],
+  );
+
+  const stepSpeed = useCallback(
+    (direction: 1 | -1) => {
+      const next = nextSpeed(base("speed"), direction);
+      ask("speed", next);
+      void playerSetProperty("speed", next).catch(() => undefined);
+      poke();
+    },
+    [poke],
+  );
+
   return useMemo(
-    () => ({ togglePauseOrReplay, seekBy, changeVolume, toggleMute }),
-    [togglePauseOrReplay, seekBy, changeVolume, toggleMute],
+    () => ({
+      togglePauseOrReplay,
+      seekBy,
+      changeVolume,
+      toggleMute,
+      cycleSubtitles,
+      stepSubDelay,
+      stepSpeed,
+    }),
+    [togglePauseOrReplay, seekBy, changeVolume, toggleMute, cycleSubtitles, stepSubDelay, stepSpeed],
   );
 }
 
@@ -159,6 +228,21 @@ export function usePlayerKeys({
           break;
         case "m":
           controls.toggleMute();
+          break;
+        case "s":
+          controls.cycleSubtitles();
+          break;
+        case "z":
+          controls.stepSubDelay(-SUB_DELAY_STEP);
+          break;
+        case "x":
+          controls.stepSubDelay(SUB_DELAY_STEP);
+          break;
+        case "[":
+          controls.stepSpeed(-1);
+          break;
+        case "]":
+          controls.stepSpeed(1);
           break;
       }
     };

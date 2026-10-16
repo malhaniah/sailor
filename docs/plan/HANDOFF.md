@@ -1,7 +1,7 @@
 # Feature plan handoff
 
 How to pick up the feature plan locally. Written when the cloud session handed over on
-2026-10-16, and updated after M4a, M4b and M5 were finished locally the same day.
+2026-10-16, and updated after M4a, M4b, M5 and M6 were finished locally the same day.
 
 ## Where things stand
 
@@ -10,6 +10,9 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 - **Work in progress:** branch `claude/blissful-newton-kbhlcn`, open as draft PR #4. CI is
   green on Windows, macOS and Linux. The `windows-installer` job uploads an installer with
   built-in playback as an artifact you can try. Nothing in PR #4 is released yet.
+- **M6** is one commit on `claude/awesome-archimedes-ad66bd`, on top of the local branch
+  `m5-on-m4b` (PR #5 M4b, then PR #6 M5 rebased onto it). It is not pushed. Once #5 and
+  #6 are merged into main, rebase it onto main.
 
 | Commit | Milestone | What it did |
 |---|---|---|
@@ -21,6 +24,7 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 | `1bf37c9` | M4a | `crates/zeiler-account` (stremio-core-compatible LibraryItem, watched bitfield, progress rules, video order, sorts), `library.json` under `profile_dir()`, `library_*` commands + `library://changed`, progress tracked in Rust from player events via `player_start`'s `context`; three review rounds with adversarial verification |
 | `d085e4c` | M4b | The library on screen (`src/lib/library.tsx` provider and hooks, re-read on `library://changed`): My Library tabs (Continue Watching / Library / History, the six sorts), a Continue Watching row on Home with dismiss, Detail's Add to Library and watched marks (title, season, episode; only released episodes), Resume / Continue on Play, a "Resume from 12:34" prompt in the stream picker, progress bars on posters; two reviews plus a check of their fixes |
 | PR #6 (rebased onto M4b) | M5 | Built-ins: Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) snapshots next to Cinemeta, `scripts/refresh-builtin-manifests.mjs`, each built-in trimmed to its role (Kitsu's own `subtitles`, which redirect to OSv3, are dropped) and streams embedded in a built-in's meta stripped; dedupe by URL or snapshot manifest id; `builtinKitsu`/`builtinOpensubtitles` (an older settings file inherits `builtinCinemeta`, Kitsu also off with `hideAnime`) with Settings → Content switches and disclosures; `find_meta` retries `kitsu:`/`mal:`/`anilist:`/`anidb:` ids as series/movie/anime without re-asking an unreachable addon; policy text now "metadata or subtitles only, switchable, never streams"; two reviews with adversarial verification |
+| M6 commit on `claude/awesome-archimedes-ad66bd` | M6 | Subtitles and audio. `subtitles_get` fan-out with the stream's hash, size and file name. `zeiler-addon/src/subfile.rs`: http(s) only, 10 MiB cap also after gunzip, archives and web pages refused, BOM / UTF-8 / `chardetng` decoding, and only text that *starts* as SRT, WebVTT, ASS or MicroDVD (a saved file is local to mpv, which would follow an EDL's or CUE sheet's paths). Files go to `<cache_dir>/subs/` and are added with `player_subtitle_add`/`_reencode`/`_pick_local` (dialog plugin from Rust only) or a window drop, on both backends, never for a file that changed meanwhile. `sid`/`slang`/`alang` are set before load from the settings and the title's remembered choices (`player-prefs.json`, LRU 200). The UI ranks candidates and makes a language-first automatic pick (`src/lib/subtitles.ts`, `useTracks.ts`). Subtitle menu (sources, language rail, Off/On, inline errors, file, encoding, delay, quick style) and audio menu (tracks, delay); keys s, z/x, [/]. Settings → Subtitles & audio with nested `subtitles{}`/`audio{}` groups read per field, merge-patched and strict at any depth (`settings_groups.rs`). The OpenSubtitles disclosure now describes when it is asked. Two reviews with adversarial refuters; ten findings confirmed and fixed |
 
 ## Decisions already made by the owner
 
@@ -50,8 +54,7 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 
 | # | Milestone | Scope (see critique.md §4 and the named spec) |
 |---|---|---|
-| M6 | Subtitles and audio | `subtitles_get` fan-out, subtitle fetch and normalize (gzip, encoding detection), `player_subtitle_add`, pick a local file (tauri-plugin-dialog, Rust-side only), subtitle menu with sources, delay, style and saved preferences, audio delay and speed (player-ui.json steps 4–7). The built-in OpenSubtitles v3 is already in `addon_list`; Kitsu-as-built-in declares no subtitles (dropped on purpose), so the fan-out only asks it if the user installed Kitsu themselves. The OpenSubtitles disclosure in Settings → Content ("When Zeiler looks for subtitles…") becomes live then |
-| M7 | Skip and next episode | A `zeiler-skip` crate (AniSkip for anime, TheIntroDB, chapter-name fallback), a skip pill, an Up Next card, auto-skip off by default with Undo, bingeGroup next episode via `player_load` (player-ui.json) |
+| M7 | Skip and next episode | A `zeiler-skip` crate (AniSkip for anime, TheIntroDB, chapter-name fallback), a skip pill, an Up Next card, auto-skip off by default with Undo, bingeGroup next episode via `player_load` (player-ui.json). From M6: `player_load` already re-reads the title's remembered choices into `sid`/`slang`/`alang`, and the subtitle hook resets per file at `start-file`, so the next episode gets its automatic subtitle with no extra work; pass the next video's hints to `subtitles_get` (it takes the launch's today) |
 | M8 | Catalogs | Every type and genre, driven by manifest extras; a Browse view; manifest-driven genre tiles; lazy rows; row customization; adult gating (catalogs.json). Since M5, Home shows the built-in Kitsu's four anime rows and `hideAnime` only hides the sidebar room, so rooms.ts should drop anime from Home when it is set. Kitsu's genre options include adult tags (Hentai, Ecchi, …): gate them before any manifest-driven genre picker shows them |
 | M9 | Live | A: the addon `tv`/`channel` room and its Sidebar entry. B: M3U/XMLTV/Xtream, with credentials in a SecretStore and the `live` flag in the player (catalogs.json) |
 | M10 | Marketplace | URL normalization, replace and reorder, update detection, an opt-in community directory with a detail page and labels; stremio:// handler on Windows and Linux (macOS needs an owner decision) (marketplace.json) |
@@ -59,6 +62,20 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 | M12 | Stremio account | Link-code sign-in first, then password; keychain storage; library sync; addon sync with Add/Remove/Reorder; never push built-ins (account-profile.json) |
 | M13 | macOS built-in playback | Render-API NSOpenGLView port of Harbor's `mpv_render_mac.rs` (geometry in points), bundled `@rpath` dylibs |
 | M14 | Optional | Linux embedded, only if a GtkGLArea prototype works first |
+
+Left from M6 for later (the player-ui.json and critique.md items M6 did not take on):
+- step 12 and critique §4: volume normalize (a labelled `af`), volume above 100%
+  (`volume-max`), the stats overlay (key i), chapter ticks on the seek bar, an HLS
+  quality menu;
+- step 4(f), the spec's own "Phase 2": computing the OpenSubtitles hash when a stream
+  does not give one;
+- step 5: pre-adding unselected subtitles per language (`autoAddPerLang`). This was
+  left out on purpose: Settings promises that a subtitle is downloaded only when it is
+  shown. Also anime detection by genre, and stripping Japanese for titles that are not
+  anime;
+- step 6: a secondary subtitle (`secondary-sid`) picker, and the `c` key (`s` cycles);
+- step 7: `subSource` in the per-title choices, and the style fields `fontSize` (the
+  size is `scale`), `shadowColor`, `alignX` and `alignY`.
 
 Also still open: the download website. The owner asked for OS detection, a downloads page and a
 product tour. It is not started, and the domain is `zeiler.io`.
@@ -132,6 +149,14 @@ purpose; see the comment in `Cargo.toml`.
   the webview, focus hand-back, and Escape/fullscreen. CI linked the code and ran the
   headless libmpv tests on Windows, but nobody has watched a video yet. Try the
   `windows-installer` artifact from PR #4.
+- M6 subtitles in the real app. `sub-add` was run on the built-in core only, in the
+  headless libmpv test (`subtitles_are_added_as_selected_external_tracks`); the menus,
+  the automatic pick and the per-title choices were smoke-tested in the browser with
+  mocked IPC; a real OpenSubtitles v3 subtitle was fanned out for, downloaded and decoded
+  by `cargo test -p zeiler-addon --test live -- --ignored`. Not yet tried: `sub-add`,
+  the style fallbacks and the Box background on external mpv (none was installed), the
+  OS file dialog and drag-and-drop on any OS, and the Linux and macOS builds of the
+  dialog plugin (CI will build them).
 - The M5 built-ins in the real app: the Settings → Content switches, the Anime room and
   Kitsu details were smoke-tested in the browser with mocked IPC only, and the live Kitsu
   and OpenSubtitles responses only through `cargo test -p zeiler-addon --test live --

@@ -8,8 +8,9 @@
 //!
 //! Never listed, by design: `loadfile`, `sub-add`, `af`, `vf`, `glsl-shaders`,
 //! `run`, `script-message`, `keybind`, `define-section` and friends. Loading goes
-//! through `player_start`/`player_load` (scheme-checked requests); later features
-//! that need the others get their own dedicated, validated commands.
+//! through `player_start`/`player_load` (scheme-checked requests) and subtitles
+//! through `player_subtitle_*` (`subtitles.rs`: only files Zeiler wrote); later
+//! features that need the others get their own dedicated, validated commands.
 
 use serde_json::Value;
 
@@ -77,7 +78,8 @@ const SETTABLE: &[(&str, Rule)] = &[
 ];
 
 /// Subtitle fonts the UI may pick: generic families plus fonts that ship with the
-/// major desktop OSes. (The subtitle style UI lands later; this is its list.)
+/// major desktop OSes. Settings offers the same list (src/lib/subtitle-style.ts; a
+/// test checks they agree).
 const FONTS: &[&str] = &[
     "sans-serif",
     "serif",
@@ -495,6 +497,21 @@ mod tests {
         ] {
             assert!(validate_readable(name).is_err(), "{name} must be refused");
         }
+    }
+
+    /// Settings offers exactly the fonts the player allows (src/lib/subtitle-style.ts
+    /// keeps a copy), so no choice there is refused here.
+    #[test]
+    fn the_settings_font_list_matches() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source = std::fs::read_to_string(root.join("../src/lib/subtitle-style.ts")).unwrap();
+        let list = source
+            .split("export const SUBTITLE_FONTS = [")
+            .nth(1)
+            .and_then(|rest| rest.split(']').next())
+            .expect("SUBTITLE_FONTS in subtitle-style.ts");
+        let fonts: Vec<&str> = list.split('"').skip(1).step_by(2).collect();
+        assert_eq!(fonts, FONTS);
     }
 
     #[test]

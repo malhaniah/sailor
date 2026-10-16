@@ -171,7 +171,10 @@ type PropertyReply = oneshot::Sender<Result<Value, String>>;
 enum Cmd {
     Load(PlaybackRequest),
     SetProperty(String, Value),
+    /// Fire and forget: a failure is logged.
     Command(Vec<String>),
+    /// A command whose outcome the caller waits for.
+    CommandChecked(Vec<String>, oneshot::Sender<Result<(), String>>),
     GetProperty(String, PropertyReply),
     Quit,
 }
@@ -223,6 +226,17 @@ impl EmbeddedPlayer {
 
     pub fn command(&self, args: Vec<String>) -> Result<(), EmbeddedError> {
         self.send(Cmd::Command(args))
+    }
+
+    /// Run a command and wait for mpv's answer (in command order), for commands whose
+    /// failure the caller must report, such as `sub-add`.
+    pub async fn command_checked(&self, args: Vec<String>) -> Result<(), SessionError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Cmd::CommandChecked(args, tx))
+            .map_err(|_| SessionError::Closed)?;
+        rx.await
+            .map_err(|_| SessionError::Closed)?
+            .map_err(SessionError::Mpv)
     }
 
     /// Read a property, typed per [`property_kind`]. Answered by the actor thread
@@ -385,13 +399,13 @@ fn actor_thread(
                 }
             }
             Cmd::Command(args) => {
-                if args.is_empty() {
-                    continue;
+                if let Err(e) = run_command(&mpv, &args) {
+                    let command = args.first().map_or("", String::as_str);
+                    warn!(%command, error = %e, "mpv command failed");
                 }
-                let tail: Vec<&str> = args[1..].iter().map(String::as_str).collect();
-                if let Err(e) = mpv.command(&args[0], &tail) {
-                    warn!(command = %args[0], error = %readable(&e), "mpv command failed");
-                }
+            }
+            Cmd::CommandChecked(args, reply) => {
+                let _ = reply.send(run_command(&mpv, &args));
             }
             Cmd::GetProperty(name, reply) => {
                 let _ = reply.send(read_property(&mpv, &name).map_err(|e| readable(&e)));
@@ -404,6 +418,15 @@ fn actor_thread(
     // Whichever thread drops the last Arc destroys the handle.
     let _ = mpv.command("quit", &[]);
     debug!("mpv actor thread exiting");
+}
+
+/// Run an argv-form command; the error is readable text.
+fn run_command(mpv: &Mpv, args: &[String]) -> Result<(), String> {
+    let Some((name, tail)) = args.split_first() else {
+        return Err("empty command".into());
+    };
+    let tail: Vec<&str> = tail.iter().map(String::as_str).collect();
+    mpv.command(name, &tail).map_err(|e| readable(&e))
 }
 
 fn read_property(mpv: &Mpv, name: &str) -> Result<Value, libmpv2::Error> {
@@ -444,9 +467,12 @@ fn load(
         _ => mpv.set_property("start", "none")?,
     }
     mpv.set_property("force-media-title", request.title.as_deref().unwrap_or(""))?;
-    // shell-only pre-load options (never set by the webview; see PlaybackRequest)
+    // shell-only pre-load options (never set by the webview; see PlaybackRequest): a
+    // preference mpv refuses costs that preference, never the playback
     for (name, value) in &request.options {
-        mpv.set_property(name, value.as_str())?;
+        if let Err(e) = mpv.set_property(name, value.as_str()) {
+            warn!(option = %name, error = %readable(&e), "mpv refused a pre-load option");
+        }
     }
 
     mpv.command("loadfile", &[&request.url, "replace"])?;

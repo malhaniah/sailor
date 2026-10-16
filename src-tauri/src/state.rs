@@ -11,6 +11,9 @@ use zeiler_player::{Player, PlayerBackend};
 
 use crate::error::IpcError;
 use crate::persist::{read_json, write_json};
+use crate::settings_groups::{
+    AudioSettings, KeyError, SettingsObject, SubtitleSettings, survives, with_key,
+};
 
 /// Device settings, persisted as `settings.json` and mirrored wholesale to the UI (so
 /// never put secrets here). The reserved key map for later features is in
@@ -60,6 +63,11 @@ pub struct Settings {
     /// this build has it and it starts, else external mpv), `embedded` or `external`.
     /// An unknown stored value resets just this setting (lenient read).
     pub player_backend: PlayerBackend,
+    /// Subtitle languages, auto-load and look (`settings_groups.rs`). Read leniently
+    /// per field; a patch names only the fields it changes.
+    pub subtitles: SubtitleSettings,
+    /// Preferred audio languages.
+    pub audio: AudioSettings,
 }
 
 impl Default for Settings {
@@ -80,6 +88,8 @@ impl Default for Settings {
             builtin_opensubtitles: true,
             auto_update: true,
             player_backend: PlayerBackend::Auto,
+            subtitles: SubtitleSettings::default(),
+            audio: AudioSettings::default(),
         }
     }
 }
@@ -100,7 +110,7 @@ impl<'de> Deserialize<'de> for Settings {
         let has_opensubtitles = object.contains_key("builtinOpensubtitles");
         let mut settings = Settings::default();
         for (key, value) in object {
-            match settings.with_key(&key, value) {
+            match with_key(&settings, &key, value) {
                 Ok(next) => settings = next,
                 Err(KeyError::Unknown) => {}
                 Err(KeyError::Invalid(e)) => {
@@ -121,29 +131,25 @@ impl<'de> Deserialize<'de> for Settings {
     }
 }
 
-enum KeyError {
-    Unknown,
-    Invalid(serde_json::Error),
+impl SettingsObject for Settings {
+    fn to_object(&self) -> Map<String, Value> {
+        match Settings::serialize(self, serde_json::value::Serializer) {
+            Ok(Value::Object(object)) => object,
+            _ => unreachable!("Settings serializes to a JSON object"),
+        }
+    }
+
+    fn from_object(object: Map<String, Value>) -> Result<Self, serde_json::Error> {
+        Settings::deserialize(Value::Object(object))
+    }
 }
 
 impl Settings {
-    /// A copy with one top-level key (camelCase) replaced, type-checked strictly.
-    fn with_key(&self, key: &str, value: Value) -> Result<Settings, KeyError> {
-        let Ok(Value::Object(mut object)) =
-            Settings::serialize(self, serde_json::value::Serializer)
-        else {
-            unreachable!("Settings serializes to a JSON object");
-        };
-        let Some(slot) = object.get_mut(key) else {
-            return Err(KeyError::Unknown);
-        };
-        *slot = value;
-        Settings::deserialize(Value::Object(object)).map_err(KeyError::Invalid)
-    }
-
     /// Merge a partial update (top-level camelCase keys) into a copy of these settings.
-    /// Strict: an unknown key or a wrongly typed value rejects the whole patch, so a
-    /// buggy caller never silently resets a setting.
+    /// A group's value (`subtitles`, `audio`) is merged into the group, so it names
+    /// only the fields it changes. Strict: an unknown key, or a wrongly typed or
+    /// out-of-range value at any depth, rejects the whole patch, so a buggy caller
+    /// never silently resets a setting.
     pub fn patched(&self, patch: Value) -> Result<Settings, IpcError> {
         let Value::Object(patch) = patch else {
             return Err(IpcError::InvalidInput(
@@ -152,7 +158,8 @@ impl Settings {
         };
         let mut next = self.clone();
         for (key, value) in patch {
-            next = next.with_key(&key, value).map_err(|e| match e {
+            let wanted = value.clone();
+            next = with_key(&next, &key, value).map_err(|e| match e {
                 KeyError::Unknown => {
                     IpcError::InvalidInput(format!("\"{key}\" is not a known setting."))
                 }
@@ -160,6 +167,16 @@ impl Settings {
                     "The value for the setting \"{key}\" is invalid: {e}."
                 )),
             })?;
+            // a group reads leniently, so whatever it dropped was invalid
+            if !next
+                .to_object()
+                .get(&key)
+                .is_some_and(|stored| survives(&wanted, stored))
+            {
+                return Err(IpcError::InvalidInput(format!(
+                    "The value for the setting \"{key}\" is invalid: {wanted}."
+                )));
+            }
         }
         Ok(next)
     }
@@ -431,6 +448,64 @@ mod tests {
         assert!(!patched.builtin_kitsu && !patched.builtin_opensubtitles);
         assert!(patched.builtin_cinemeta);
         assert!(defaults.patched(json!({"builtinKitsu": 0})).is_err());
+    }
+
+    #[test]
+    fn subtitle_and_audio_groups_read_per_field_and_patch_one_field_at_a_time() {
+        let stored: Settings = serde_json::from_value(json!({
+            "theme": "ocean",
+            "subtitles": {"langs": ["ar"], "autoLoad": false, "style": {"scale": 9, "bold": true}},
+            "audio": {"langs": ["en"], "animeLangs": "ja"}
+        }))
+        .unwrap();
+        assert_eq!(stored.theme, "ocean");
+        assert_eq!(stored.subtitles.langs, ["ar"]);
+        assert!(!stored.subtitles.auto_load);
+        assert_eq!(stored.subtitles.style.scale, None, "out of range → unset");
+        assert_eq!(stored.subtitles.style.bold, Some(true));
+        assert_eq!(stored.audio.langs, ["en"]);
+        assert_eq!(stored.audio.anime_langs, ["ja"], "wrong type → default");
+
+        // one style field, without the rest of the group: merged, the rest kept
+        let patched = stored
+            .patched(json!({"subtitles": {"style": {"scale": 1.25}}}))
+            .unwrap();
+        assert_eq!(patched.subtitles.style.scale, Some(1.25));
+        assert_eq!(patched.subtitles.style.bold, Some(true));
+        assert_eq!(patched.subtitles.langs, ["ar"]);
+        assert!(!patched.subtitles.auto_load);
+        // null unsets a field; a list is replaced, not merged
+        let patched = patched
+            .patched(json!({"subtitles": {"style": {"bold": null}, "langs": ["en", "fr"]}}))
+            .unwrap();
+        assert_eq!(patched.subtitles.style.bold, None);
+        assert_eq!(patched.subtitles.style.scale, Some(1.25));
+        assert_eq!(patched.subtitles.langs, ["en", "fr"]);
+
+        // strict at any depth: an unknown field, a wrong type, a value mpv refuses
+        for bad in [
+            json!({"subtitles": {"stlye": {"scale": 1}}}),
+            json!({"subtitles": {"style": {"scale": "big"}}}),
+            json!({"subtitles": {"style": {"scale": 9}}}),
+            json!({"subtitles": {"style": {"font": "/tmp/evil.ttf"}}}),
+            json!({"subtitles": {"style": {"color": "red"}}}),
+            json!({"subtitles": {"langs": ["en", "en;fr"]}}),
+            json!({"subtitles": {"autoLoad": 1}}),
+            json!({"subtitles": 5}),
+            json!({"audio": {"langs": "en"}}),
+        ] {
+            let result = patched.patched(bad.clone());
+            assert!(
+                matches!(&result, Err(IpcError::InvalidInput(m)) if m.contains('"')),
+                "{bad} must be refused: {result:?}"
+            );
+        }
+        // a refused patch changes nothing, even its valid keys
+        assert!(
+            patched
+                .patched(json!({"theme": "dusk", "subtitles": {"autoLoad": "x"}}))
+                .is_err()
+        );
     }
 
     #[tokio::test]
