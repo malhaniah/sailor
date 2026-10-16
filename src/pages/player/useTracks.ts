@@ -21,6 +21,12 @@
  *   whenever they change after the file settled (also from keys in the mpv window).
  * - Subtitles added to mpv go away with the next file, so the per-file state resets at
  *   `start-file`.
+ * - **Another file.** External mpv lets the user open another file in its window
+ *   (dropped in, or through their own bindings). As for Rust's progress tracker
+ *   (library/progress.rs), a `start-file` after the launched file started is another
+ *   video, unless the file before it ended in a redirect. Until Play again starts the
+ *   launch anew, nothing here picks, applies or remembers the title's choices for it,
+ *   and the title's stream and addon subtitles are not offered.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerLaunch } from "../../lib/playback-handoff";
@@ -29,7 +35,6 @@ import {
   errorMessage,
   type MpvTrack,
   onSubtitleDropped,
-  type PlayerEvent,
   playerCommand,
   playerPrefsGet,
   playerPrefsSet,
@@ -57,6 +62,7 @@ import {
 } from "../../lib/subtitles";
 import type { AddonSubtitles, AudioSettings, SubtitleSettings, SubtitleStyle } from "../../lib/types";
 import type { MpvState } from "./mpv-state";
+import type { PlayerEventListener } from "./usePlaybackSession";
 
 /** How long after `file-loaded` the automatic pick waits for mpv's own selection. */
 const SETTLE_MS = 400;
@@ -135,7 +141,7 @@ export function useTracks({
   mpv: MpvState;
   /** the player runs and takes commands (not loading, not gone) */
   running: boolean;
-  subscribeEvents: (listener: (event: PlayerEvent) => void) => () => void;
+  subscribeEvents: (listener: PlayerEventListener) => () => void;
 }): Tracks {
   const meta = launch.meta;
   const [settings, setSettings] = useState<{ subtitles: SubtitleSettings; audio: AudioSettings } | null>(null);
@@ -158,6 +164,16 @@ export function useTracks({
   const userChose = useRef(0);
   // automatic downloads tried for the current file
   const autoTries = useRef(0);
+  // another file plays in the player (see "Another file" above); the ref for callbacks
+  const [foreign, setForeign] = useState(false);
+  const foreignRef = useRef(false);
+  // the player start (`run`) the events come from, whether its file started, and why
+  // the last file ended
+  const playback = useRef<{ run: number; fileStarted: boolean; lastEnd: string | null }>({
+    run: 0,
+    fileStarted: false,
+    lastEnd: null,
+  });
   const mounted = useRef(true);
   useEffect(
     () => () => {
@@ -199,7 +215,7 @@ export function useTracks({
 
   const listingRef = useRef<Tracks["listing"]>("idle");
   const list = useCallback(() => {
-    if (!query || listingRef.current !== "idle") return;
+    if (!query || foreignRef.current || listingRef.current !== "idle") return;
     listingRef.current = "loading";
     setListing("loading");
     const done = (result: AddonSubtitles[]) => {
@@ -224,24 +240,39 @@ export function useTracks({
     titlePrefs?.subLang !== "off" &&
     (settings.subtitles.autoLoad || !!titlePrefs?.subLang);
   useEffect(() => {
-    if (wantsSubtitles) list();
-  }, [wantsSubtitles, list]);
+    if (wantsSubtitles && !foreign) list();
+  }, [wantsSubtitles, foreign, list]);
 
   // per-file state follows mpv's events
-  useEffect(
-    () =>
-      subscribeEvents((event) => {
-        if (event.type === "start-file") {
-          setAdded({});
-          setPending({});
-          setLocal({});
-        } else if (event.type === "file-loaded") {
-          autoTries.current = 0;
-          setFileSeq((n) => n + 1);
-        }
-      }),
-    [subscribeEvents],
-  );
+  useEffect(() => {
+    const setForeignFile = (value: boolean) => {
+      if (foreignRef.current === value) return;
+      foreignRef.current = value;
+      setForeign(value);
+      if (value) setNotice("Another file opened in mpv: this title's subtitles and choices stay out of it.");
+    };
+    return subscribeEvents((event, run) => {
+      if (playback.current.run !== run) {
+        // Play again: the launched file plays anew
+        playback.current = { run, fileStarted: false, lastEnd: null };
+        setForeignFile(false);
+      }
+      const now = playback.current;
+      if (event.type === "start-file") {
+        if (now.fileStarted && now.lastEnd !== "redirect") setForeignFile(true);
+        now.fileStarted = true;
+        setAdded({});
+        setPending({});
+        setLocal({});
+      } else if (event.type === "end-file") {
+        now.lastEnd = event.reason;
+      } else if (event.type === "file-loaded") {
+        now.fileStarted = true; // (a missed start-file)
+        autoTries.current = 0;
+        setFileSeq((n) => n + 1);
+      }
+    });
+  }, [subscribeEvents]);
   useEffect(() => {
     if (fileSeq === 0) return;
     const timer = window.setTimeout(() => setSettledSeq(fileSeq), SETTLE_MS);
@@ -266,20 +297,24 @@ export function useTracks({
   // --- the entries -----------------------------------------------------------------------
 
   const prefs = useMemo(() => {
-    const remembered = titlePrefs?.subLang && titlePrefs.subLang !== "off" ? [titlePrefs.subLang] : [];
+    const remembered =
+      !foreign && titlePrefs?.subLang && titlePrefs.subLang !== "off" ? [titlePrefs.subLang] : [];
     return effectiveLanguages([...remembered, ...(settings?.subtitles.langs ?? [])]);
-  }, [titlePrefs, settings]);
+  }, [foreign, titlePrefs, settings]);
 
+  // the launch's subtitles (none for another file)
   const candidates = useMemo(
     () =>
-      buildCandidates({
-        streamSubtitles: launch.stream?.subtitles ?? [],
-        streamAddon: launch.addonName,
-        groups,
-        filename: launch.stream?.behaviorHints.filename ?? null,
-        prefs,
-      }),
-    [launch.stream, launch.addonName, groups, prefs],
+      foreign
+        ? []
+        : buildCandidates({
+            streamSubtitles: launch.stream?.subtitles ?? [],
+            streamAddon: launch.addonName,
+            groups,
+            filename: launch.stream?.behaviorHints.filename ?? null,
+            prefs,
+          }),
+    [foreign, launch.stream, launch.addonName, groups, prefs],
   );
 
   const subtitles = useMemo(
@@ -292,7 +327,8 @@ export function useTracks({
 
   const remember = useCallback(
     (patch: Partial<Omit<TitlePrefs, "metaId">>) => {
-      if (!meta) return;
+      // choices made for another file are not the title's
+      if (!meta || foreignRef.current) return;
       void playerPrefsSet(meta.id, patch)
         .then((p) => mounted.current && setTitlePrefs(p))
         .catch(() => undefined);
@@ -468,10 +504,12 @@ export function useTracks({
 
   // Rust already gave mpv the title's languages and whether a subtitle may show (`slang`,
   // `alang`, `sid`). The delay, the speed and an audio track mpv missed come here, at once.
+  // Another file's turn passes with nothing done (so Play again's file waits for its own).
   useEffect(() => {
     if (!running || settledSeq === 0 || titlePrefs === undefined) return;
     if (prefsDoneSeq === settledSeq) return;
     setPrefsDoneSeq(settledSeq);
+    if (foreign) return;
     if (titlePrefs?.subDelaySec != null) {
       void playerSetProperty("sub-delay", titlePrefs.subDelaySec).catch(() => undefined);
     }
@@ -485,12 +523,12 @@ export function useTracks({
         void playerSetProperty("aid", wanted.id).catch(() => undefined);
       }
     }
-  }, [running, settledSeq, prefsDoneSeq, titlePrefs]);
+  }, [running, settledSeq, prefsDoneSeq, foreign, titlePrefs]);
 
   useEffect(() => {
     if (!running || settledSeq === 0 || !settings || titlePrefs === undefined) return;
     if (subsDoneSeq === settledSeq) return;
-    if (userChose.current === settledSeq) {
+    if (foreign || userChose.current === settledSeq) {
       setSubsDoneSeq(settledSeq);
       return;
     }
@@ -511,17 +549,19 @@ export function useTracks({
     setSubsDoneSeq(settledSeq);
     if (pick.kind === "candidate") autoTries.current += 1;
     showPick(pick, true);
-  }, [running, settledSeq, subsDoneSeq, settings, titlePrefs, listing, currentPick, showPick]);
+  }, [running, settledSeq, subsDoneSeq, foreign, settings, titlePrefs, listing, currentPick, showPick]);
 
-  // delay and speed are remembered whenever they change once the file settled
-  const settled = running && settledSeq > 0 && prefsDoneSeq === settledSeq;
+  // delay and speed are remembered whenever they change once the file settled (the
+  // launched file: another one's are not the title's)
+  const settled = !foreign && running && settledSeq > 0 && prefsDoneSeq === settledSeq;
   useRemembered(settled, mpv.subDelay, titlePrefs?.subDelaySec ?? 0, (v) => remember({ subDelaySec: v === 0 ? null : v }));
   useRemembered(settled, mpv.speed, titlePrefs?.rate ?? 1, (v) => remember({ rate: v === 1 ? null : v }));
 
   return {
     subtitles,
-    listing,
-    listErrors: groups.filter((g) => g.error).map((g) => `${g.addonName}: ${g.error}`),
+    // (the addons were asked about the title, not another file)
+    listing: foreign ? "idle" : listing,
+    listErrors: foreign ? [] : groups.filter((g) => g.error).map((g) => `${g.addonName}: ${g.error}`),
     enabled: mpv.sid !== "no" && mpv.sid !== "false" && subtitles.some((e) => e.selected),
     selectSubtitle,
     subtitlesOff,

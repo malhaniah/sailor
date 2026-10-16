@@ -53,7 +53,7 @@ v0.2.0 the same day.
 
 | # | Milestone | Scope (see critique.md §4 and the named spec) |
 |---|---|---|
-| M7 | Skip and next episode | A `zeiler-skip` crate (AniSkip for anime, TheIntroDB, chapter-name fallback), a skip pill, an Up Next card, auto-skip off by default with Undo, bingeGroup next episode via `player_load` (player-ui.json). From M6: `player_load` already re-reads the title's remembered choices into `sid`/`slang`/`alang`, and the subtitle hook resets per file at `start-file`, so the next episode gets its automatic subtitle with no extra work; pass the next video's hints to `subtitles_get` (it takes the launch's today) |
+| M7 | Skip and next episode | A `zeiler-skip` crate (AniSkip for anime, TheIntroDB, chapter-name fallback), a skip pill, an Up Next card, auto-skip off by default with Undo, bingeGroup next episode via `player_load` (player-ui.json). From M6: `player_load` already re-reads the title's remembered choices into `sid`/`slang`/`alang`, and the subtitle hook resets per file at `start-file`, so the next episode gets its automatic subtitle with no extra work; pass the next video's hints to `subtitles_get` (it takes the launch's today). But the hook takes a `start-file` after an `end-file` (other than a redirect) for another file the user opened in external mpv, and leaves it alone, until the page starts a new run (`run` in `usePlaybackSession`, counted per `player_start`): a `player_load` for the next episode must count as one too, and give the hook the new video |
 | M8 | Catalogs | Every type and genre, driven by manifest extras; a Browse view; manifest-driven genre tiles; lazy rows; row customization; adult gating (catalogs.json). Since M5, Home shows the built-in Kitsu's four anime rows and `hideAnime` only hides the sidebar room, so rooms.ts should drop anime from Home when it is set. Kitsu's genre options include adult tags (Hentai, Ecchi, …): gate them before any manifest-driven genre picker shows them |
 | M9 | Live | A: the addon `tv`/`channel` room and its Sidebar entry. B: M3U/XMLTV/Xtream, with credentials in a SecretStore and the `live` flag in the player (catalogs.json) |
 | M10 | Marketplace | URL normalization, replace and reorder, update detection, an opt-in community directory with a detail page and labels; stremio:// handler on Windows and Linux (macOS needs an owner decision) (marketplace.json) |
@@ -155,7 +155,9 @@ purpose; see the comment in `Cargo.toml`.
   by `cargo test -p zeiler-addon --test live -- --ignored`. Not yet tried: `sub-add`,
   the style fallbacks and the Box background on external mpv (none was installed), the
   OS file dialog and drag-and-drop on any OS, and the Linux and macOS builds of the
-  dialog plugin (CI will build them).
+  dialog plugin (CI will build them). Another video opened in external mpv's window
+  (the hook then leaves the title's subtitles and choices out of it) was tried with
+  mocked events only.
 - The M5 built-ins in the real app: the Settings → Content switches, the Anime room and
   Kitsu details were smoke-tested in the browser with mocked IPC only, and the live Kitsu
   and OpenSubtitles responses only through `cargo test -p zeiler-addon --test live --
