@@ -17,10 +17,10 @@ jobs:
           - { name: run2, env: "PROTO_RUN=2" }
           - { name: run3, env: "PROTO_RUN=3" }
           - { name: run4, env: "PROTO_RUN=4" }
-          - { name: vto0-1, env: "PROTO_VTO0=1 PROTO_RUN=1" }
-          - { name: vto0-2, env: "PROTO_VTO0=1 PROTO_RUN=2" }
-          - { name: vto0-3, env: "PROTO_VTO0=1 PROTO_RUN=3" }
-          - { name: vto0-4, env: "PROTO_VTO0=1 PROTO_RUN=4" }
+          - { name: lazy-1, env: "PROTO_LAZY=1 PROTO_RUN=1" }
+          - { name: lazy-2, env: "PROTO_LAZY=1 PROTO_RUN=2" }
+          - { name: lazy-3, env: "PROTO_LAZY=1 PROTO_RUN=3" }
+          - { name: lazy-4, env: "PROTO_LAZY=1 PROTO_RUN=4" }
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

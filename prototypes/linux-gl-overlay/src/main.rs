@@ -19,6 +19,9 @@ use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamA
 use webkit2gtk::{WebViewExt, SettingsExt};
 
 static FRAMES: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    static INIT: RefCell<Option<Rc<dyn Fn(&gtk::GLArea)>>> = const { RefCell::new(None) };
+}
 static START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
 
 /// GL entry points from the loader of the context that is current: GDK's GL context
@@ -161,12 +164,7 @@ fn main() {
     {
         let mpv = Rc::clone(&mpv);
         let render = Rc::clone(&render);
-        area.connect_realize(move |area| {
-            area.make_current();
-            if let Some(e) = area.error() {
-                println!("PROTO: GLArea error {e}");
-                return;
-            }
+        let init = Rc::new(move |area: &gtk::GLArea| {
             println!("PROTO: GL {} / {}", gl_string(0x1F01), gl_string(0x1F02));
             println!("PROTO: realize context {:#x}", current_glx());
             let ctx = mpv
@@ -192,10 +190,28 @@ fn main() {
                 .expect("loadfile");
             println!("PROTO: render context created, playing");
         });
+        let lazy = std::env::var_os("PROTO_LAZY").is_some();
+        let init_r = Rc::clone(&init);
+        area.connect_realize(move |area| {
+            area.make_current();
+            if let Some(e) = area.error() {
+                println!("PROTO: GLArea error {e}");
+                return;
+            }
+            if !lazy {
+                init_r(area);
+            }
+        });
+        // PROTO_LAZY: create the render context at the first render instead
+        INIT.with(|slot| *slot.borrow_mut() = lazy.then(|| init as Rc<dyn Fn(&gtk::GLArea)>));
     }
     {
         let render = Rc::clone(&render);
         area.connect_render(move |area, _| {
+            if let Some(init) = INIT.with(|slot| slot.borrow_mut().take()) {
+                println!("PROTO: lazy init at the first render");
+                init(area);
+            }
             // PROTO_CLEAR: plain blue instead of mpv (does any GL content show?)
             if std::env::var_os("PROTO_CLEAR").is_some() {
                 type ClearColor = unsafe extern "C" fn(f32, f32, f32, f32);
