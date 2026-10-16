@@ -175,7 +175,17 @@ fn main() {
                 if let Err(e) = ctx.render::<()>(fbo, w, h, true) {
                     println!("PROTO: render error {e:?}");
                 }
-                FRAMES.fetch_add(1, Ordering::Relaxed);
+                let n = FRAMES.fetch_add(1, Ordering::Relaxed);
+                if n % 100 == 0 {
+                    type GetError = unsafe extern "C" fn() -> u32;
+                    type ReadPixels = unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut u8);
+                    let err = unsafe { std::mem::transmute::<*mut c_void, GetError>(get_proc_address(&(), "glGetError"))() };
+                    let mut px = [0u8; 4];
+                    unsafe {
+                        std::mem::transmute::<*mut c_void, ReadPixels>(get_proc_address(&(), "glReadPixels"))(w / 2, h / 2, 1, 1, 0x1908, 0x1401, px.as_mut_ptr());
+                    }
+                    println!("PROTO: render #{n} fbo={fbo} {w}x{h} glError={err:#x} center={px:?} draw_fbo_after={}", gl_get_integer(0x8CA6));
+                }
             }
             glib::Propagation::Stop
         });
