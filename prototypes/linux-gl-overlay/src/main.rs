@@ -112,6 +112,9 @@ fn main() {
             init.set_option("idle", "yes")?;
             init.set_option("keep-open", "yes")?;
             init.set_option("video-timing-offset", "0")?;
+            // the prototype's diagnostics: mpv's own log on stdout
+            init.set_option("terminal", "yes")?;
+            init.set_option("msg-level", "all=info,vo=v,libmpv_render=v,vd=v")?;
             Ok(())
         })
         .expect("libmpv initializes"),
@@ -183,8 +186,12 @@ fn main() {
 
     let seconds: u64 = std::env::var("PROTO_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
     let render_q = Rc::clone(&render);
+    let mpv_q = Rc::clone(&mpv);
     glib::timeout_add_local_once(Duration::from_secs(seconds), move || {
         println!("PROTO: frames rendered {}", FRAMES.load(Ordering::Relaxed));
+        for p in ["vo-configured", "video-params", "video-out-params", "hwdec-current", "time-pos"] {
+            println!("PROTO: {p} = {:?}", mpv_q.get_property::<String>(p));
+        }
         // free the render context before the core (GL current)
         render_q.borrow_mut().take();
         gtk::main_quit();
