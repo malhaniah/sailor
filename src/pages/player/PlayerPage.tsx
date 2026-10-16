@@ -31,7 +31,8 @@
  * automatic pick, per-title choices), SubtitleMenu.tsx, AudioMenu.tsx, menu.tsx,
  * useSkip.ts (intro/recap/credits: where, Skip, by itself with Undo), useNextEpisode.ts
  * (the next episode: binge stream, Up Next, by itself), SkipLayer.tsx (their pill,
- * card, toast and keys, over either screen).
+ * card, toast and keys, over either screen), StatsOverlay.tsx (key i), QualityMenu.tsx
+ * (HLS variants).
  *
  * The next episode plays in the same player (`player_load`), so the page stays: from
  * then on `session.launch` is that episode's launch, and everything below follows it.
@@ -45,6 +46,7 @@ import { launchForRoute, launchIdForRoute, releaseRoute } from "./launch";
 import { createPlaybackClock } from "./playback-clock";
 import { PlayerChrome } from "./PlayerChrome";
 import { SkipLayer } from "./SkipLayer";
+import { StatsOverlay } from "./StatsOverlay";
 import { NothingToPlay, UncontrolledPlayback } from "./states";
 import { useSurfaceSync } from "./surface-sync";
 import { useNextEpisode } from "./useNextEpisode";
@@ -184,6 +186,27 @@ function PlayerSession({ launch: launched, launchId }: { launch: PlayerLaunch; l
     reportLaunchFailed(launchId);
   }, [phase.kind, launchId, launch, launched]);
 
+  // the stats overlay (key i), while there is something playing to describe
+  const [stats, setStats] = useState(false);
+  const closeStats = useCallback(() => setStats(false), []);
+  const statsKey = phase.kind === "playing" || phase.kind === "ended";
+  useEffect(() => {
+    if (!statsKey) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "i" || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLInputElement && target.type !== "range" && target.type !== "button")
+      ) {
+        return;
+      }
+      setStats((on) => !on);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [statsKey]);
+
   // The session's cleanup stops the player (except external mpv that is playing, which
   // Back keeps — see backKeepsPlaying) and removes the torrent (also when its resolve
   // is still running).
@@ -204,7 +227,10 @@ function PlayerSession({ launch: launched, launchId }: { launch: PlayerLaunch; l
 
   const controllable = phase.kind === "playing" || phase.kind === "ended";
   const layer = controllable && (
-    <SkipLayer skip={skip} next={next} upNextSeconds={upNextSeconds} keys={controllable} />
+    <>
+      <SkipLayer skip={skip} next={next} upNextSeconds={upNextSeconds} keys={controllable} />
+      {stats && <StatsOverlay mpv={mpv} onClose={closeStats} />}
+    </>
   );
   const onNext = next.next ? next.playNext : null;
 

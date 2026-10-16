@@ -80,7 +80,13 @@ export function PlayerChrome({
   const controlsShown = visible || !playing || paused;
 
   const controllable = playing || phase.kind === "ended";
-  const controls = usePlayerControls({ clock, mpv, ended: phase.kind === "ended", poke });
+  const controls = usePlayerControls({
+    clock,
+    mpv,
+    ended: phase.kind === "ended",
+    volumeMax: tracks.volumeMax,
+    poke,
+  });
 
   // embedded video has no window of its own: fullscreen is the Zeiler window's
   const toggleFullscreen = useCallback(async () => {

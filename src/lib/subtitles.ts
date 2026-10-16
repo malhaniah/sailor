@@ -240,6 +240,19 @@ export function releaseMatch(label: string, filename: string | null): number {
 
 // --- the automatic pick ---------------------------------------------------------------------
 
+/**
+ * Whether `track` is the subtitle showing (not the second one): `sid` names it; only
+ * while `sid` is not a track id yet ("auto") does mpv's own flag count. mpv marks the
+ * `secondary-sid` track `selected` too, telling it apart with `main-selection: 1`.
+ */
+export function isMainSubtitle(track: MpvTrack, sid: string): boolean {
+  if (/^\d+$/.test(sid)) return String(track.id) === sid;
+  return sid !== "no" && sid !== "false" && track.selected === true && track["main-selection"] !== 1;
+}
+
+/** Where a subtitle came from, as the title's choices remember it. */
+export type SubtitleSource = "embedded" | "stream" | "addon";
+
 /** What the automatic pick chose, and in which preferred language (its index). */
 export type AutomaticPick =
   | { kind: "keep"; lang: string | null; prefIndex: number }
@@ -250,23 +263,40 @@ export type AutomaticPick =
 /**
  * What to show when a file starts, language by language in preference order: for the
  * first language that has a full (not forced) subtitle anywhere, what mpv picked if it is
- * in that language, else a full embedded track in it, else its best candidate.
+ * in that language, else a full embedded track in it, else its best candidate. In the
+ * title's remembered language, a remembered stream or addon source comes first.
  */
 export function pickAutomatic({
   tracks,
   sid,
   candidates,
   prefs,
+  remembered = null,
 }: {
   tracks: MpvTrack[];
   sid: string;
   candidates: SubtitleCandidate[];
   prefs: string[];
+  /** the title's remembered subtitle: its language and where it came from */
+  remembered?: { lang: string; source: SubtitleSource } | null;
 }): AutomaticPick {
   const subs = tracks.filter((t) => t.type === "sub");
-  const selected = subs.find((t) => String(t.id) === sid || (t.selected === true && sid !== "no"));
+  const selected = subs.find((t) => isMainSubtitle(t, sid));
   for (const [prefIndex, pref] of prefs.entries()) {
     const fits = (lang: string | null) => !!lang && baseLang(lang) === baseLang(pref);
+    // The title's subtitle came from the stream or an addon last time: in its language,
+    // that source again comes before the video's own tracks (unless one of those is
+    // already added and showing).
+    const source = remembered && fits(remembered.lang) ? remembered.source : null;
+    if (source === "stream" || source === "addon") {
+      const again = candidates.find((c) => c.source === source && fits(c.lang));
+      if (again) {
+        if (selected?.external && !selected.forced && fits(normalizeLang(selected.lang))) {
+          return { kind: "keep", lang: normalizeLang(selected.lang), prefIndex };
+        }
+        return { kind: "candidate", candidate: again, lang: again.lang, prefIndex };
+      }
+    }
     if (selected && !selected.forced && fits(normalizeLang(selected.lang))) {
       return { kind: "keep", lang: normalizeLang(selected.lang), prefIndex };
     }

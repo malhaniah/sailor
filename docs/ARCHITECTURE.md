@@ -228,14 +228,46 @@ run `sub-add` (see "Validation policy").
   mpv reports refusals; the built-in core is the pinned libmpv, which has every property.
 - **Per title** (`player-prefs.json` under `profile_dir()`, the 200 titles used last):
   the subtitle language picked (or "off") and the audio language, when the user picks
-  them; the subtitle delay and the speed whenever they change and settle (also from
+  them, and where that subtitle came from (`subSource`: `embedded`, `stream` or
+  `addon`; in the remembered language the next file's automatic pick tries that source
+  first); the subtitle delay and the speed whenever they change and settle (also from
   keys in the external mpv window). The next file of the title starts with them.
+- **Hash.** When the stream names no OpenSubtitles hash, the addons are asked once the
+  file has loaded, with the hash Rust reads from the stream itself
+  (`player_video_hash`: the size plus the 64-bit words of the first and last 64 KiB,
+  from two range requests with the stream's own headers, or the engine's loopback URL;
+  the request is the one Rust remembered at `player_start`/`player_load`, so it never
+  comes back through the webview; only while that session still runs and no other file
+  came since, and a file that changed meanwhile gets none; 15 s for both requests, and
+  the error logged without the URL). A server that ignores ranges is given up on after
+  the first chunk. A file that has not loaded within 20 s is asked for without a hash.
+- **Second subtitle.** The Subtitles menu can show a second subtitle above the first
+  (`secondary-sid`, any track already in the player); `c` cycles it.
 - **Menus** (`SubtitleMenu.tsx`, `AudioMenu.tsx`). Subtitles: Off/On, a language rail,
   tabs by source (in the video, addons, files), tags (Forced, SDH, Default, format,
   addon), a spinner while a subtitle downloads and its error inline, "Load from file…",
   the encoding of an added subtitle, the delay (±0.1/±0.5 s), and the quick style.
   Audio: tracks by language with title, channels (Stereo, 5.1, 7.1), codec and
-  Default/File, and the audio delay. Both work the same on either backend.
+  Default/File, the audio delay, and volume normalization. Both work the same on
+  either backend.
+- **Audio level.** Normalization (`player_set_audio_normalize`, `audio.normalize`)
+  adds a fixed `lavfi=[dynaudnorm=f=200:g=15:m=10:r=0.6]` under the `@zeiler-normalize`
+  label (adding again replaces it; removing it leaves the user's own filters), applied
+  at every start and every load; `af` itself stays off the webview's list.
+  `audio.volumeMax` (100–200, 130 by default, mpv's own) goes to mpv as the pre-load
+  `volume-max` when it is not 130 (so external mpv otherwise keeps the user's own), and
+  the volume slider and ↑ reach it.
+- **A second subtitle** is per file: every load sends `secondary-sid=no`. mpv marks the
+  second track `selected` too; the UI tells the main one by `sid` (or
+  `main-selection`).
+- **Shadow colour.** mpv 0.38+ reads `sub-shadow-color` as another name for
+  `sub-back-color`, so `shadowColor` applies only while `backColor` is unset, and the
+  Shadow choice leaves a Box background's colour alone.
+- **Also in the control bar:** chapter ticks on the seek bar (hover shows the time and
+  the chapter), a Quality menu when the stream has more than one video track (HLS or
+  DASH variants, by height and bitrate; `vid`), and the stats overlay (key i: codecs,
+  hardware decoding, frame rates, bitrates, dropped frames, buffer, download speed,
+  read once a second through `player_get_property`).
 
 ## Skip and next episode
 
@@ -327,8 +359,10 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   as another encoding) · `player_subtitle_pick_local()` → the same, or null when the
   dialog is cancelled · `player_set_sub_style { style }` → the mpv properties it refused
   (style fields, applied live) ·
-  `player_prefs_get { metaId }` → `{ metaId, subLang, audioLang, subDelaySec, rate }`
-  or null · `player_prefs_set { metaId, patch }` → the same
+  `player_prefs_get { metaId }` → `{ metaId, subLang, subSource, audioLang, subDelaySec,
+  rate }` or null · `player_prefs_set { metaId, patch }` → the same ·
+  `player_video_hash()` → `{ hash, size }` or null (the file playing, see "Subtitles
+  and audio") · `player_set_audio_normalize { on }`
 - Skip (see "Skip and next episode"): `skip_segments_get { query: { metaId, videoId,
   durationSec } }` → `[{ kind: "intro" | "recap" | "outro", startSec, endSec, source:
   "aniskip" | "introdb" }]` · `player_osd_prompt { kind: "intro" | "recap" | "outro" |
@@ -428,20 +462,21 @@ an unknown field, a wrong type or an out-of-range value at any depth. Settings a
 mirrored wholesale to the webview, so secrets (Stremio authKey, IPTV credentials) never
 go here.
 
-The groups so far: `subtitles { langs, autoLoad, style { scale, font, bold, color,
-outlineColor, outlineSize, borderStyle, backColor, shadowOffset, pos, marginY,
-assOverride } }` (style values are mpv's, checked by the player's property rules; every
-style field `null` by default), `audio { langs, animeLangs }` (`animeLangs` defaults
-to `["ja"]`) and `skip { showButton, autoSkipIntro, autoSkipRecap, autoSkipCredits,
-onlineLookup }` (auto-skip off, the rest on), plus the top-level `bingeWatching` (on)
-and `upNextSeconds` (15, 5–60).
+The groups so far: `subtitles { langs, autoLoad, style { scale, fontSize, font, bold,
+color, outlineColor, outlineSize, borderStyle, backColor, shadowOffset, shadowColor, pos,
+marginY, alignX, alignY, assOverride } }` (style values are mpv's, checked by the
+player's property rules; every style field `null` by default), `audio { langs,
+animeLangs, normalize, volumeMax }` (`animeLangs` defaults to `["ja"]`, `normalize`
+off, `volumeMax` 130, 100–200) and `skip { showButton, autoSkipIntro, autoSkipRecap,
+autoSkipCredits, onlineLookup }` (auto-skip off, the rest on), plus the top-level
+`bingeWatching` (on) and `upNextSeconds` (15, 5–60).
 
 Reserved key map — names are fixed now; each key is added only when its feature ships:
 
 | Scope | Keys (existing **bold**) |
 | --- | --- |
 | Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
-| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, **`showAdult`** (the single adult flag and age gate, also used by the marketplace; matched by `zeiler_addon::is_adult_text`), `hideP2pAddons`, **`homeRows`** (`{order, hidden, renamed: [{key, name}]}`, keyed without transport URLs), **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages; later normalize, volume max), **`skip{}`** (skip button, auto-skip, online lookups), **`bingeWatching`**, **`upNextSeconds`** |
+| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, **`showAdult`** (the single adult flag and age gate, also used by the marketplace; matched by `zeiler_addon::is_adult_text`), `hideP2pAddons`, **`homeRows`** (`{order, hidden, renamed: [{key, name}]}`, keyed without transport URLs), **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages, normalize, volume max), **`skip{}`** (skip button, auto-skip, online lookups), **`bingeWatching`**, **`upNextSeconds`** |
 | Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, **`builtinKitsu`**, **`builtinOpensubtitles`** |
 
 A settings file from before `builtinKitsu` and `builtinOpensubtitles` existed takes them

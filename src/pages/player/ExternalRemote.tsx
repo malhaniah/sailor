@@ -74,7 +74,13 @@ export function ExternalRemote({
   const [stopping, setStopping] = useState(false);
   const ended = phase.kind === "ended";
   const controllable = phase.kind === "playing" || ended;
-  const controls = usePlayerControls({ clock, mpv, ended, poke: noop });
+  const controls = usePlayerControls({
+    clock,
+    mpv,
+    ended,
+    volumeMax: tracks.volumeMax,
+    poke: noop,
+  });
 
   const toggleFullscreen = useCallback(() => {
     void playerCommand("cycle", "fullscreen").catch(() => undefined);

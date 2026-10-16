@@ -14,6 +14,9 @@ import {
   type Background,
   NO_STYLE,
   previewStyle,
+  type Shadow,
+  shadowOf,
+  shadowPatch,
   STYLE_CHOICES,
   SUBTITLE_FONTS,
 } from "../lib/subtitle-style";
@@ -79,6 +82,22 @@ export function SubtitlesSection() {
             onChange={(animeLangs) => void save({ audio: { animeLangs } })}
           />
         </div>
+        <ToggleRow
+          label="Normalize the volume"
+          sub="Quiet dialogue louder, loud scenes quieter. Also in the player's Audio menu."
+          on={audio.normalize}
+          onChange={(on) => void save({ audio: { normalize: on } })}
+        />
+        <StyleRow label="Loudest volume">
+          <Options
+            choices={[100, 130, 150, 200].map((v) => ({ value: v, label: `${v}%` }))}
+            value={audio.volumeMax}
+            onChange={(volumeMax) => void save({ audio: { volumeMax } })}
+          />
+        </StyleRow>
+        <p className="text-[12.5px] leading-relaxed text-ink-subtle">
+          Above 100% the sound is amplified, which can distort. Applies from the next video.
+        </p>
       </SectionCard>
 
       <SectionCard
@@ -91,6 +110,13 @@ export function SubtitlesSection() {
             choices={STYLE_CHOICES.scale}
             value={subtitles.style.scale}
             onChange={(scale) => setStyle({ scale })}
+          />
+        </StyleRow>
+        <StyleRow label="Font size">
+          <Options
+            choices={STYLE_CHOICES.fontSize}
+            value={subtitles.style.fontSize}
+            onChange={(fontSize) => setStyle({ fontSize })}
           />
         </StyleRow>
         <StyleRow label="Font">
@@ -133,11 +159,37 @@ export function SubtitlesSection() {
             onChange={(background) => setStyle(backgroundPatch(background))}
           />
         </StyleRow>
+        <StyleRow label="Shadow">
+          <Options<Shadow>
+            choices={[
+              { value: "default", label: "Default" },
+              { value: "none", label: "None" },
+              { value: "soft", label: "Soft" },
+              { value: "strong", label: "Strong" },
+            ]}
+            value={shadowOf(subtitles.style)}
+            onChange={(shadow) => setStyle(shadowPatch(shadow, subtitles.style))}
+          />
+        </StyleRow>
         <StyleRow label="Position">
           <Options
             choices={STYLE_CHOICES.pos}
             value={subtitles.style.pos}
             onChange={(pos) => setStyle({ pos })}
+          />
+        </StyleRow>
+        <StyleRow label="Alignment">
+          <Options
+            choices={STYLE_CHOICES.alignX}
+            value={subtitles.style.alignX}
+            onChange={(alignX) => setStyle({ alignX })}
+          />
+        </StyleRow>
+        <StyleRow label="Placement">
+          <Options
+            choices={STYLE_CHOICES.alignY}
+            value={subtitles.style.alignY}
+            onChange={(alignY) => setStyle({ alignY })}
           />
         </StyleRow>
         <ToggleRow

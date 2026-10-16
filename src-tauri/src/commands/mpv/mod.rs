@@ -25,6 +25,7 @@
 //! The pre-M2 command names stay as thin aliases for one release (`aliases.rs`).
 
 pub mod aliases;
+pub mod audio;
 pub mod osd;
 pub mod subtitles;
 pub mod validate;
@@ -107,6 +108,10 @@ pub struct PlayerState {
     /// last) from another one the user opened in the same player, as external mpv
     /// allows; the progress tracker follows the same rule.
     own_file: Mutex<(u64, OwnFile)>,
+    /// What the file of ours playing now was loaded from (`player_start`/`player_load`),
+    /// with its session and the load count it belongs to: the subtitle hash reads it
+    /// (`subtitles.rs`), so the URL and headers never travel back through the webview.
+    playing: Mutex<Option<(u64, u64, PlaybackRequest)>>,
 }
 
 #[derive(Clone)]
@@ -179,6 +184,20 @@ impl PlayerState {
     fn new_file(&self, id: u64) {
         *self.own_file.lock().unwrap() = (id, OwnFile::default());
         self.loads.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Remember what session `id`'s file of ours just started was loaded from.
+    fn remember_request(&self, id: u64, request: &PlaybackRequest) {
+        *self.playing.lock().unwrap() = Some((id, self.load_count(), request.clone()));
+    }
+
+    /// What the file playing now was loaded from, if it is still ours: its session is
+    /// the running one (not stopped or replaced) and no other file came since (another
+    /// one the user opened in external mpv) — with the load count it belongs to.
+    fn playing_request(&self) -> Option<(u64, PlaybackRequest)> {
+        let active = self.active()?.id;
+        let (id, loads, request) = self.playing.lock().unwrap().clone()?;
+        (id == active && loads == self.load_count()).then_some((loads, request))
     }
 
     /// Take one of session `id`'s events: another file opened in its player counts as
@@ -314,9 +333,13 @@ pub async fn player_start(
     let title = title_prefs(&app, context.as_ref()).await;
     request.options = crate::subtitles::player_options(&settings, context.as_ref(), title.as_ref());
     let started = start(&app, &state, &player, request, preference, context).await?;
-    // the subtitle look (only what the user set; a refusal costs only that field)
+    // the subtitle look (only what the user set; a refusal costs only that field) and
+    // volume normalization (a filter stays set across loads in a core)
     if let Ok(session) = player.session() {
         let _ = subtitles::apply_style(&session, &settings.subtitles.style).await;
+        if settings.audio.normalize {
+            let _ = audio::apply_normalize(&session, true).await;
+        }
     }
     Ok(started)
 }
@@ -334,17 +357,18 @@ pub async fn player_load(
     check_request(&mut request)?;
     let context = checked_context(context);
     let title = title_prefs(&app, context.as_ref()).await;
-    request.options = crate::subtitles::player_options(
-        &*state.settings.read().await,
-        context.as_ref(),
-        title.as_ref(),
-    );
+    let settings = state.settings.read().await.clone();
+    request.options = crate::subtitles::player_options(&settings, context.as_ref(), title.as_ref());
     let _op = player.op.lock().await;
     let active = player
         .active()
         .ok_or_else(|| IpcError::Player("Nothing is playing.".into()))?;
     player.new_file(active.id);
+    player.remember_request(active.id, &request);
     player.track(active.id, progress(&app, context));
+    // (normalization follows the setting at every file, so a change made meanwhile
+    // reaches a player kept running)
+    let _ = audio::apply_normalize(&active.session, settings.audio.normalize).await;
     active.session.load(request).await.map_err(session_error)
 }
 
@@ -457,6 +481,7 @@ async fn start(
     // from here on, events of the session being replaced are dropped
     player.current.store(id, Ordering::SeqCst);
     player.new_file(id);
+    player.remember_request(id, &request);
     // the replaced session's subtitle files go with it
     if let Some(store) = app.try_state::<SubtitleStore>() {
         store.purge();

@@ -8,13 +8,14 @@
  */
 import { Maximize, Pause, Play, RotateCcw, Square, Volume2, VolumeX } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { playerCommand, playerSetProperty } from "../../lib/player-ipc";
+import { type MpvChapter, playerCommand, playerSetProperty } from "../../lib/player-ipc";
 import { AudioMenu } from "./AudioMenu";
 import { chip, MenuRow, PopupMenu } from "./menu";
 import { formatTime, type MpvState } from "./mpv-state";
 import { type PlaybackClock, useClock } from "./playback-clock";
 import { SubtitleMenu } from "./SubtitleMenu";
-import { SPEEDS, type PlayerControls, VOLUME_MAX } from "./usePlayerControls";
+import { QualityMenu } from "./QualityMenu";
+import { SPEEDS, type PlayerControls } from "./usePlayerControls";
 import type { Tracks } from "./useTracks";
 
 export function ControlsBar({
@@ -53,12 +54,19 @@ export function ControlsBar({
       }`}
     >
       {tracks.notice && <Notice text={tracks.notice} onDismiss={tracks.dismissNotice} />}
-      <SeekBar clock={clock} onPoke={onPoke} />
+      <SeekBar clock={clock} chapters={mpv.chapters} onPoke={onPoke} />
       <div className="flex items-center gap-3">
         <PlayPauseButton clock={clock} ended={ended} onClick={controls.togglePauseOrReplay} />
         <TimeReadout clock={clock} />
-        <VolumeControl volume={mpv.volume} mute={mpv.mute} onMute={controls.toggleMute} onPoke={onPoke} />
+        <VolumeControl
+          volume={mpv.volume}
+          mute={mpv.mute}
+          max={tracks.volumeMax}
+          onMute={controls.toggleMute}
+          onPoke={onPoke}
+        />
         <div className="flex-1" />
+        <QualityMenu mpv={mpv} />
         <AudioMenu tracks={tracks} mpv={mpv} />
         <SubtitleMenu tracks={tracks} mpv={mpv} />
         <SpeedMenu speed={mpv.speed} />
@@ -127,8 +135,17 @@ function TimeReadout({ clock }: { clock: PlaybackClock }) {
   );
 }
 
-/** Seek slider over a track that shows what is played and what is buffered. */
-function SeekBar({ clock, onPoke }: { clock: PlaybackClock; onPoke: () => void }) {
+/** Seek slider over a track that shows what is played and what is buffered, with a tick
+ * at each chapter; hovering shows the time there and its chapter's title. */
+function SeekBar({
+  clock,
+  chapters,
+  onPoke,
+}: {
+  clock: PlaybackClock;
+  chapters: MpvChapter[];
+  onPoke: () => void;
+}) {
   const timePos = useClock(clock, (s) => s.timePos);
   const duration = useClock(clock, (s) => s.duration);
   const cachedUntil = useClock(clock, (s) => s.cachedUntil);
@@ -136,8 +153,29 @@ function SeekBar({ clock, onPoke }: { clock: PlaybackClock; onPoke: () => void }
   const max = Math.max(duration, 0.1);
   const value = Math.min(scrub ?? timePos, max);
   const pct = (t: number) => `${Math.min(100, Math.max(0, (t / max) * 100))}%`;
+  const [hover, setHover] = useState<number | null>(null);
+  const ticks = duration > 0 ? chapters.filter((c) => c.time > 0.5 && c.time < duration - 0.5) : [];
+  const hoverChapter =
+    hover === null ? null : [...chapters].reverse().find((c) => c.time <= hover)?.title?.trim() || null;
   return (
-    <div className="relative flex h-3 items-center">
+    <div
+      className="relative flex h-3 items-center"
+      onMouseMove={(e) => {
+        if (duration <= 0) return;
+        const rect = e.currentTarget.getBoundingClientRect();
+        setHover(Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)) * duration);
+      }}
+      onMouseLeave={() => setHover(null)}
+    >
+      {hover !== null && (
+        <div
+          className="pointer-events-none absolute bottom-4 -translate-x-1/2 whitespace-nowrap rounded bg-surface/95 px-2 py-0.5 text-[11px] text-ink shadow-lg"
+          style={{ left: pct(hover) }}
+        >
+          {formatTime(hover)}
+          {hoverChapter && <span className="text-ink-muted"> · {hoverChapter}</span>}
+        </div>
+      )}
       <div className="absolute inset-x-0 h-1 overflow-hidden rounded-full bg-edge">
         {duration > 0 && cachedUntil > 0 && (
           <div
@@ -148,6 +186,13 @@ function SeekBar({ clock, onPoke }: { clock: PlaybackClock; onPoke: () => void }
         )}
         <div className="absolute inset-y-0 left-0 bg-accent" style={{ width: pct(value) }} />
       </div>
+      {ticks.map((c, i) => (
+        <div
+          key={`${i}-${c.time}`}
+          className="pointer-events-none absolute top-1/2 h-2 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-canvas/80"
+          style={{ left: pct(c.time) }}
+        />
+      ))}
       <input
         type="range"
         aria-label="Seek"
@@ -175,19 +220,23 @@ function SeekBar({ clock, onPoke }: { clock: PlaybackClock; onPoke: () => void }
 function VolumeControl({
   volume,
   mute,
+  max,
   onMute,
   onPoke,
 }: {
   volume: number;
   mute: boolean;
+  /** `audio.volumeMax` */
+  max: number;
   onMute: () => void;
   onPoke: () => void;
 }) {
-  // Normally 0…VOLUME_MAX; external mpv can be louder (the user's mpv.conf or its own
-  // keys), so the scale grows to the loudest volume seen instead of pinning it at 100.
+  // Normally 0…max; external mpv can be louder (its own keys), so the scale grows to
+  // the loudest volume seen instead of pinning it.
   const level = Math.max(0, Math.round(volume));
-  const [ceiling, setCeiling] = useState(VOLUME_MAX);
-  if (level > ceiling) setCeiling(level);
+  const [loudest, setLoudest] = useState(0);
+  if (level > loudest) setLoudest(level);
+  const ceiling = Math.max(max, loudest);
   return (
     <div className="flex items-center gap-2">
       <button

@@ -68,6 +68,7 @@ pub fn run() {
                 &state.profile_dir(),
             ))?;
             app.manage(subtitles::SubtitleStore::new(&cache_dir));
+            app.manage(zeiler_addon::VideoHasher::new()?);
             app.manage(state);
             app.manage(catalog_cache::CatalogCache::default());
             app.manage(library);
@@ -128,6 +129,8 @@ pub fn run() {
             commands::mpv::subtitles::player_set_sub_style,
             commands::mpv::subtitles::player_prefs_get,
             commands::mpv::subtitles::player_prefs_set,
+            commands::mpv::subtitles::player_video_hash,
+            commands::mpv::audio::player_set_audio_normalize,
             // skip and next episode
             commands::skip::skip_segments_get,
             commands::mpv::osd::player_osd_prompt,

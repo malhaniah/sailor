@@ -248,6 +248,8 @@ export interface SubtitleSettings {
 export interface SubtitleStyle {
   /** sub-scale, 0.3–3 */
   scale: number | null;
+  /** sub-font-size, 10–120 (mpv's 55 by default; scale multiplies it) */
+  fontSize: number | null;
   font: string | null;
   bold: boolean | null;
   /** #RRGGBB or #AARRGGBB (alpha first, as mpv reads it) */
@@ -258,9 +260,12 @@ export interface SubtitleStyle {
   borderStyle: "outline-and-shadow" | "opaque-box" | "background-box" | null;
   backColor: string | null;
   shadowOffset: number | null;
+  shadowColor: string | null;
   /** sub-pos, 0–150 (100 = the bottom of the video) */
   pos: number | null;
   marginY: number | null;
+  alignX: "left" | "center" | "right" | null;
+  alignY: "top" | "center" | "bottom" | null;
   /** "force" applies the style to styled (ASS) subtitles too */
   assOverride: "no" | "yes" | "scale" | "force" | "strip" | null;
 }
@@ -270,6 +275,10 @@ export interface AudioSettings {
   langs: string[];
   /** Used instead of `langs` for anime (Kitsu, MyAnimeList, AniList, AniDB titles). */
   animeLangs: string[];
+  /** Even out the volume (quiet dialogue up, loud scenes down). */
+  normalize: boolean;
+  /** The loudest the volume goes, in percent (100–200). */
+  volumeMax: number;
 }
 
 /** A settings update: top-level keys, and for the groups only the fields that change. */
