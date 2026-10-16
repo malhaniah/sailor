@@ -78,6 +78,7 @@ function legacyLaunch(p: URLSearchParams): PlayerLaunch | null {
     transportUrl: null,
     addonName: null,
     live: false,
+    backend: "auto" as const,
   };
   if (url) {
     return {

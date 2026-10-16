@@ -324,6 +324,93 @@ async fn plays_controls_and_shuts_down_over_json_ipc() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The calls the Player screen's remote controls make for an external mpv window
+/// (src/pages/player/): every one must be accepted and reflected back as an event.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs mpv and ffmpeg"]
+async fn the_player_screen_remote_controls_work_over_json_ipc() {
+    let dir = temp_dir("remote");
+    let server = Server::start(generate_media(&dir));
+    let (events, mut rx) = sink();
+    let request = PlaybackRequest {
+        url: server.url(),
+        ..PlaybackRequest::default()
+    };
+    let player = ExternalIpcPlayer::start_with_args(&mpv(), &headless(), &request, events)
+        .await
+        .expect("mpv starts");
+    wait_for(&mut rx, "file-loaded", |e| *e == PlayerEvent::FileLoaded).await;
+    wait_for(&mut rx, "the buffered range", |e| {
+        is_property(e, "demuxer-cache-time", |v| {
+            v.as_f64().is_some_and(|t| t > 0.0)
+        })
+    })
+    .await;
+
+    let set = |name: &str, value: Value| {
+        let name = name.to_string();
+        let player = &player;
+        async move {
+            player
+                .set_property(&name, value.clone())
+                .await
+                .unwrap_or_else(|e| panic!("{name} = {value}: {e:?}"));
+        }
+    };
+    set("pause", json!(true)).await;
+    wait_for(&mut rx, "pause", |e| {
+        is_property(e, "pause", |v| *v == json!(true))
+    })
+    .await;
+    set("volume", json!(55)).await;
+    wait_for(&mut rx, "volume", |e| {
+        is_property(e, "volume", |v| v.as_f64() == Some(55.0))
+    })
+    .await;
+    set("mute", json!(true)).await;
+    wait_for(&mut rx, "mute", |e| {
+        is_property(e, "mute", |v| *v == json!(true))
+    })
+    .await;
+    set("speed", json!(1.5)).await;
+    wait_for(&mut rx, "speed", |e| {
+        is_property(e, "speed", |v| v.as_f64() == Some(1.5))
+    })
+    .await;
+    // the track menus: "Off", then a track by its numeric id (mpv reports only
+    // changes, so audio goes off first)
+    set("sid", json!("no")).await;
+    set("aid", json!("no")).await;
+    wait_for(&mut rx, "aid off", |e| {
+        is_property(e, "aid", |v| *v == json!("no"))
+    })
+    .await;
+    set("aid", json!(1)).await;
+    wait_for(&mut rx, "aid as a string id", |e| {
+        is_property(e, "aid", |v| *v == json!("1"))
+    })
+    .await;
+    // the `f` key: fullscreen of mpv's own window (a property even with --vo=null)
+    player
+        .command(vec!["cycle".into(), "fullscreen".into()])
+        .await
+        .expect("cycle fullscreen");
+    // (not a typed property, so it reads in mpv's text form)
+    assert_eq!(
+        player.get_property("fullscreen").await.unwrap(),
+        json!("yes")
+    );
+    player
+        .command(vec!["seek".into(), "-5".into(), "relative".into()])
+        .await
+        .unwrap();
+    wait_for(&mut rx, "a seek", |e| *e == PlayerEvent::Seek).await;
+
+    player.quit();
+    wait_for(&mut rx, "shutdown", |e| *e == PlayerEvent::Shutdown).await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs mpv"]
 async fn a_failing_stream_reports_an_error_and_quit_shuts_down() {

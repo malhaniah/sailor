@@ -75,21 +75,26 @@ delete-on-stop by default (bounded disk usage), DHT + persistence under the app 
 
 Zeiler's own Player screen (`#/player`) is the single place playback starts, on every
 OS. The stream picker never resolves or launches anything itself for `url` and
-`infoHash` streams; `ytId` and `externalUrl` streams still leave the app, and an explicit
-secondary action ("Open in external mpv") keeps the v0.1 direct-to-mpv path.
+`infoHash` streams; `ytId` and `externalUrl` streams still leave the app. Its secondary
+action, "Open in external mpv", opens the same Player screen with `backend: "external"`
+on the launch, so mpv gets its own window and Zeiler's remote controls whatever the
+backend setting says.
 
 - **Handoff** (`src/lib/playback-handoff.ts`). The picker builds a typed `PlayerLaunch`
   — the source (a direct URL with its headers, or a torrent: infoHash, fileIdx, sources,
   fileMustInclude, filename), meta (type, id, name, poster, videos), video (id, season,
   episode, title, thumbnail), stream (name, behaviorHints incl. bingeGroup, filename,
-  videoHash, videoSize; subtitles), transportUrl and addonName, and a `live` flag — and
-  calls `openPlayer(launch)`. That stashes the launch in memory under a random one-shot
+  videoHash, videoSize; subtitles), transportUrl and addonName, a `live` flag and the
+  `backend` to use (`auto`, or `external` from "Open in external mpv") — and calls
+  `openPlayer(launch)`. That stashes the launch in memory under a random one-shot
   id and navigates to `#/player?h=<id>`; the Player `takeLaunch(id)`s it exactly once.
   Stream URLs, headers and transport URLs (which may embed credentials) therefore never
   enter `location.hash` or the history stack. A reload or a stale history entry finds no
   launch and the Player shows "nothing to play" with a Back action; because the
-  Rust-side player outlives a webview reload, that screen also stops any embedded
-  session left playing (`player_embedded_stop`, a no-op on non-embedded builds). Only
+  Rust-side player outlives a webview reload, that screen also stops a built-in video
+  left playing (`player_stop { only: "embedded" }`), which would otherwise sit hidden
+  behind it. An external mpv the user left playing with Back is left alone (also when
+  Forward lands on a spent player entry). Only
   dev builds still accept the legacy `url=`/`infoHash=` params of the
   `VITE_ZEILER_AUTOPLAY` hook. `openPlayer` returns the launch id, and the Player reports
   a launch that ends in an error (`reportLaunchFailed`), so the picker underneath marks
@@ -101,25 +106,48 @@ secondary action ("Open in external mpv") keeps the v0.1 direct-to-mpv path.
   frames in `src/lib/view.tsx`, `/` opens search in `src/chrome/Topbar.tsx`) check the
   single `playerActive()` signal from the handoff module and stay quiet while the player
   owns the keyboard.
-- **Backends** (`src/pages/player/`). Embedded builds (Windows `embedded` feature +
-  libmpv present) render mpv under the transparent webview, with the controls drawn as
-  overlays. Every other build hands the stream to an external mpv window (`player_play`,
-  now an alias that starts the JSON-IPC backend) and shows "Playing in mpv" (title,
-  source, Stop → `player_stop`, Back keeps it playing). The Rust side can already
-  remote-control that window (see "Player backends"); the remote-control UI and the
-  Settings backend choice arrive in M2b.
+- **Backends** (`src/pages/player/`). The page calls `player_start { request, backend }`
+  with the launch's `backend` and renders by the backend Rust reports (see "Player
+  backends"; `auto` follows the `playerBackend` setting, chosen in Settings → Player:
+  Auto / Built-in / External mpv). Before the reply it shows the loading state of the
+  backend it expects (from `player_backends` and the setting).
+  - *Embedded* (Windows `embedded` feature + libmpv present): mpv renders under the
+    transparent webview, with the controls drawn as auto-hiding overlays
+    (`PlayerChrome.tsx`); `f` makes the Zeiler window fullscreen.
+  - *External mpv* (Linux and macOS, Windows builds without the feature, a fallback,
+    or a forced launch): mpv plays in its own window and the page is its full remote
+    control (`ExternalRemote.tsx`): the title's art fills the window, dimmed; title,
+    episode and source at the top; the same `ControlsBar` as embedded docked at the
+    bottom — play/pause, seek bar with elapsed/total time and the buffered range
+    (`demuxer-cache-time`), volume and mute, audio and subtitle menus from
+    `track-list` (subtitles with Off), speed, fullscreen of the mpv window
+    (`cycle fullscreen`) and Stop. Shortcuts while Zeiler has focus: Space, ←/→ (5 s),
+    ↑/↓ (volume 5), m, f, Escape (back). When the user closes mpv (`shutdown`) the page
+    says "mpv was closed" with Back and Play again. When embedded fell back to mpv,
+    a dismissible notice gives `fallbackReason`. If mpv's IPC never came up
+    (`remoteControl: false`) the page shows the passive "Playing in mpv" card instead.
+  - **Back keeps external mpv playing** (as in M1): Back/Escape leave the page while
+    mpv keeps playing in its window, and its torrent keeps streaming; the page says so
+    next to the controls. Stop (`player_stop`) closes mpv and removes the torrent.
+    Back while mpv is still opening the stream cancels it (stops mpv, removes the
+    torrent), and leaving after playback ended, failed or mpv was closed stops the
+    player too; the Back tooltip and the footnote follow the phase
+    (`backKeepsPlaying` in `usePlaybackSession.ts`). An explicit Built-in choice on a
+    build or OS without it fails with a pointer to Settings → Player.
   Torrents are resolved by the Player (`engine_resolve`, honouring `fileMustInclude`)
   with live engine stats. The playback session owns the torrent: when the page goes
-  away by any route (Back, Escape, native history navigation) it is removed from the
-  engine per `deleteOnStop`, and a resolve that completes after the page is gone removes
-  the torrent it just added (librqbit holds a magnet only once its metadata arrives, so
-  an earlier remove finds nothing). A torrent handed to external mpv is the exception:
-  Back keeps it streaming and the "Playing in mpv" Stop removes it.
-- **Player page layout.** `PlayerPage.tsx` (shell), `launch.ts`, `usePlaybackSession.ts`
-  (backend choice, resolve, event pump), `playback-clock.ts` (time-pos, duration, pause,
-  buffering in a small subscribable store so a position tick re-renders only the seek
-  bar and readouts), `mpv-state.ts`, `PlayerChrome.tsx`, `ControlsBar.tsx`, `states.tsx`,
-  `TorrentStats.tsx`. Later player features add files here.
+  away by any route (Back, Escape, native history navigation) the player is stopped
+  and the torrent removed from the engine per `deleteOnStop`, and a resolve that
+  completes after the page is gone removes the torrent it just added (librqbit holds a
+  magnet only once its metadata arrives, so an earlier remove finds nothing). External
+  mpv that is still playing is the exception above.
+- **Player page layout.** `PlayerPage.tsx` (shell, renders by backend), `launch.ts`,
+  `usePlaybackSession.ts` (start, resolve, event pump, cleanup), `usePlayerControls.ts`
+  (actions and keyboard shortcuts shared by both screens), `playback-clock.ts`
+  (time-pos, duration, pause, buffering, buffered range in a small subscribable store so
+  a position tick re-renders only the seek bar and readouts), `mpv-state.ts`,
+  `PlayerChrome.tsx` (embedded), `ExternalRemote.tsx` (external), `ControlsBar.tsx`
+  (both), `states.tsx`, `TorrentStats.tsx`. Later player features add files here.
 
 ## Tauri IPC surface
 
@@ -141,11 +169,13 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   `{ embedded: { available, reason?, libmpvVersion? }, external: { available, path? } }` ·
   `player_start { request: { url, title?, headers, userAgent?, referrer?, startAtSec? },
   backend?: "auto" | "embedded" | "external" }` → `{ backend, fallbackReason?,
-  remoteControl }` · `player_load { request }` · `player_stop()` (any backend) ·
+  remoteControl }` · `player_load { request }` · `player_stop { only? }` (any backend;
+  `only: "embedded" | "external"` stops just a session on that backend) ·
   `player_set_property { name, value }` · `player_command { args }` ·
   `player_get_property { name }` → JSON value · `player_set_geometry { geometry: { x, y,
   width, height } }` (embedded video rect, physical px)
-- Deprecated player aliases (one release; `commands/mpv/aliases.rs`): `player_status()` →
+- Deprecated player aliases (one release; `commands/mpv/aliases.rs`; the UI no longer
+  calls any of them): `player_status()` →
   `{ available, path? }` (= `player_backends().external`) ·
   `player_embedded_available()` → bool · `player_play { request }` (start external) ·
   `player_embedded_start { request }` (start embedded, no fallback) ·
@@ -268,7 +298,8 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
   (control characters become a space, NULs are dropped), never refused. Its shell-only `options` (pre-load mpv options such as preferred languages) are
   `#[serde(skip)]` — the webview can never set them.
 - **Validation policy** (`commands/mpv/validate.rs`, table-driven, unit-tested). The UI
-  may set only listed properties, each value checked (booleans; numeric ranges such as
+  may set only listed properties, each value checked (booleans, including `fullscreen`
+  — the external mpv window's; embedded video has no window of its own; numeric ranges such as
   `speed` 0.25–4, `sub-delay`/`audio-delay` ±600, `volume` 0–1000; `#RRGGBB[AA]`
   colours; enums; track ids as integer ≥ 1 or `no`/`auto`; subtitle fonts from a fixed
   list). Commands: `seek <number> [flags]`, `cycle <settable property> [up|down]`

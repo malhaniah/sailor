@@ -131,14 +131,20 @@ impl PlayerState {
     fn stop_session(&self, only: Option<Backend>) -> Option<Backend> {
         let stopped = {
             let mut slot = self.slot.lock().unwrap();
-            match (&*slot, only) {
-                (Some(active), Some(backend)) if active.session.backend() != backend => None,
+            match &*slot {
+                Some(active) if !stop_matches(active.session.backend(), only) => None,
                 _ => slot.take(),
             }
         }?;
         stopped.session.quit();
         Some(stopped.session.backend())
     }
+}
+
+/// Whether a stop limited to `only` (none = any backend) applies to a session on
+/// `running`.
+fn stop_matches(running: Backend, only: Option<Backend>) -> bool {
+    only.is_none_or(|backend| backend == running)
 }
 
 /// What `player_start` did.
@@ -237,16 +243,21 @@ pub async fn player_load(
 }
 
 /// Stop whatever is playing, on any backend (including an external mpv launched
-/// without remote control).
+/// without remote control). With `only`, stop just a session on that backend: the
+/// player screen uses `only: "embedded"` to clear a hidden built-in video without
+/// closing an external mpv the user left playing.
 #[tauri::command]
 pub async fn player_stop(
     state: State<'_, AppState>,
     player: State<'_, PlayerState>,
+    only: Option<Backend>,
 ) -> Result<(), IpcError> {
     let _op = player.op.lock().await;
-    player.stop_session(None);
+    player.stop_session(only);
     imp::on_stop(&player.surface);
-    state.player.stop();
+    if stop_matches(Backend::External, only) {
+        state.player.stop();
+    }
     Ok(())
 }
 
@@ -561,6 +572,21 @@ mod tests {
         let mut untitled = request("https://host/v");
         assert!(check_request(&mut untitled).is_ok());
         assert_eq!(untitled.title, None);
+    }
+
+    #[test]
+    fn a_stop_limited_to_a_backend_spares_the_other() {
+        let only: Option<Backend> = serde_json::from_value(serde_json::json!("embedded")).unwrap();
+        assert_eq!(only, Some(Backend::Embedded));
+        assert!(stop_matches(Backend::Embedded, only));
+        assert!(!stop_matches(Backend::External, only));
+        assert!(stop_matches(Backend::External, Some(Backend::External)));
+        assert!(!stop_matches(Backend::Embedded, Some(Backend::External)));
+        // no filter: any backend
+        assert!(stop_matches(Backend::Embedded, None));
+        assert!(stop_matches(Backend::External, None));
+        let missing: Option<Backend> = serde_json::from_value(serde_json::Value::Null).unwrap();
+        assert_eq!(missing, None);
     }
 
     #[test]

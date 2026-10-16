@@ -1,17 +1,19 @@
 /**
- * Everything drawn above the video: status overlays, the top bar and the control bar,
- * plus the player's keyboard shortcuts. With the embedded backend the page is
- * transparent and `videoRef` marks the region the native mpv window is glued to.
+ * The embedded player's screen — everything drawn above the video: status overlays, the
+ * top bar and the control bar, plus the keyboard shortcuts (usePlayerControls.ts). The
+ * page is transparent and `videoRef` marks the region the native mpv window is glued
+ * to. Also drawn while the backend is still unknown (the first moments of loading).
+ * External mpv has its own screen, ExternalRemote.tsx, built from the same parts.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { CopyField } from "../../components/ui";
-import { playerCommand, playerSetProperty } from "../../lib/player-ipc";
 import { ControlsBar } from "./ControlsBar";
 import type { Backend, MpvState, Phase } from "./mpv-state";
 import { type PlaybackClock, useClock } from "./playback-clock";
-import { BackButton, CenterCard, Spinner } from "./states";
+import { BackButton, CenterCard, ClosedCard, Spinner } from "./states";
 import { TorrentStats } from "./TorrentStats";
+import { usePlayerControls, usePlayerKeys } from "./usePlayerControls";
 
 export function PlayerChrome({
   phase,
@@ -24,6 +26,7 @@ export function PlayerChrome({
   infoHash,
   videoRef,
   onLeave,
+  onPlayAgain,
 }: {
   phase: Phase;
   backend: Backend;
@@ -35,12 +38,12 @@ export function PlayerChrome({
   infoHash: string | null;
   videoRef: React.RefObject<HTMLDivElement | null>;
   onLeave: () => void;
+  onPlayAgain: () => void;
 }) {
   const [visible, setVisible] = useState(true);
   const hideTimer = useRef<number | null>(null);
   const playing = phase.kind === "playing";
   const paused = useClock(clock, (s) => s.pause);
-  // mpv keys only drive the embedded backend; elsewhere nothing would receive them
   const embedded = backend === "embedded";
 
   const poke = useCallback(() => {
@@ -59,78 +62,21 @@ export function PlayerChrome({
   // Controls stay up whenever playback isn't actively running.
   const controlsShown = visible || !playing || paused;
 
-  const togglePauseOrReplay = useCallback(() => {
-    if (phase.kind === "ended") {
-      void playerCommand("seek", 0, "absolute");
-      void playerSetProperty("pause", false);
-    } else {
-      void playerSetProperty("pause", !clock.get().pause);
-    }
-    poke();
-  }, [phase.kind, clock, poke]);
+  const controllable = playing || phase.kind === "ended";
+  const controls = usePlayerControls({ clock, mpv, ended: phase.kind === "ended", poke });
 
-  const seekBy = useCallback(
-    (delta: number) => {
-      void playerCommand("seek", delta, "relative");
-      poke();
-    },
-    [poke],
-  );
-
+  // embedded video has no window of its own: fullscreen is the Zeiler window's
   const toggleFullscreen = useCallback(async () => {
     const w = getCurrentWindow();
     await w.setFullscreen(!(await w.isFullscreen())).catch(() => undefined);
   }, []);
+  const onFullscreen = useCallback(() => void toggleFullscreen(), [toggleFullscreen]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
-      switch (e.key) {
-        case "f":
-          void toggleFullscreen();
-          return;
-        case "Escape":
-          onLeave();
-          return;
-      }
-      if (!embedded) return;
-      switch (e.key) {
-        case " ":
-          e.preventDefault();
-          togglePauseOrReplay();
-          break;
-        case "ArrowLeft":
-          seekBy(-5);
-          break;
-        case "ArrowRight":
-          seekBy(5);
-          break;
-        case "ArrowUp":
-          void playerSetProperty("volume", Math.min(100, Math.round(mpv.volume) + 5));
-          poke();
-          break;
-        case "ArrowDown":
-          void playerSetProperty("volume", Math.max(0, Math.round(mpv.volume) - 5));
-          poke();
-          break;
-        case "m":
-          void playerSetProperty("mute", !mpv.mute);
-          poke();
-          break;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [
-    embedded,
-    togglePauseOrReplay,
-    seekBy,
-    toggleFullscreen,
-    onLeave,
-    mpv.volume,
-    mpv.mute,
-    poke,
-  ]);
+  usePlayerKeys({
+    controls: embedded && controllable ? controls : null,
+    onFullscreen,
+    onBack: onLeave,
+  });
 
   return (
     <div
@@ -143,9 +89,12 @@ export function PlayerChrome({
       onMouseMove={poke}
       onClick={(e) => {
         if (!embedded) return;
-        if (e.target === e.currentTarget || e.target === videoRef.current) togglePauseOrReplay();
+        if (!controllable) return;
+        if (e.target === e.currentTarget || e.target === videoRef.current) {
+          controls.togglePauseOrReplay();
+        }
       }}
-      onDoubleClick={() => void toggleFullscreen()}
+      onDoubleClick={onFullscreen}
     >
       {/* the transparent region the native video is glued to */}
       <div ref={videoRef} className="absolute inset-0" />
@@ -178,13 +127,21 @@ export function PlayerChrome({
           <div className="flex gap-2">
             <button
               className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-canvas hover:opacity-90"
-              onClick={togglePauseOrReplay}
+              onClick={controls.togglePauseOrReplay}
             >
               ↺ Replay
             </button>
             <BackButton onClick={onLeave} />
           </div>
         </CenterCard>
+      )}
+
+      {phase.kind === "closed" && (
+        <ClosedCard
+          title="The player stopped"
+          onPlayAgain={onPlayAgain}
+          onBack={onLeave}
+        />
       )}
 
       {notice && (
@@ -219,10 +176,10 @@ export function PlayerChrome({
           clock={clock}
           ended={phase.kind === "ended"}
           mpv={mpv}
+          controls={controls}
           shown={controlsShown}
           onPoke={poke}
-          onTogglePause={togglePauseOrReplay}
-          onToggleFullscreen={() => void toggleFullscreen()}
+          onToggleFullscreen={onFullscreen}
         />
       )}
     </div>

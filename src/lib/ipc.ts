@@ -5,7 +5,6 @@ import type {
   Descriptor,
   IpcError,
   MetaLookup,
-  PlayerStatus,
   ResolvedStream,
   Settings,
 } from "./types";
@@ -57,18 +56,7 @@ export const engineStats = (infoHash: string) =>
 export const engineRemove = (infoHash: string, deleteFiles: boolean) =>
   invoke<void>("engine_remove", { infoHash, deleteFiles });
 
-export const playerStatus = () => invoke<PlayerStatus>("player_status");
-
-export const playerPlay = (request: {
-  url: string;
-  title?: string | null;
-  headers?: [string, string][];
-  userAgent?: string | null;
-  referrer?: string | null;
-  startAtSec?: number | null;
-}) => invoke<void>("player_play", { request });
-
-export const playerStop = () => invoke<void>("player_stop");
+// Player commands live in ./player-ipc.ts (the unified, backend-neutral player API).
 
 export interface UpdateStatus {
   current: string;

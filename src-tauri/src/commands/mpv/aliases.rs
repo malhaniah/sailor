@@ -1,5 +1,5 @@
-//! Pre-M2 player command names, kept as thin aliases for one release so the current
-//! Player screen and Settings keep working unchanged. New code uses `player_start`,
+//! Pre-M2 player command names, kept as thin aliases for one release (the UI moved to
+//! the unified commands in M2b and no longer calls them). New code uses `player_start`,
 //! `player_stop`, `player_set_property`, `player_command`, `player_get_property` and
 //! `player_backends`.
 //!

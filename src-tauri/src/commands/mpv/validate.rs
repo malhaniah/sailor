@@ -35,6 +35,10 @@ const SETTABLE: &[(&str, Rule)] = &[
     ("sub-visibility", Rule::Bool),
     ("secondary-sub-visibility", Rule::Bool),
     ("sub-bold", Rule::Bool),
+    // the external mpv window's fullscreen (the Player screen's `f` key); embedded
+    // video has no window of its own (a parented or render-API VO ignores it), so
+    // the UI makes the Zeiler window fullscreen instead
+    ("fullscreen", Rule::Bool),
     // mpv's own ceiling for volume-max; mpv itself rejects values above the
     // session's volume-max (130 by default)
     ("volume", Rule::Range(0.0, 1000.0)),
@@ -305,6 +309,7 @@ mod tests {
             ("sub-visibility", json!(true)),
             ("secondary-sub-visibility", json!(false)),
             ("sub-bold", json!(true)),
+            ("fullscreen", json!(true)),
             ("volume", json!(0)),
             ("volume", json!(100)),
             ("volume", json!(57.5)),
@@ -351,6 +356,7 @@ mod tests {
             // wrong type
             ("pause", json!("yes")),
             ("pause", json!(1)),
+            ("fullscreen", json!("yes")),
             ("volume", json!("50")),
             ("aid", json!(true)),
             // out of range
@@ -400,6 +406,7 @@ mod tests {
             &["cycle", "pause"],
             &["cycle", "sid", "down"],
             &["cycle", "mute", "up"],
+            &["cycle", "fullscreen"],
             &["stop"],
             &["frame-step"],
             &["frame-back-step"],

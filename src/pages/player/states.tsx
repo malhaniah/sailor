@@ -1,9 +1,10 @@
 /**
- * Player status screens: the small overlay cards drawn above the video, the
- * "Playing in mpv" screen of non-embedded builds, and "nothing to play" for a launch id
+ * Player status screens and shared bits: the small overlay cards drawn above the video,
+ * the title/source lines and backdrop of a launch, the passive "Playing in mpv" card
+ * (external mpv started without remote control), and "nothing to play" for a launch id
  * that is unknown or already used (a reload, a stale history entry).
  */
-import { ChevronLeft } from "lucide-react";
+import { ChevronLeft, Info } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { EmptyState } from "../../components/ui";
 import type { PlayerLaunch } from "../../lib/playback-handoff";
@@ -22,6 +23,32 @@ export function CenterCard({ children }: { children: ReactNode }) {
 export function Spinner() {
   return (
     <div className="h-6 w-6 animate-spin rounded-full border-2 border-edge border-t-accent" />
+  );
+}
+
+/** The player went away on its own (mpv's window was closed, or the core crashed). */
+export function ClosedCard({
+  title,
+  onPlayAgain,
+  onBack,
+}: {
+  title: string;
+  onPlayAgain: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <CenterCard>
+      <div className="text-base font-semibold">{title}</div>
+      <div className="flex gap-2">
+        <button
+          className="rounded-md bg-accent px-4 py-2 text-sm font-medium text-canvas hover:opacity-90"
+          onClick={onPlayAgain}
+        >
+          ▶ Play again
+        </button>
+        <BackButton onClick={onBack} />
+      </div>
+    </CenterCard>
   );
 }
 
@@ -44,6 +71,36 @@ function useEscape(onEscape: () => void) {
   }, [onEscape]);
 }
 
+/** Why built-in playback was not used (it fell back to mpv): an info note, dismissible. */
+export function FallbackNotice({ reason, onDismiss }: { reason: string; onDismiss: () => void }) {
+  return (
+    <button
+      className="flex items-start gap-2 rounded-md bg-elevated/90 px-3 py-2 text-left text-xs text-ink-muted ring-1 ring-edge-soft"
+      title="Dismiss"
+      onClick={onDismiss}
+    >
+      <Info size={14} className="mt-px shrink-0 text-accent" />
+      <span>Built-in playback could not start, so this plays in mpv: {reason}</span>
+    </button>
+  );
+}
+
+/** The launch's title art, dimmed to sit behind the controls (screens without video). */
+export function Backdrop({ src }: { src: string | null }) {
+  if (!src) return null;
+  return (
+    <div className="pointer-events-none absolute inset-0">
+      <img src={src} alt="" className="h-full w-full scale-105 object-cover opacity-30" />
+      <div className="absolute inset-0 bg-gradient-to-b from-canvas/40 via-canvas/85 to-canvas" />
+    </div>
+  );
+}
+
+/** Wide art for a launch: the title's backdrop, else the episode still, else the poster. */
+export function launchBackdrop(launch: PlayerLaunch): string | null {
+  return launch.meta?.background ?? launch.video?.thumbnail ?? launch.meta?.poster ?? null;
+}
+
 /** Full-window frame for the screens that have no video behind them. */
 function Screen({
   backdrop,
@@ -56,12 +113,7 @@ function Screen({
 }) {
   return (
     <main className="fixed inset-0 flex items-center justify-center overflow-hidden bg-canvas px-6">
-      {backdrop && (
-        <div className="pointer-events-none absolute inset-0">
-          <img src={backdrop} alt="" className="h-full w-full scale-105 object-cover opacity-30" />
-          <div className="absolute inset-0 bg-gradient-to-b from-canvas/40 via-canvas/85 to-canvas" />
-        </div>
-      )}
+      <Backdrop src={backdrop ?? null} />
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-20" />
       <button
         onClick={onBack}
@@ -105,24 +157,12 @@ function streamLabel(launch: PlayerLaunch): string | null {
   return label || launch.stream?.behaviorHints.filename || null;
 }
 
-/**
- * Non-embedded builds: playback runs in its own mpv window. Zeiler has no remote control
- * over that window yet (M2), so this screen offers Stop and Back; Back keeps mpv playing.
- */
-export function ExternalPlayback({
-  launch,
-  infoHash,
-  onBack,
-  onStop,
-}: {
-  launch: PlayerLaunch;
-  infoHash: string | null;
-  onBack: () => void;
-  onStop: () => Promise<void>;
-}) {
-  const [stopping, setStopping] = useState(false);
-  useEscape(onBack);
-
+/** What the screens say about a launch: series/episode line, heading, source line. */
+export function launchLabels(launch: PlayerLaunch): {
+  eyebrow: string | null;
+  heading: string;
+  sourceLine: string;
+} {
   const { meta, video } = launch;
   const eyebrow = video
     ? `${meta?.name ?? ""} · Season ${video.season ?? "?"} · Episode ${String(video.episode ?? "?").padStart(2, "0")}`
@@ -132,9 +172,56 @@ export function ExternalPlayback({
     : (meta?.name ?? launch.title ?? "Now playing");
   const kind = launch.source.kind === "torrent" ? "Torrent" : "Direct stream";
   const sourceLine = [launch.addonName ?? kind, streamLabel(launch)].filter(Boolean).join(" · ");
+  return { eyebrow, heading, sourceLine };
+}
+
+/** A display label for comparison: case, spacing, line breaks and "·" separators aside. */
+const labelKey = (label: string | null | undefined) =>
+  (label ?? "").replace(/[\s·]+/g, " ").trim().toLowerCase();
+
+/**
+ * mpv's media-title, only when it tells the user something the other labels do not
+ * (typically the torrent's or stream's file name). Zeiler forces the launch title as
+ * media-title, and for a stream without a filename hint that title is just the stream
+ * name or "Show · S1E2", already on screen.
+ */
+export function mediaSubtitle(launch: PlayerLaunch, mediaTitle: string | null): string | null {
+  const own = labelKey(mediaTitle);
+  if (!own) return null;
+  const { eyebrow, heading, sourceLine } = launchLabels(launch);
+  const shown = [heading, eyebrow, sourceLine, launch.stream?.name, streamLabel(launch)];
+  if (!launch.stream?.behaviorHints.filename) shown.push(launch.title);
+  return shown.some((label) => labelKey(label) === own) ? null : mediaTitle;
+}
+
+/**
+ * External mpv launched without its JSON IPC (the last resort when the IPC never came
+ * up): it plays in its own window, but Zeiler can neither control it nor see its state,
+ * so this card offers only Stop and Back. Back keeps mpv playing. When built-in playback
+ * fell back to mpv, the card says why.
+ */
+export function UncontrolledPlayback({
+  launch,
+  infoHash,
+  fallbackReason,
+  dismissFallback,
+  onBack,
+  onStop,
+}: {
+  launch: PlayerLaunch;
+  infoHash: string | null;
+  fallbackReason: string | null;
+  dismissFallback: () => void;
+  onBack: () => void;
+  onStop: () => Promise<void>;
+}) {
+  const [stopping, setStopping] = useState(false);
+  useEscape(onBack);
+
+  const { eyebrow, heading, sourceLine } = launchLabels(launch);
 
   return (
-    <Screen backdrop={video?.thumbnail ?? meta?.poster ?? null} onBack={onBack}>
+    <Screen backdrop={launchBackdrop(launch)} onBack={onBack}>
       <div className="flex flex-col gap-6 rounded-[24px] border border-edge-soft bg-elevated/95 px-8 py-8 shadow-[0_30px_80px_-25px_rgba(0,0,0,0.85)]">
         <div className="flex flex-col gap-2">
           <div className="text-[10.5px] font-semibold uppercase tracking-[0.32em] text-accent">
@@ -154,9 +241,11 @@ export function ExternalPlayback({
           </div>
           {infoHash && <TorrentStats infoHash={infoHash} compact />}
         </div>
+        {fallbackReason && <FallbackNotice reason={fallbackReason} onDismiss={dismissFallback} />}
         <p className="text-[13.5px] leading-relaxed text-ink-muted">
-          The video is playing in its own mpv window. Go back to keep browsing; playback
-          continues until you stop it here or close mpv.
+          The video is playing in its own mpv window, but mpv did not open its control
+          connection, so Zeiler cannot show its controls here. Use mpv&apos;s own keys in
+          its window. Back keeps it playing; Stop closes it.
         </p>
         <div className="flex gap-2">
           <button

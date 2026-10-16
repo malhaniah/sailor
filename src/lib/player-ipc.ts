@@ -7,7 +7,9 @@
  * embedded libmpv or external mpv (remote-controlled over JSON IPC) in Rust and says
  * which it used; every other call acts on whichever is running, and both backends
  * emit the same `player://event` stream. Property writes, reads and commands are
- * validated against allow-lists in Rust (commands/mpv/validate.rs).
+ * validated against allow-lists in Rust (commands/mpv/validate.rs). The pre-M2 command
+ * names (`player_play`, `player_embedded_*`, `player_status`) still exist in Rust for one
+ * release (commands/mpv/aliases.rs) but nothing in the UI calls them any more.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -65,7 +67,9 @@ export const playerStart = (request: PlaybackRequest, backend: PlayerBackend = "
 /** Load another file into the running player (same window, same backend). */
 export const playerLoad = (request: PlaybackRequest) => invoke<void>("player_load", { request });
 /** Stop whatever is playing, on any backend. */
-export const playerStop = () => invoke<void>("player_stop");
+/** Stop the player; with `only`, just a session on that backend (none = any backend). */
+export const playerStop = (only?: ActiveBackend) =>
+  invoke<void>("player_stop", only ? { only } : {});
 export const playerSetGeometry = (geometry: Geometry) =>
   invoke<void>("player_set_geometry", { geometry });
 /** Set an allow-listed property (Rust validates name and value). */
@@ -77,21 +81,6 @@ export const playerCommand = (...args: (string | number)[]) =>
 /** Read an allow-listed property: diagnostics (codecs, fps, drops…) or an observed one. */
 export const playerGetProperty = (name: string) =>
   invoke<unknown>("player_get_property", { name });
-
-// --- deprecated aliases (kept for one release; the current Player screen uses them) ---
-
-/** @deprecated use `playerBackends().embedded.available` */
-export const playerEmbeddedAvailable = () => invoke<boolean>("player_embedded_available");
-/** @deprecated use `playerStart(request, "embedded")` */
-export const playerEmbeddedStart = (request: PlaybackRequest) =>
-  invoke<void>("player_embedded_start", { request });
-/** @deprecated stops only an embedded session; `playerStop` stops any */
-export const playerEmbeddedStop = () => invoke<void>("player_embedded_stop");
-/** @deprecated use `playerStart(request, "external")` */
-export const playerExternalPlay = (request: PlaybackRequest) =>
-  invoke<void>("player_play", { request });
-/** @deprecated same command as `playerStop` */
-export const playerExternalStop = () => invoke<void>("player_stop");
 
 // engine commands the player page uses to resolve/clean up torrent streams
 export interface ResolvedStream {
@@ -111,7 +100,8 @@ export const engineStats = (infoHash: string) =>
   invoke<Record<string, unknown>>("engine_stats", { infoHash });
 export const engineRemove = (infoHash: string, deleteFiles: boolean) =>
   invoke<void>("engine_remove", { infoHash, deleteFiles });
-export const settingsGet = () => invoke<{ deleteOnStop: boolean }>("settings_get");
+export const settingsGet = () =>
+  invoke<{ deleteOnStop: boolean; playerBackend: PlayerBackend }>("settings_get");
 
 export function errorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {

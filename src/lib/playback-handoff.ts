@@ -18,7 +18,7 @@
  * global key listeners read it so they stay quiet while the player has the keyboard.
  */
 import type { PlaybackRequest } from "./player-ipc";
-import type { MetaItem, Stream, Subtitle, Video } from "./types";
+import type { MetaItem, PlayerBackend, Stream, Subtitle, Video } from "./types";
 
 // --- the launch ---------------------------------------------------------------------------
 
@@ -49,6 +49,8 @@ export interface LaunchMeta {
   id: string;
   name: string;
   poster: string | null;
+  /** wide backdrop art; the external-mpv screen fills the window with it */
+  background: string | null;
   /** the series' episode list, for next-episode and binge lookups */
   videos: Video[];
 }
@@ -85,6 +87,12 @@ export interface PlayerLaunch {
   addonName: string | null;
   /** live TV / channel: no duration, no seeking, no progress */
   live: boolean;
+  /**
+   * Which player to use for this launch: "auto" follows the `playerBackend` setting
+   * (Rust decides, falling back from built-in to mpv); the picker's "Open in external
+   * mpv" forces "external".
+   */
+  backend: PlayerBackend;
 }
 
 /**
@@ -145,6 +153,7 @@ export function launchForStream({
       id: meta.id,
       name: meta.name,
       poster: meta.poster ?? null,
+      background: meta.background ?? null,
       videos: meta.videos,
     },
     video: video
@@ -169,6 +178,7 @@ export function launchForStream({
     transportUrl,
     addonName,
     live: meta.behaviorHints.isLive || meta.type === "tv",
+    backend: "auto",
   };
 }
 

@@ -1,6 +1,6 @@
 /**
  * Playback clock: the fast-changing mpv properties (position ~5×/s, duration, pause,
- * buffering) in a tiny subscribable store, one per player session. Components read
+ * buffering, buffered range) in a tiny subscribable store, one per player session. Components read
  * exactly the field they draw with `useClock(clock, (s) => s.timePos)`, so a position
  * tick re-renders the seek bar and the time readout — not the whole player page.
  */
@@ -14,6 +14,8 @@ export interface ClockState {
   pausedForCache: boolean;
   /** cache-buffering-state, 0-100 */
   buffering: number;
+  /** demuxer-cache-time: the stream is buffered up to this position (s); 0 if unknown */
+  cachedUntil: number;
 }
 
 const INITIAL_CLOCK: ClockState = {
@@ -22,6 +24,7 @@ const INITIAL_CLOCK: ClockState = {
   pause: false,
   pausedForCache: false,
   buffering: 100,
+  cachedUntil: 0,
 };
 
 export interface PlaybackClock {
@@ -64,7 +67,7 @@ export function useClock<T>(clock: PlaybackClock, select: (state: ClockState) =>
  */
 export function applyClockEvent(clock: PlaybackClock, event: PlayerEvent): boolean {
   if (event.type === "start-file") {
-    clock.set({ timePos: 0, duration: 0 });
+    clock.set({ timePos: 0, duration: 0, cachedUntil: 0 });
     return false;
   }
   if (event.type !== "property") return false;
@@ -84,6 +87,9 @@ export function applyClockEvent(clock: PlaybackClock, event: PlayerEvent): boole
       return true;
     case "cache-buffering-state":
       if (typeof v === "number") clock.set({ buffering: v });
+      return true;
+    case "demuxer-cache-time":
+      clock.set({ cachedUntil: typeof v === "number" ? v : 0 });
       return true;
     default:
       return false;

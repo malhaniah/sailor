@@ -8,8 +8,7 @@ use zeiler_player::{PlayerEvent, Session};
 use super::EmbeddedStatus;
 pub(super) use super::stub::{Surface, after_start, on_stop, set_geometry};
 
-const REASON: &str = "Built-in playback is not available on Linux; Zeiler plays in an mpv \
-                      window and controls it from the player screen.";
+const REASON: &str = "Built-in playback is not available on Linux yet.";
 
 pub(super) fn embedded_status() -> EmbeddedStatus {
     EmbeddedStatus::unavailable(REASON.into())

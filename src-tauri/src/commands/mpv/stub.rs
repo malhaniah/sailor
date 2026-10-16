@@ -13,7 +13,7 @@ pub struct Surface;
 
 #[cfg_attr(feature = "embedded", allow(dead_code))]
 const REASON: &str = "Built-in playback is not part of this build (it needs the `embedded` \
-                      feature); Zeiler plays in an mpv window instead.";
+                      feature).";
 
 #[cfg_attr(feature = "embedded", allow(dead_code))]
 pub(super) fn embedded_status() -> EmbeddedStatus {

@@ -3,32 +3,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AddonLogo } from "../components/cards";
 import { fallbackGradient } from "../components/Poster";
-import { Badge, CopyField, EmptyState, Modal } from "../components/ui";
-import {
-  engineRemove,
-  engineResolve,
-  errorKind,
-  errorMessage,
-  playerPlay,
-  settingsGet,
-  streamsGet,
-} from "../lib/ipc";
-import {
-  launchForStream,
-  openPlayer,
-  subscribeLaunchFailures,
-  urlRequest,
-} from "../lib/playback-handoff";
+import { Badge, EmptyState, Modal } from "../components/ui";
+import { errorMessage, streamsGet } from "../lib/ipc";
+import { launchForStream, openPlayer, subscribeLaunchFailures } from "../lib/playback-handoff";
 import { useView } from "../lib/view";
 import type { AddonStreams, MetaItem, Stream, Video } from "../lib/types";
 
 type Row = { stream: Stream; addonName: string; transportUrl: string; key: string };
 
-type Phase =
-  | { kind: "idle" }
-  | { kind: "resolving"; streamKey: string; label: string }
-  | { kind: "playing"; infoHash?: string }
-  | { kind: "error"; message: string; streamUrl?: string };
+/** Only streams that leave the app (YouTube, external links) can fail here; everything
+ * else plays on the Player screen, which reports failures back (`subscribeLaunchFailures`). */
+type Phase = { kind: "idle" } | { kind: "error"; message: string };
 
 export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video | null }) {
   const { goBack } = useView();
@@ -114,12 +99,14 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
   }
 
   /** Direct and torrent streams open Zeiler's Player screen, which resolves and plays
-   * them; YouTube and external links leave the app. */
-  async function play(row: Row) {
+   * them; YouTube and external links leave the app. `backend: "external"` is the row's
+   * secondary action ("Open in external mpv"): the same Player screen, with mpv in its
+   * own window under Zeiler's remote controls, whatever the backend setting says. */
+  async function play(row: Row, backend: "auto" | "external" = "auto") {
     const { stream } = row;
     const launch = launchFor(row);
     if (launch) {
-      opened.current.set(openPlayer(launch), row.key);
+      opened.current.set(openPlayer({ ...launch, backend }), row.key);
       return;
     }
     try {
@@ -134,54 +121,6 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
       setFailed((prev) => new Set(prev).add(row.key));
       setPhase({ kind: "error", message: errorMessage(e) });
     }
-  }
-
-  /** Secondary action: hand the stream straight to an external mpv window (the v0.1
-   * path), resolving torrents here. */
-  async function playExternal(row: Row) {
-    const launch = launchFor(row);
-    if (!launch) return;
-    const { source } = launch;
-    try {
-      if (source.kind === "url") {
-        setPhase({ kind: "resolving", streamKey: row.key, label: "Starting player…" });
-        await playerPlay(urlRequest(source, launch));
-        setPhase({ kind: "playing" });
-      } else {
-        setPhase({
-          kind: "resolving",
-          streamKey: row.key,
-          label: "Finding peers and fetching metadata…",
-        });
-        const resolved = await engineResolve({
-          infoHash: source.infoHash,
-          fileIdx: source.fileIdx,
-          sources: source.sources,
-          filename: source.filename,
-          fileMustInclude: source.fileMustInclude,
-        });
-        setPhase({ kind: "resolving", streamKey: row.key, label: "Starting player…" });
-        await playerPlay({ url: resolved.streamUrl, title: launch.title });
-        setPhase({ kind: "playing", infoHash: resolved.infoHash });
-      }
-    } catch (e) {
-      setFailed((prev) => new Set(prev).add(row.key));
-      setPhase({
-        kind: "error",
-        message: errorMessage(e),
-        streamUrl: errorKind(e) === "player" && source.kind === "url" ? source.url : undefined,
-      });
-    }
-  }
-
-  async function stopTorrent(infoHash: string) {
-    try {
-      const settings = await settingsGet();
-      await engineRemove(infoHash, settings.deleteOnStop);
-    } catch {
-      /* best effort */
-    }
-    setPhase({ kind: "idle" });
   }
 
   const backdrop = video?.thumbnail ?? meta.background ?? meta.poster;
@@ -264,10 +203,8 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
                 key={row.key}
                 row={row}
                 failed={failed.has(row.key)}
-                resolving={phase.kind === "resolving" ? phase.streamKey === row.key : false}
-                disabled={phase.kind === "resolving"}
                 onPlay={() => void play(row)}
-                onPlayExternal={() => void playExternal(row)}
+                onPlayExternal={() => void play(row, "external")}
               />
             ))}
           </div>
@@ -288,42 +225,9 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
       </div>
 
       {/* overlays */}
-      {phase.kind === "resolving" && (
-        <div className="fixed inset-x-0 bottom-6 z-[120] flex justify-center">
-          <div className="animate-nudge-in flex items-center gap-3 rounded-full border border-edge-soft bg-elevated/95 px-5 py-2.5 shadow-[0_18px_50px_-20px_rgba(0,0,0,0.65)] backdrop-blur-md">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-edge border-t-accent" />
-            <span className="text-[13px] font-medium text-ink">{phase.label}</span>
-          </div>
-        </div>
-      )}
-
-      {phase.kind === "playing" && (
-        <Modal title="Playing in mpv" onClose={() => setPhase({ kind: "idle" })}>
-          <p className="text-[13.5px] leading-relaxed text-ink-muted">
-            Playback was handed to the player. You can keep browsing while it runs.
-          </p>
-          {phase.infoHash && (
-            <button
-              className="mt-5 h-10 rounded-xl bg-danger/15 px-4 text-[13px] font-semibold text-[oklch(0.75_0.12_25)] transition-colors hover:bg-danger/25"
-              onClick={() => void stopTorrent(phase.infoHash!)}
-            >
-              Stop torrent &amp; clean up
-            </button>
-          )}
-        </Modal>
-      )}
-
       {phase.kind === "error" && (
         <Modal title="Could not play" onClose={() => setPhase({ kind: "idle" })}>
           <p className="text-[13.5px] leading-relaxed text-ink">{phase.message}</p>
-          {phase.streamUrl && (
-            <div className="mt-4 flex flex-col gap-2">
-              <div className="text-[12px] text-ink-muted">
-                Stream URL — play it in any player:
-              </div>
-              <CopyField value={phase.streamUrl} />
-            </div>
-          )}
         </Modal>
       )}
     </main>
@@ -424,15 +328,11 @@ function FilterOption({
 function StreamRow({
   row,
   failed,
-  resolving,
-  disabled,
   onPlay,
   onPlayExternal,
 }: {
   row: { stream: Stream; addonName: string };
   failed: boolean;
-  resolving: boolean;
-  disabled: boolean;
   onPlay: () => void;
   onPlayExternal: () => void;
 }) {
@@ -455,7 +355,7 @@ function StreamRow({
     <div
       className={`flex items-stretch gap-5 rounded-2xl bg-elevated/40 p-5 ring-1 transition-opacity ${
         failed ? "bg-danger/5 ring-danger/40" : "ring-edge-soft/50"
-      } ${disabled && !resolving ? "opacity-60" : ""}`}
+      }`}
     >
       <div className="flex w-[68px] shrink-0 flex-col items-center gap-1.5">
         <AddonLogo name={addonName} size={56} />
@@ -485,26 +385,21 @@ function StreamRow({
       <div className="flex items-center gap-3">
         {(stream.url || stream.infoHash) && (
           <button
-            disabled={disabled}
             onClick={onPlayExternal}
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-raised text-ink-muted transition-colors hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-raised text-ink-muted transition-colors hover:bg-elevated hover:text-ink"
             aria-label="Open in external mpv"
-            title="Open in external mpv"
+            title="Open in external mpv (its own window, controlled from Zeiler)"
           >
             <ExternalLink size={16} />
           </button>
         )}
         <button
-          disabled={disabled || unsupported}
+          disabled={unsupported}
           onClick={onPlay}
           className="flex h-16 w-16 items-center justify-center rounded-full bg-accent text-canvas transition-transform hover:opacity-90 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
           aria-label="Play"
         >
-          {resolving ? (
-            <div className="h-6 w-6 animate-spin rounded-full border-[3px] border-canvas/30 border-t-canvas" />
-          ) : (
-            <Play size={26} fill="currentColor" className="ml-0.5" />
-          )}
+          <Play size={26} fill="currentColor" className="ml-0.5" />
         </button>
       </div>
     </div>

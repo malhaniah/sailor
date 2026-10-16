@@ -200,11 +200,6 @@ export interface Settings {
 /** Player backend preference. */
 export type PlayerBackend = "auto" | "embedded" | "external";
 
-export interface PlayerStatus {
-  available: boolean;
-  path?: string | null;
-}
-
 /** `kind` mirrors the Rust `IpcError` variants (src-tauri/src/error.rs). */
 export type IpcErrorKind =
   | "invalidInput"

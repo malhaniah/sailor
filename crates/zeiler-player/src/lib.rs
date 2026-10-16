@@ -77,7 +77,7 @@ pub enum PlayerBackend {
 }
 
 /// The backend a [`Session`] actually runs on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Backend {
     Embedded,
