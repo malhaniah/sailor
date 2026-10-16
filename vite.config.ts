@@ -22,5 +22,8 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM === "windows" ? "chrome111" : "safari16.4",
     minify: !process.env.TAURI_ENV_DEBUG,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // the licences of the npm packages bundled into the app, which
+    // scripts/third-party-licenses.mjs puts into THIRD-PARTY-LICENSES.txt
+    license: { fileName: ".vite/license.json" },
   },
 });

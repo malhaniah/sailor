@@ -1,31 +1,60 @@
 # cargo-deny configuration: license and advisory hygiene for a GPL-3.0-or-later project.
 # Run with: cargo deny check
+# CI (the `deny` job in ci.yml) runs `cargo deny --all-features check licenses sources`.
+# --all-features turns on zeiler/embedded, so the libmpv2 bindings are checked too, and no
+# [graph] targets are set, so Windows-, macOS- and Linux-only crates are all checked.
 
 [licenses]
+# Every licence here is GPL-3.0-compatible. Each entry names the crates that need it (a
+# crate under "A OR B" needs only one of the two allowed).
 allow = [
-  "GPL-3.0",
+  # Zeiler's own crates (zeiler, zeiler-account, -addon, -engine, -player)
+  "GPL-3.0-or-later",
   "MIT",
+  # librqbit and its sub-crates, backon, dpi, aws-lc-sys
   "Apache-2.0",
+  # target-lexicon (build-time, via the GTK system-deps)
   "Apache-2.0 WITH LLVM-exception",
+  # only ever an alternative today (zerocopy: BSD-2-Clause OR Apache-2.0 OR MIT)
   "BSD-2-Clause",
+  # encoding_rs (its data tables), subtle, matchit, brotli, alloc-(no-)stdlib, aws-lc-sys
   "BSD-3-Clause",
+  # ring, rustls-webpki, untrusted, aws-lc-rs, aws-lc-sys (rustls, via reqwest in librqbit)
   "ISC",
+  # cssparser, selectors, dtoa-short (tauri-utils' HTML handling), option-ext (dirs)
   "MPL-2.0",
+  # foldhash, const_panic, typewit, assert_cfg
   "Zlib",
+  # only ever an alternative today (ryu: Apache-2.0 OR BSL-1.0)
   "BSL-1.0",
+  # tiny-keccak
   "CC0-1.0",
+  # the ICU4X crates (icu_*, zerovec, yoke, …, via idna in url) and unicode-ident
   "Unicode-3.0",
+  # webpki-root-certs (Mozilla's root certificates, via rustls-platform-verifier)
   "CDLA-Permissive-2.0",
-  "OpenSSL",
+  # only ever an alternative today (memchr, aho-corasick, walkdir: Unlicense OR MIT)
   "Unlicense",
-  # libmpv2 / libmpv2-sys (the embedded player's libmpv bindings, `embedded` feature)
-  "LGPL-2.1",
+  # libmpv2 / libmpv2-sys, the embedded player's libmpv bindings (`embedded` feature):
+  # see the clarifications below. LGPL-2.1 section 3 lets them be used under the GPL
+  # (version 2 or later), so they combine with GPL-3.0-or-later.
+  "LGPL-2.1-only",
 ]
 
+# libmpv2 and libmpv2-sys declare `license = "LGPL-2.1"`, an SPDX id deprecated because it
+# does not say "only" or "or later" (cargo-deny warns about it). Their LICENSE is the
+# LGPL-2.1 text and no source file offers a later version, so read it as LGPL-2.1-only.
+# The hash pins the LICENSE file this was checked against: if a new release changes it,
+# cargo-deny ignores the clarification and warns about the bare id again.
 [[licenses.clarify]]
-name = "ring"
-expression = "MIT AND ISC AND OpenSSL"
-license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+crate = "libmpv2"
+expression = "LGPL-2.1-only"
+license-files = [{ path = "LICENSE", hash = 0x13b834cd }]
+
+[[licenses.clarify]]
+crate = "libmpv2-sys"
+expression = "LGPL-2.1-only"
+license-files = [{ path = "LICENSE", hash = 0x13b834cd }]
 
 [advisories]
 yanked = "warn"

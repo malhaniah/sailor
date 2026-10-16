@@ -613,7 +613,15 @@ is up; leaving the player pops the history entry it pushed.
   and falls back to external mpv — when the DLL is missing. macOS (M13) will bundle a
   vendored dylib under Frameworks; Linux keeps the distro mpv. If a GPL libmpv/FFmpeg
   build is ever shipped, the corresponding source offer goes in the release notes.
-- `deny.toml` allows `LGPL-2.1` for the `libmpv2`/`libmpv2-sys` bindings.
+- `deny.toml` allows `LGPL-2.1-only` for the `libmpv2`/`libmpv2-sys` bindings (a
+  clarification, since they declare the deprecated id `LGPL-2.1`). CI's `deny` job runs
+  `cargo deny --all-features check licenses sources`, `zeiler/embedded` included.
+- Every bundle ships `licenses/THIRD-PARTY-LICENSES.txt` (`bundle.resources` in
+  `tauri.conf.json`): the licences of the Rust crates and npm packages in that build,
+  generated per release target by `scripts/third-party-licenses.mjs` (cargo-about with
+  `about.toml`, plus Vite's `build.license` report) in `release.yml`'s `licenses` job.
+  The file is git-ignored; `src-tauri/build.rs` writes a placeholder for other builds,
+  since `tauri_build` refuses a missing resource.
 - Windows installer: NSIS per-user only (no MSI/WiX). Unsigned builds will trip
   SmartScreen/Smart App Control — SignPath Foundation (free for GPL) is the plan.
 

@@ -57,5 +57,20 @@ fn main() {
         }
     }
 
+    // tauri.conf.json bundles licenses/THIRD-PARTY-LICENSES.txt on every platform. Only
+    // release builds generate it (`node scripts/third-party-licenses.mjs`, per target, in
+    // release.yml) and it is git-ignored, so drop in a placeholder for every other build.
+    let third_party = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("licenses")
+        .join("THIRD-PARTY-LICENSES.txt");
+    if !third_party.exists() {
+        let _ = std::fs::write(
+            &third_party,
+            "placeholder - run `node scripts/third-party-licenses.mjs` to list the licences \
+             of the third-party code in this build; see also THIRD-PARTY-NOTICES.md at \
+             https://github.com/malhaniah/zeiler\n",
+        );
+    }
+
     tauri_build::build()
 }

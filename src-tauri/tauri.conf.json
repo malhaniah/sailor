@@ -54,6 +54,9 @@
     "longDescription": "Zeiler is a free, open-source desktop client for the Stremio addon ecosystem. It hosts no media, indexes no media, and ships no content addon.",
     "license": "GPL-3.0-or-later",
     "licenseFile": "../LICENSE",
+    "resources": {
+      "licenses/THIRD-PARTY-LICENSES.txt": "licenses/THIRD-PARTY-LICENSES.txt"
+    },
     "copyright": "Copyright (c) Zeiler contributors",
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },

@@ -40,8 +40,46 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # THIRD-PARTY-LICENSES.txt for each release target: the licences of the Rust crates
+  # built for it (cargo-about over Cargo.lock, with that target's features) and of the
+  # npm packages in the interface (Vite's report). cargo-about only reads metadata and
+  # crate sources, so one Linux job writes all four files (no cargo-about build exists
+  # for the Intel macOS runner); each publish job bundles its own.
+  licenses:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Vite's licence report, dist/.vite/license.json
+      - run: npm run build
+      # must match rust-toolchain.toml exactly
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.2
+      # one per publish target below, with the features its build passes
+      - name: Generate THIRD-PARTY-LICENSES.txt for each target
+        run: |
+          node scripts/third-party-licenses.mjs --target aarch64-apple-darwin \
+            --out third-party-licenses/aarch64-apple-darwin.txt
+          node scripts/third-party-licenses.mjs --target x86_64-apple-darwin \
+            --out third-party-licenses/x86_64-apple-darwin.txt
+          node scripts/third-party-licenses.mjs --target x86_64-unknown-linux-gnu \
+            --out third-party-licenses/x86_64-unknown-linux-gnu.txt
+          node scripts/third-party-licenses.mjs --target x86_64-pc-windows-msvc \
+            --features embedded --out third-party-licenses/x86_64-pc-windows-msvc.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: third-party-licenses
+          path: third-party-licenses/
+          if-no-files-found: error
+
   publish:
-    needs: libmpv
+    needs: [libmpv, licenses]
     permissions:
       contents: write
     strategy:
@@ -49,12 +87,16 @@ jobs:
       matrix:
         include:
           - platform: macos-latest # arm64 (Apple Silicon)
+            target: aarch64-apple-darwin
             args: "--target aarch64-apple-darwin"
           - platform: macos-15-intel
+            target: x86_64-apple-darwin
             args: "--target x86_64-apple-darwin"
           - platform: ubuntu-22.04 # oldest glibc for AppImage portability
+            target: x86_64-unknown-linux-gnu
             args: ""
           - platform: windows-latest
+            target: x86_64-pc-windows-msvc
             # built-in playback: libmpv in-process, bundled beside zeiler.exe
             # (the CLI merges repeated --config in order; the release overlay is
             # appended below)
@@ -62,6 +104,16 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
+      # this target's licence list from the licenses job, which tauri.conf.json bundles
+      # as licenses/THIRD-PARTY-LICENSES.txt (without it, src-tauri/build.rs would
+      # write a placeholder)
+      - uses: actions/download-artifact@v8
+        with:
+          name: third-party-licenses
+          path: third-party-licenses
+      - name: Bundle THIRD-PARTY-LICENSES.txt
+        shell: bash
+        run: cp "third-party-licenses/${{ matrix.target }}.txt" src-tauri/licenses/THIRD-PARTY-LICENSES.txt
       - name: Linux deps
         if: startsWith(matrix.platform, 'ubuntu')
         run: |
