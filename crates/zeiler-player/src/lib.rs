@@ -59,7 +59,8 @@ pub struct PlaybackRequest {
     /// right before `loadfile` — e.g. preferred audio/subtitle languages from settings.
     /// Never deserialized, so the webview cannot inject mpv options through a request;
     /// only Rust code fills this in. Options persist in the core across loads, so the
-    /// shell sends its full set with every load.
+    /// shell sends its full set with every load. One that mpv refuses (an older
+    /// external mpv may not know it) is logged and skipped; the file still loads.
     #[serde(skip)]
     pub options: Vec<(String, String)>,
 }
@@ -274,6 +275,16 @@ impl Session {
         }
     }
 
+    /// Run a command and wait for mpv's answer, on either backend: for commands whose
+    /// failure must reach the user, such as `sub-add`. Callers validate it first.
+    pub async fn command_checked(&self, args: Vec<String>) -> Result<(), SessionError> {
+        match self {
+            #[cfg(feature = "embedded")]
+            Session::Embedded(player) => player.command_checked(args).await,
+            Session::External(player) => player.command(args).await,
+        }
+    }
+
     /// Read a property, typed per [`property_kind`].
     pub async fn get_property(&self, name: &str) -> Result<Value, SessionError> {
         match self {
@@ -355,6 +366,8 @@ pub fn build_mpv_args(request: &PlaybackRequest) -> Vec<String> {
     for (name, value) in &request.headers {
         args.push(format!("--http-header-fields-append={name}: {value}"));
     }
+    // the library owns resume positions, not the user's mpv watch-later files
+    args.push("--resume-playback=no".to_string());
     if let Some(start) = request.start_at_sec {
         args.push(format!("--start={start}"));
     }
@@ -518,6 +531,7 @@ mod tests {
             args.contains(&"--http-header-fields-append=Referer: https://site.example".to_string())
         );
         assert!(args.contains(&"--start=42.5".to_string()));
+        assert!(args.contains(&"--resume-playback=no".to_string()));
         // the URL (and its credentials) must never be an argument
         assert!(args.iter().all(|a| !a.contains("secret")));
     }

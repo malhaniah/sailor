@@ -1,26 +1,27 @@
 /**
  * The bottom control bar of the Player screen, for both backends: seek bar (with the
- * buffered range), play/pause, time, volume and mute, audio/subtitle track menus,
- * playback speed, fullscreen and — for an external mpv window — Stop. Position-driven
+ * buffered range), play/pause, time, volume and mute, the audio and subtitle menus
+ * (AudioMenu, SubtitleMenu: tracks, sources, delays, quick style), playback speed,
+ * fullscreen and — for an external mpv window — Stop. Position-driven
  * parts subscribe to the playback clock themselves, so a time-pos tick re-renders only
  * them.
  */
 import { Maximize, Pause, Play, RotateCcw, Square, Volume2, VolumeX } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { type MpvTrack, playerCommand, playerSetProperty } from "../../lib/player-ipc";
+import { type ReactNode, useEffect, useState } from "react";
+import { playerCommand, playerSetProperty } from "../../lib/player-ipc";
+import { AudioMenu } from "./AudioMenu";
+import { chip, MenuRow, PopupMenu } from "./menu";
 import { formatTime, type MpvState } from "./mpv-state";
 import { type PlaybackClock, useClock } from "./playback-clock";
-import { type PlayerControls, VOLUME_MAX } from "./usePlayerControls";
-
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
-
-const chip =
-  "flex h-8 items-center gap-1.5 rounded-md bg-canvas/50 px-3 text-sm text-ink-muted hover:bg-elevated hover:text-ink";
+import { SubtitleMenu } from "./SubtitleMenu";
+import { SPEEDS, type PlayerControls, VOLUME_MAX } from "./usePlayerControls";
+import type { Tracks } from "./useTracks";
 
 export function ControlsBar({
   clock,
   ended,
   mpv,
+  tracks,
   controls,
   shown,
   onPoke,
@@ -33,6 +34,7 @@ export function ControlsBar({
   clock: PlaybackClock;
   ended: boolean;
   mpv: MpvState;
+  tracks: Tracks;
   controls: PlayerControls;
   shown: boolean;
   onPoke: () => void;
@@ -50,21 +52,15 @@ export function ControlsBar({
         shown ? "opacity-100" : "pointer-events-none opacity-0"
       }`}
     >
+      {tracks.notice && <Notice text={tracks.notice} onDismiss={tracks.dismissNotice} />}
       <SeekBar clock={clock} onPoke={onPoke} />
       <div className="flex items-center gap-3">
         <PlayPauseButton clock={clock} ended={ended} onClick={controls.togglePauseOrReplay} />
         <TimeReadout clock={clock} />
         <VolumeControl volume={mpv.volume} mute={mpv.mute} onMute={controls.toggleMute} onPoke={onPoke} />
         <div className="flex-1" />
-        <TrackMenu label="Audio" type="audio" tracks={mpv.tracks} current={mpv.aid} property="aid" />
-        <TrackMenu
-          label="Subtitles"
-          type="sub"
-          tracks={mpv.tracks}
-          current={mpv.sid}
-          property="sid"
-          allowOff
-        />
+        <AudioMenu tracks={tracks} mpv={mpv} />
+        <SubtitleMenu tracks={tracks} mpv={mpv} />
         <SpeedMenu speed={mpv.speed} />
         <button
           className={chip}
@@ -220,112 +216,13 @@ function VolumeControl({
   );
 }
 
-/** A button with a small menu above it; closes on a pick, a click elsewhere or Escape
- * (which then does not also leave the player). */
-function PopupMenu({
-  label,
-  title,
-  children,
-}: {
-  label: ReactNode;
-  title?: string;
-  children: (close: () => void) => ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    // capture phase: runs before the player's window shortcuts, which skip a
-    // prevented event
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(false);
-    };
-    window.addEventListener("mousedown", onDown);
-    window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("mousedown", onDown);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [open]);
-  return (
-    <div ref={ref} className="relative">
-      <button className={chip} onClick={() => setOpen((o) => !o)} title={title} aria-expanded={open}>
-        {label}
-      </button>
-      {open && (
-        <div className="absolute bottom-10 right-0 z-10 max-h-64 w-56 overflow-y-auto rounded-lg border border-edge bg-surface py-1 shadow-xl">
-          {children(() => setOpen(false))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TrackMenu({
-  label,
-  type,
-  tracks,
-  current,
-  property,
-  allowOff = false,
-}: {
-  label: string;
-  type: MpvTrack["type"];
-  tracks: MpvTrack[];
-  current: string;
-  property: "aid" | "sid" | "vid";
-  allowOff?: boolean;
-}) {
-  const options = tracks.filter((t) => t.type === type);
-  if (options.length === 0 && !allowOff) return null;
-
-  const trackName = (t: MpvTrack) =>
-    [t.title, t.lang?.toUpperCase(), t["demux-h"] ? `${t["demux-h"]}p` : null]
-      .filter(Boolean)
-      .join(" · ") || `Track ${t.id}`;
-  const pick = (value: number | string, close: () => void) => {
-    void playerSetProperty(property, value).catch(() => undefined);
-    close();
-  };
-
-  return (
-    <PopupMenu label={label}>
-      {(close) => (
-        <>
-          {allowOff && (
-            <MenuRow
-              label="Off"
-              selected={current === "no" || current === "false"}
-              onPick={() => pick("no", close)}
-            />
-          )}
-          {options.map((t) => (
-            <MenuRow
-              key={t.id}
-              label={trackName(t)}
-              selected={t.selected === true || current === String(t.id)}
-              onPick={() => pick(t.id, close)}
-            />
-          ))}
-          {options.length === 0 && (
-            <div className="px-3 py-2 text-xs text-ink-subtle">No {label.toLowerCase()} tracks</div>
-          )}
-        </>
-      )}
-    </PopupMenu>
-  );
-}
-
 function SpeedMenu({ speed }: { speed: number }) {
   const label = (s: number) => (s === 1 ? "Normal" : `${s}×`);
   return (
-    <PopupMenu label={speed === 1 ? "1×" : `${Math.round(speed * 100) / 100}×`} title="Playback speed">
+    <PopupMenu
+      label={speed === 1 ? "1×" : `${Math.round(speed * 100) / 100}×`}
+      title="Playback speed ([ / ])"
+    >
       {(close) =>
         SPEEDS.map((s) => (
           <MenuRow
@@ -343,24 +240,19 @@ function SpeedMenu({ speed }: { speed: number }) {
   );
 }
 
-function MenuRow({
-  label,
-  selected,
-  onPick,
-}: {
-  label: string;
-  selected: boolean;
-  onPick: () => void;
-}) {
+/** A passing message from the menus (a dropped file was added, a load failed). */
+function Notice({ text, onDismiss }: { text: string; onDismiss: () => void }) {
+  useEffect(() => {
+    const timer = window.setTimeout(onDismiss, 6000);
+    return () => window.clearTimeout(timer);
+  }, [text, onDismiss]);
   return (
     <button
-      className={`block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-elevated ${
-        selected ? "text-accent" : "text-ink-muted"
-      }`}
-      onClick={onPick}
+      onClick={onDismiss}
+      className="max-w-[60%] self-start truncate rounded-md bg-surface/90 px-3 py-1.5 text-xs text-ink-muted shadow-lg"
+      title={text}
     >
-      {selected ? "✓ " : ""}
-      {label}
+      {text}
     </button>
   );
 }

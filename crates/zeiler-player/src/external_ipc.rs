@@ -203,8 +203,15 @@ impl ExternalIpcPlayer {
     /// offset and title first, then `loadfile replace`, then unpause.
     pub async fn load(&self, request: &PlaybackRequest) -> Result<(), SessionError> {
         info!(url = %redact_url(&request.url), "external mpv loading");
-        for args in load_commands(request, &self.defaults) {
-            self.conn.request(args).await?;
+        for LoadStep { command, required } in load_commands(request, &self.defaults) {
+            match self.conn.request(command).await {
+                Err(SessionError::Mpv(error)) if !required => {
+                    warn!(%error, "mpv refused a pre-load option");
+                }
+                result => {
+                    result?;
+                }
+            }
         }
         Ok(())
     }
@@ -266,8 +273,17 @@ fn stream_referrer(request: &PlaybackRequest) -> Option<&str> {
         })
 }
 
+/// One command of a load, and whether the load fails when mpv refuses it.
+#[derive(Debug, PartialEq)]
+struct LoadStep {
+    command: Vec<Value>,
+    /// False for the shell's pre-load options (preferences): an older mpv may not
+    /// know one, and that must not cost the playback.
+    required: bool,
+}
+
 /// The commands that load `request`, in order.
-fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<Vec<Value>> {
+fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<LoadStep> {
     let mut commands = vec![vec![
         json!("change-list"),
         json!("http-header-fields"),
@@ -316,6 +332,12 @@ fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<Vec<Valu
             json!(stream_referrer(request).unwrap_or(&defaults.referrer)),
         ));
     }
+    // Zeiler's library is the one source of resume positions: a user's
+    // save-position-on-quit would otherwise make mpv's own watch-later start (applied
+    // at load, over a runtime `start`) win over the picker's "Resume" or "Start from
+    // the beginning". Optional, like the preferences: an odd build cannot fail a load.
+    let resume = commands.len();
+    commands.push(set("resume-playback", json!("no")));
     // `start` rather than loadfile's per-file options: their syntax changed across
     // mpv versions (the playlist index argument), the property did not
     commands.push(set(
@@ -329,6 +351,7 @@ fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<Vec<Valu
         "force-media-title",
         json!(request.title.as_deref().unwrap_or("")),
     ));
+    let options = commands.len()..commands.len() + request.options.len();
     for (name, value) in &request.options {
         commands.push(set(name, json!(value)));
     }
@@ -340,6 +363,13 @@ fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<Vec<Valu
     // `pause` persists across files (keep-open leaves mpv paused at EOF)
     commands.push(set("pause", json!(false)));
     commands
+        .into_iter()
+        .enumerate()
+        .map(|(i, command)| LoadStep {
+            command,
+            required: !options.contains(&i) && i != resume,
+        })
+        .collect()
 }
 
 // --- connection ------------------------------------------------------------------------
@@ -1173,8 +1203,21 @@ mod tests {
         let commands = load_commands(&request, &defaults);
         let lines: Vec<String> = commands
             .iter()
-            .map(|c| Value::Array(c.clone()).to_string())
+            .map(|c| Value::Array(c.command.clone()).to_string())
             .collect();
+        let optional: Vec<String> = commands
+            .iter()
+            .filter(|c| !c.required)
+            .map(|c| Value::Array(c.command.clone()).to_string())
+            .collect();
+        assert_eq!(
+            optional,
+            [
+                r#"["set_property","resume-playback","no"]"#,
+                r#"["set_property","alang","en"]"#
+            ],
+            "only the preferences (and the watch-later opt-out) may fail"
+        );
         assert_eq!(
             lines,
             vec![
@@ -1183,6 +1226,7 @@ mod tests {
                 r#"["change-list","http-header-fields","append","Authorization: Bearer a,b"]"#,
                 r#"["change-list","http-header-fields","append","Referer: https://site.example"]"#,
                 r#"["set_property","user-agent","mpv/0.37"]"#,
+                r#"["set_property","resume-playback","no"]"#,
                 r#"["set_property","start","90"]"#,
                 r#"["set_property","force-media-title","Film"]"#,
                 r#"["set_property","alang","en"]"#,
@@ -1198,9 +1242,15 @@ mod tests {
             },
             &Defaults::default(),
         );
-        assert!(plain.contains(&vec![json!("set_property"), json!("start"), json!("none")]));
         assert!(
-            !plain.iter().any(|c| c.get(1) == Some(&json!("referrer"))),
+            plain
+                .iter()
+                .any(|c| c.command == [json!("set_property"), json!("start"), json!("none")])
+        );
+        assert!(
+            !plain
+                .iter()
+                .any(|c| c.command.get(1) == Some(&json!("referrer"))),
             "no referrer in the user's config: the option is never touched"
         );
     }
@@ -1217,7 +1267,7 @@ mod tests {
         let lines = |request: &PlaybackRequest| -> Vec<String> {
             load_commands(request, &defaults)
                 .iter()
-                .map(|c| Value::Array(c.clone()).to_string())
+                .map(|c| Value::Array(c.command.clone()).to_string())
                 .collect()
         };
         let referrer_set = |value: &str| format!(r#"["set_property","referrer","{value}"]"#);

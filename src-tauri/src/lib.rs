@@ -3,7 +3,9 @@ mod commands;
 mod error;
 mod library;
 mod persist;
+mod settings_groups;
 mod state;
+mod subtitles;
 mod updater;
 
 use std::time::Duration;
@@ -44,11 +46,15 @@ pub fn run() {
                     .plugin(tauri_plugin_window_state::Builder::default().build())?;
                 app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
+                // the subtitle file picker, opened from Rust only: no capability grants
+                // the webview its commands
+                app.handle().plugin(tauri_plugin_dialog::init())?;
             }
 
             let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?;
-            let state = tauri::async_runtime::block_on(AppState::load(data_dir, cache_dir))?;
+            let state =
+                tauri::async_runtime::block_on(AppState::load(data_dir, cache_dir.clone()))?;
             let handle = app.handle().clone();
             let library = tauri::async_runtime::block_on(LibraryState::load(
                 &state.profile_dir(),
@@ -56,12 +62,23 @@ pub fn run() {
                     let _ = handle.emit(LIBRARY_CHANGED, LibraryChanged { ids });
                 },
             ))?;
+            let prefs = tauri::async_runtime::block_on(subtitles::prefs::PlayerPrefs::load(
+                &state.profile_dir(),
+            ))?;
+            app.manage(subtitles::SubtitleStore::new(&cache_dir));
             app.manage(state);
             app.manage(library);
+            app.manage(prefs);
             app.manage(commands::mpv::PlayerState::default());
             updater::start(app.handle().clone());
             info!("zeiler started");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // a subtitle file dropped on the window goes to the running player
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                commands::mpv::subtitles::on_drop(window.app_handle(), paths);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::addons::addon_preview,
@@ -71,6 +88,7 @@ pub fn run() {
             commands::content::catalog_load,
             commands::content::meta_get,
             commands::content::streams_get,
+            commands::content::subtitles_get,
             commands::engine::engine_resolve,
             commands::engine::engine_stats,
             commands::engine::engine_remove,
@@ -95,6 +113,12 @@ pub fn run() {
             commands::mpv::player_get_property,
             commands::mpv::player_set_geometry,
             commands::mpv::player_surface_refresh,
+            commands::mpv::subtitles::player_subtitle_add,
+            commands::mpv::subtitles::player_subtitle_reencode,
+            commands::mpv::subtitles::player_subtitle_pick_local,
+            commands::mpv::subtitles::player_set_sub_style,
+            commands::mpv::subtitles::player_prefs_get,
+            commands::mpv::subtitles::player_prefs_set,
             // deprecated aliases, kept for one release (commands/mpv/aliases.rs)
             commands::mpv::aliases::player_status,
             commands::mpv::aliases::player_play,

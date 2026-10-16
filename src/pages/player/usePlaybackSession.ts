@@ -116,6 +116,11 @@ export interface PlaybackSession {
   playAgain: () => void;
   /** stop the player, drop the torrent, leave the page (external mpv's Stop) */
   stopAndLeave: () => Promise<void>;
+  /**
+   * Follow this session's events (only those of its own player, as the page sees them);
+   * returns the unsubscribe function.
+   */
+  subscribeEvents: (listener: (event: PlayerEvent) => void) => () => void;
 }
 
 export function usePlaybackSession(
@@ -131,6 +136,7 @@ export function usePlaybackSession(
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  const listeners = useRef(new Set<(event: PlayerEvent) => void>());
   const actions = useRef<{ playAgain: () => void; stopAndLeave: () => Promise<void> }>({
     playAgain: () => undefined,
     stopAndLeave: async () => leavePlayer(),
@@ -167,6 +173,7 @@ export function usePlaybackSession(
       // events of a session left playing by an earlier launch, until ours replaces it
       if (player.state === "idle" || player.state === "gone") return;
       if (!applyClockEvent(clock, event)) dispatch(event);
+      for (const listener of [...listeners.current]) listener(event);
       switch (event.type) {
         case "file-loaded":
         case "playback-restart":
@@ -340,6 +347,12 @@ export function usePlaybackSession(
 
   const playAgain = useCallback(() => actions.current.playAgain(), []);
   const stopAndLeave = useCallback(() => actions.current.stopAndLeave(), []);
+  const subscribeEvents = useCallback((listener: (event: PlayerEvent) => void) => {
+    listeners.current.add(listener);
+    return () => {
+      listeners.current.delete(listener);
+    };
+  }, []);
   return {
     phase,
     backend,
@@ -351,5 +364,6 @@ export function usePlaybackSession(
     dismissFallback: useCallback(() => setFallbackReason(null), []),
     playAgain,
     stopAndLeave,
+    subscribeEvents,
   };
 }

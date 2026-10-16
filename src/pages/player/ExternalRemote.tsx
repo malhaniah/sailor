@@ -19,6 +19,7 @@ import type { PlayerLaunch } from "../../lib/playback-handoff";
 import { playerCommand } from "../../lib/player-ipc";
 import { ControlsBar } from "./ControlsBar";
 import type { MpvState, Phase } from "./mpv-state";
+import type { Tracks } from "./useTracks";
 import { type PlaybackClock, useClock } from "./playback-clock";
 import {
   BackButton,
@@ -41,6 +42,7 @@ export function ExternalRemote({
   launch,
   phase,
   mpv,
+  tracks,
   clock,
   notice,
   dismissNotice,
@@ -54,6 +56,7 @@ export function ExternalRemote({
   launch: PlayerLaunch;
   phase: Phase;
   mpv: MpvState;
+  tracks: Tracks;
   clock: PlaybackClock;
   notice: string | null;
   dismissNotice: () => void;
@@ -195,6 +198,7 @@ export function ExternalRemote({
           clock={clock}
           ended={ended}
           mpv={mpv}
+          tracks={tracks}
           controls={controls}
           shown
           onPoke={noop}

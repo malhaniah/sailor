@@ -18,8 +18,10 @@ Zeiler is a self-contained media client that speaks the open [Stremio addon prot
 ## Status
 
 Early development: addon install/manage, catalog browsing, search, metadata/episodes,
-stream fan-out, a built-in torrent engine, Zeiler's own player screen, and a local library
-that remembers where you stopped (Continue Watching, resume, watched marks). On Windows,
+stream fan-out, a built-in torrent engine, Zeiler's own player screen, a local library
+that remembers where you stopped (Continue Watching, resume, watched marks), and
+subtitles in your languages from the video, your subtitle addons or a file — picked
+automatically, with delay, encoding and style controls and per-show memory. On Windows,
 videos play inside the Zeiler window (built-in libmpv). On macOS and Linux they play in an
 mpv window that Zeiler controls with the same full set of controls; built-in playback for
 macOS comes next.

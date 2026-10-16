@@ -104,10 +104,13 @@ SOFTWARE.
 
 The Windows installer ships `libmpv-2.dll` beside `zeiler.exe` for built-in playback. It
 is dynamically linked (never statically) and can be replaced by any compatible libmpv
-build. The installer puts the LGPL-2.1 text (`licenses\LGPL-2.1.txt`, from
-`src-tauri/licenses/`) and a notice with the versions, the provenance and the source
-offer below (`licenses\libmpv-NOTICE.txt`, written by `scripts/fetch-libmpv.mjs`) next
-to it.
+build. Next to it, in `licenses\`, the installer puts:
+- the licence texts (`LGPL-2.1.txt`, `LGPL-3.0.txt`, `GPL-3.0.txt`, from
+  `src-tauri/licenses/`);
+- `libmpv-THIRD-PARTY.txt`, with the copyright notices and licence texts of the
+  libraries linked into the DLL;
+- `libmpv-NOTICE.txt`, with the versions, the provenance and the source offer below
+  (written by `scripts/fetch-libmpv.mjs`).
 
 - **Build**: the LGPL flavour of zhongfly/mpv-winbuild, release
   [`2026-10-15-5757d69708`](https://github.com/zhongfly/mpv-winbuild/releases/tag/2026-10-15-5757d69708),
@@ -116,11 +119,17 @@ to it.
   by `scripts/fetch-libmpv.mjs`).
 - **Versions** (as reported by the DLL): mpv `v0.41.0-1184-g5757d6970`, built with
   `-Dgpl=false`; FFmpeg `N-127570-gaf25036ac`.
-- **License**: mpv (in its LGPL configuration) and FFmpeg are licensed under the GNU
-  Lesser General Public License, version 2.1 or later. The DLL also contains libraries
-  those builds link statically (for example libass, libplacebo, FreeType, HarfBuzz,
-  FriBidi, libbluray, libarchive, libssh); each keeps its own license, as listed by
-  the build scripts below.
+- **License**:
+  - mpv, in its LGPL configuration, is under the GNU Lesser General Public License,
+    version 2.1 or later.
+  - FFmpeg is built with `--enable-version3` and without `--enable-gpl` (zhongfly's
+    `compile-lgpl-libmpv.patch` keeps version3 for libraries such as OpenSSL 3), so it is
+    under the GNU Lesser General Public License, version 3 or later.
+  - `libmpv-2.dll` as a whole is therefore distributed under the LGPL, version 3 or
+    later.
+  - The libraries those builds link statically (FreeType, HarfBuzz, libass, libplacebo,
+    OpenSSL, dav1d, libvpx and more) keep their own licences. Their notices are in
+    `src-tauri/licenses/libmpv-THIRD-PARTY.txt`, which the installer ships.
 - **Source offer.** The complete corresponding source is available at:
   - mpv: <https://github.com/mpv-player/mpv/tree/5757d6970>
   - FFmpeg: <https://github.com/FFmpeg/FFmpeg/tree/af25036ac>

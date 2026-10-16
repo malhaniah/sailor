@@ -11,6 +11,10 @@ export interface MpvState {
   mute: boolean;
   /** playback speed (1 = normal) */
   speed: number;
+  /** seconds; positive shows subtitles later */
+  subDelay: number;
+  /** seconds; positive plays audio later */
+  audioDelay: number;
   mediaTitle: string | null;
   tracks: MpvTrack[];
   aid: string;
@@ -23,6 +27,8 @@ export const INITIAL_MPV: MpvState = {
   volume: 100,
   mute: false,
   speed: 1,
+  subDelay: 0,
+  audioDelay: 0,
   mediaTitle: null,
   tracks: [],
   aid: "auto",
@@ -45,6 +51,10 @@ export function mpvReducer(state: MpvState, event: PlayerEvent): MpvState {
       return typeof v === "boolean" ? { ...state, mute: v } : state;
     case "speed":
       return typeof v === "number" ? { ...state, speed: v } : state;
+    case "sub-delay":
+      return typeof v === "number" ? { ...state, subDelay: v } : state;
+    case "audio-delay":
+      return typeof v === "number" ? { ...state, audioDelay: v } : state;
     case "media-title":
       return typeof v === "string" ? { ...state, mediaTitle: v } : state;
     case "track-list":

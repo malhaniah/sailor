@@ -7,6 +7,7 @@ import type {
   MetaLookup,
   ResolvedStream,
   Settings,
+  SettingsPatch,
 } from "./types";
 
 export function errorMessage(error: unknown): string {
@@ -69,8 +70,9 @@ export const updateCheck = () => invoke<string | null>("update_check");
 export const updateInstallNow = () => invoke<void>("update_install_now");
 
 export const settingsGet = () => invoke<Settings>("settings_get");
-/** Merges just these keys server-side; resolves to the full new settings. */
-export const settingsPatch = (patch: Partial<Settings>) =>
+/** Merges just these keys server-side (a group, such as `subtitles`, field by field);
+ * resolves to the full new settings. */
+export const settingsPatch = (patch: SettingsPatch) =>
   invoke<Settings>("settings_patch", { patch });
 /** @deprecated replaces every setting (lost-update prone); use settingsPatch */
 export const settingsSet = (settings: Settings) =>

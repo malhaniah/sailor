@@ -14,7 +14,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PlaybackContext } from "./library-ipc";
-import type { PlayerBackend } from "./types";
+import type {
+  AddonSubtitles,
+  PlayerBackend,
+  Settings,
+  SettingsPatch,
+  SubtitleStyle,
+} from "./types";
 
 export type { PlayerBackend };
 
@@ -113,7 +119,82 @@ export const engineStats = (infoHash: string) =>
 export const engineRemove = (infoHash: string, deleteFiles: boolean) =>
   invoke<void>("engine_remove", { infoHash, deleteFiles });
 export const settingsGet = () =>
-  invoke<{ deleteOnStop: boolean; playerBackend: PlayerBackend }>("settings_get");
+  invoke<
+    Pick<Settings, "deleteOnStop" | "playerBackend" | "subtitles" | "audio">
+  >("settings_get");
+/** Merges these keys into the settings (a group field by field), as `settings_patch`. */
+export const settingsPatch = (patch: SettingsPatch) =>
+  invoke<Settings>("settings_patch", { patch });
+
+// --- subtitles (src-tauri/src/commands/mpv/subtitles.rs) ----------------------------------
+
+/**
+ * Every subtitle addon's subtitles for a video (`subtitles_get`). `videoHash`,
+ * `videoSize` and `filename` come from the stream's hints and let addons match the
+ * exact release; Rust leaves out any that is malformed.
+ */
+export const subtitlesGet = (query: {
+  type: string;
+  id: string;
+  videoHash?: string | null;
+  videoSize?: number | null;
+  filename?: string | null;
+}) => invoke<AddonSubtitles[]>("subtitles_get", query);
+
+/** What an add did: `file` names the new track (its `external-filename` ends with it). */
+export interface AddedSubtitle {
+  file: string;
+  format: "srt" | "vtt" | "ass" | "sub";
+  /** the encoding the file was read as, e.g. "UTF-8", "windows-1256" */
+  encoding: string;
+}
+
+/** Download, normalize (gzip, encoding) and add a subtitle from an http(s) link. */
+export const playerSubtitleAdd = (request: {
+  url: string;
+  lang?: string | null;
+  label?: string | null;
+  select?: boolean;
+  /** an encoding label that replaces detection, e.g. "windows-1256" */
+  encoding?: string | null;
+}) => invoke<AddedSubtitle>("player_subtitle_add", { request });
+/** Add an already added subtitle again, read as `encoding` (null: detect), selected. */
+export const playerSubtitleReencode = (file: string, encoding: string | null) =>
+  invoke<AddedSubtitle>("player_subtitle_reencode", { file, encoding });
+/** Open the OS file dialog (from Rust) and add the picked file; null when cancelled. */
+export const playerSubtitlePickLocal = () =>
+  invoke<AddedSubtitle | null>("player_subtitle_pick_local");
+/** Apply subtitle style fields live (save them with `settingsPatch`); resolves to the mpv
+ * properties the player refused (an older external mpv lacks some). */
+export const playerSetSubStyle = (style: Partial<SubtitleStyle>) =>
+  invoke<string[]>("player_set_sub_style", { style });
+
+/** The choices remembered for one title, so the next episode starts the same way. */
+export interface TitlePrefs {
+  metaId: string;
+  /** a language code, or "off" */
+  subLang: string | null;
+  audioLang: string | null;
+  subDelaySec: number | null;
+  rate: number | null;
+}
+export const playerPrefsGet = (metaId: string) =>
+  invoke<TitlePrefs | null>("player_prefs_get", { metaId });
+/** Merge choices for a title (null forgets one). */
+export const playerPrefsSet = (
+  metaId: string,
+  patch: Partial<Omit<TitlePrefs, "metaId">>,
+) => invoke<TitlePrefs>("player_prefs_set", { metaId, patch });
+
+/** How a subtitle file dropped on the window went (Rust emits it while a player runs). */
+export type SubtitleDropped =
+  | { name: string; added: AddedSubtitle }
+  | { name: string; error: string };
+export function onSubtitleDropped(
+  handler: (event: SubtitleDropped) => void,
+): Promise<UnlistenFn> {
+  return listen<SubtitleDropped>("subtitles://dropped", (e) => handler(e.payload));
+}
 
 export function errorMessage(error: unknown): string {
   if (error && typeof error === "object" && "message" in error) {
@@ -132,10 +213,17 @@ export interface MpvTrack {
   lang?: string;
   codec?: string;
   default?: boolean;
+  forced?: boolean;
+  "hearing-impaired"?: boolean;
+  /** added from a file (sub-add), not part of the stream */
+  external?: boolean;
+  "external-filename"?: string;
   selected?: boolean;
   "demux-w"?: number;
   "demux-h"?: number;
   "demux-channel-count"?: number;
+  /** mpv's channel layout name, e.g. "5.1(side)" */
+  "demux-channels"?: string;
 }
 
 /**

@@ -7,7 +7,10 @@
     "resources": {
       "libmpv/libmpv-2.dll": "libmpv-2.dll",
       "libmpv/NOTICE.txt": "licenses/libmpv-NOTICE.txt",
-      "licenses/LGPL-2.1.txt": "licenses/LGPL-2.1.txt"
+      "licenses/LGPL-2.1.txt": "licenses/LGPL-2.1.txt",
+      "licenses/LGPL-3.0.txt": "licenses/LGPL-3.0.txt",
+      "licenses/GPL-3.0.txt": "licenses/GPL-3.0.txt",
+      "licenses/libmpv-THIRD-PARTY.txt": "licenses/libmpv-THIRD-PARTY.txt"
     }
   }
 }

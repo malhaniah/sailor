@@ -1,0 +1,693 @@
+/**
+ * Subtitles and audio for one playback, on either backend: the entries the menus list,
+ * the automatic pick when a file starts, and the choices remembered per title.
+ *
+ * - **Sources.** Embedded tracks (mpv's `track-list`), the stream's own subtitles, every
+ *   subtitle addon (`subtitles_get`, asked while the video opens when subtitles show by
+ *   themselves, else when the menu first opens), files the user picks or drops. Addon
+ *   and stream subtitles are listed but downloaded only when chosen (or picked
+ *   automatically): Rust fetches, normalizes and adds them (`player_subtitle_add`).
+ * - **Automatic pick** (`pickAutomatic` in lib/subtitles.ts), once per file, a moment
+ *   after it loads (so mpv's own selection has arrived), language by language: for the
+ *   first preferred language that has a full subtitle anywhere, what mpv chose if it is
+ *   that language, else an embedded track, else the best candidate. While the addons are
+ *   still answering it waits, unless it already has one in the first language. A
+ *   candidate whose download fails gives way to the next (three tries). The title's
+ *   remembered language comes first; "off", and automatic subtitles switched off, mean
+ *   no pick (Rust already told mpv `sid=no`). A subtitle the user chose for the file
+ *   keeps the pick out. The title's delay, speed and audio language apply at once.
+ * - **Remembered per title** (`player_prefs_*`): the subtitle language picked (or off)
+ *   and the audio language, when the user picks them; the subtitle delay and the speed
+ *   whenever they change after the file settled (also from keys in the mpv window).
+ * - Subtitles added to mpv go away with the next file, so the per-file state resets at
+ *   `start-file`.
+ */
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PlayerLaunch } from "../../lib/playback-handoff";
+import {
+  type AddedSubtitle,
+  errorMessage,
+  type MpvTrack,
+  onSubtitleDropped,
+  type PlayerEvent,
+  playerCommand,
+  playerPrefsGet,
+  playerPrefsSet,
+  playerSetProperty,
+  playerSetSubStyle,
+  playerSubtitleAdd,
+  playerSubtitlePickLocal,
+  playerSubtitleReencode,
+  settingsGet,
+  settingsPatch,
+  subtitlesGet,
+  type TitlePrefs,
+} from "../../lib/player-ipc";
+import {
+  buildCandidates,
+  channelLabel,
+  codecLabel,
+  effectiveLanguages,
+  langRank,
+  languageName,
+  normalizeLang,
+  type AutomaticPick,
+  pickAutomatic,
+  type SubtitleCandidate,
+} from "../../lib/subtitles";
+import type { AddonSubtitles, AudioSettings, SubtitleSettings, SubtitleStyle } from "../../lib/types";
+import type { MpvState } from "./mpv-state";
+
+/** How long after `file-loaded` the automatic pick waits for mpv's own selection. */
+const SETTLE_MS = 400;
+/** Delay and speed changes are saved once they rest this long. */
+const SAVE_AFTER_MS = 1000;
+/** How many subtitles an automatic pick downloads before giving up (each one failed). */
+const MAX_AUTO_TRIES = 3;
+
+export type SubtitleKind = "embedded" | "stream" | "addon" | "local";
+
+export interface SubtitleEntry {
+  key: string;
+  kind: SubtitleKind;
+  lang: string | null;
+  /** "English", "English 2", a track or file title */
+  title: string;
+  /** small tags: Forced, SDH, Default, the format, the addon */
+  tags: string[];
+  /** mpv's track id once it is in the track list */
+  trackId: number | null;
+  selected: boolean;
+  status: "ready" | "loading" | "error";
+  error: string | null;
+  /** an added file (can be read again as another encoding) and how it was read */
+  file: string | null;
+  encoding: string | null;
+}
+
+export interface AudioEntry {
+  id: number;
+  lang: string | null;
+  title: string;
+  tags: string[];
+  selected: boolean;
+}
+
+export interface Tracks {
+  subtitles: SubtitleEntry[];
+  /** the addons' list: not asked yet, being asked, answered */
+  listing: "idle" | "loading" | "done";
+  /** "<addon>: <reason>" for addons that failed */
+  listErrors: string[];
+  /** a subtitle is showing */
+  enabled: boolean;
+  selectSubtitle: (entry: SubtitleEntry) => void;
+  subtitlesOff: () => void;
+  subtitlesOn: () => void;
+  pickLocal: () => void;
+  /** read the showing (added) subtitle again as `encoding` (null: detect) */
+  reencode: (encoding: string | null) => void;
+  /** ask the subtitle addons now, if that has not happened (the menu opened) */
+  ensureListed: () => void;
+  audio: AudioEntry[];
+  selectAudio: (entry: AudioEntry) => void;
+  /** the saved subtitle style (null until settings load) */
+  style: SubtitleStyle | null;
+  /** apply style fields now and save them */
+  setStyle: (patch: Partial<SubtitleStyle>) => void;
+  /** a passing message (a dropped file was added, a pick failed…) */
+  notice: string | null;
+  dismissNotice: () => void;
+}
+
+interface Added {
+  file: string;
+  encoding: string;
+}
+
+export function useTracks({
+  launch,
+  mpv,
+  running,
+  subscribeEvents,
+}: {
+  launch: PlayerLaunch;
+  mpv: MpvState;
+  /** the player runs and takes commands (not loading, not gone) */
+  running: boolean;
+  subscribeEvents: (listener: (event: PlayerEvent) => void) => () => void;
+}): Tracks {
+  const meta = launch.meta;
+  const [settings, setSettings] = useState<{ subtitles: SubtitleSettings; audio: AudioSettings } | null>(null);
+  const [titlePrefs, setTitlePrefs] = useState<TitlePrefs | null | undefined>(undefined);
+  const [groups, setGroups] = useState<AddonSubtitles[]>([]);
+  const [listing, setListing] = useState<Tracks["listing"]>("idle");
+  // per file: candidates added (by candidate key), downloads in flight or failed, files
+  // the user added themselves
+  const [added, setAdded] = useState<Record<string, Added>>({});
+  const [pending, setPending] = useState<Record<string, { error: string | null }>>({});
+  const [local, setLocal] = useState<Record<string, Added>>({});
+  const [fileSeq, setFileSeq] = useState(0);
+  const [settledSeq, setSettledSeq] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
+  // the file (by `fileSeq`) whose title choices, and whose automatic subtitle, are done
+  // (-1: pick again, an automatic download failed)
+  const [prefsDoneSeq, setPrefsDoneSeq] = useState(0);
+  const [subsDoneSeq, setSubsDoneSeq] = useState(0);
+  // the file in which the user chose a subtitle (or Off) themselves
+  const userChose = useRef(0);
+  // automatic downloads tried for the current file
+  const autoTries = useRef(0);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
+
+  // the query for the subtitle addons: the video the picker asked streams for
+  const query = useMemo(() => {
+    if (!meta) return null;
+    const hints = launch.stream?.behaviorHints;
+    return {
+      type: meta.type,
+      id: launch.video?.id ?? meta.behaviorHints.defaultVideoId ?? meta.id,
+      videoHash: hints?.videoHash ?? null,
+      videoSize: hints?.videoSize ?? null,
+      filename: hints?.filename ?? null,
+    };
+  }, [meta, launch.video, launch.stream]);
+
+  // settings and the title's choices
+  useEffect(() => {
+    let live = true;
+    settingsGet()
+      .then((s) => live && setSettings({ subtitles: s.subtitles, audio: s.audio }))
+      .catch(() => live && setSettings(null));
+    if (meta) {
+      playerPrefsGet(meta.id)
+        .then((p) => live && setTitlePrefs(p))
+        .catch(() => live && setTitlePrefs(null));
+    } else {
+      setTitlePrefs(null);
+    }
+    return () => {
+      live = false;
+    };
+  }, [meta]);
+
+  const listingRef = useRef<Tracks["listing"]>("idle");
+  const list = useCallback(() => {
+    if (!query || listingRef.current !== "idle") return;
+    listingRef.current = "loading";
+    setListing("loading");
+    const done = (result: AddonSubtitles[]) => {
+      listingRef.current = "done";
+      if (!mounted.current) return;
+      setGroups(result);
+      setListing("done");
+    };
+    subtitlesGet(query)
+      .then(done)
+      .catch((e) => {
+        done([]);
+        if (mounted.current) setNotice(`Could not ask for subtitles: ${errorMessage(e)}`);
+      });
+  }, [query]);
+
+  // Ask the addons while the video opens when a subtitle will show by itself (the
+  // disclosure in Settings says when); otherwise only once the menu opens.
+  const wantsSubtitles =
+    titlePrefs !== undefined &&
+    settings !== null &&
+    titlePrefs?.subLang !== "off" &&
+    (settings.subtitles.autoLoad || !!titlePrefs?.subLang);
+  useEffect(() => {
+    if (wantsSubtitles) list();
+  }, [wantsSubtitles, list]);
+
+  // per-file state follows mpv's events
+  useEffect(
+    () =>
+      subscribeEvents((event) => {
+        if (event.type === "start-file") {
+          setAdded({});
+          setPending({});
+          setLocal({});
+        } else if (event.type === "file-loaded") {
+          autoTries.current = 0;
+          setFileSeq((n) => n + 1);
+        }
+      }),
+    [subscribeEvents],
+  );
+  useEffect(() => {
+    if (fileSeq === 0) return;
+    const timer = window.setTimeout(() => setSettledSeq(fileSeq), SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [fileSeq]);
+
+  // files dropped on the window (Rust adds them while a player runs)
+  useEffect(() => {
+    const off = onSubtitleDropped((outcome) => {
+      if ("added" in outcome) {
+        setLocal((l) => ({ ...l, [outcome.added.file]: { file: outcome.added.file, encoding: outcome.added.encoding } }));
+        setNotice(`Added ${outcome.name}`);
+      } else {
+        setNotice(`Could not add ${outcome.name}: ${outcome.error}`);
+      }
+    });
+    return () => {
+      void off.then((unlisten) => unlisten());
+    };
+  }, []);
+
+  // --- the entries -----------------------------------------------------------------------
+
+  const prefs = useMemo(() => {
+    const remembered = titlePrefs?.subLang && titlePrefs.subLang !== "off" ? [titlePrefs.subLang] : [];
+    return effectiveLanguages([...remembered, ...(settings?.subtitles.langs ?? [])]);
+  }, [titlePrefs, settings]);
+
+  const candidates = useMemo(
+    () =>
+      buildCandidates({
+        streamSubtitles: launch.stream?.subtitles ?? [],
+        streamAddon: launch.addonName,
+        groups,
+        filename: launch.stream?.behaviorHints.filename ?? null,
+        prefs,
+      }),
+    [launch.stream, launch.addonName, groups, prefs],
+  );
+
+  const subtitles = useMemo(
+    () => subtitleEntries({ tracks: mpv.tracks, sid: mpv.sid, candidates, added, pending, local, prefs }),
+    [mpv.tracks, mpv.sid, candidates, added, pending, local, prefs],
+  );
+  const audio = useMemo(() => audioEntries(mpv.tracks, mpv.aid), [mpv.tracks, mpv.aid]);
+
+  // --- actions ---------------------------------------------------------------------------
+
+  const remember = useCallback(
+    (patch: Partial<Omit<TitlePrefs, "metaId">>) => {
+      if (!meta) return;
+      void playerPrefsSet(meta.id, patch)
+        .then((p) => mounted.current && setTitlePrefs(p))
+        .catch(() => undefined);
+    },
+    [meta],
+  );
+
+  const fileSeqRef = useRef(fileSeq);
+  fileSeqRef.current = fileSeq;
+  /** The user picked a subtitle (or Off) for this file: the automatic pick stays out. */
+  const chose = useCallback(() => {
+    userChose.current = fileSeqRef.current;
+  }, []);
+
+  const addCandidate = useCallback(
+    (candidate: SubtitleCandidate, title: string, select: boolean, automatic: boolean) => {
+      const forFile = fileSeqRef.current;
+      setPending((p) => ({ ...p, [candidate.key]: { error: null } }));
+      void playerSubtitleAdd({ url: candidate.url, lang: candidate.lang, label: title, select })
+        .then((result: AddedSubtitle) => {
+          if (!mounted.current) return;
+          setAdded((a) => ({ ...a, [candidate.key]: { file: result.file, encoding: result.encoding } }));
+          setPending(({ [candidate.key]: _, ...rest }) => rest);
+        })
+        .catch((e) => {
+          if (!mounted.current) return;
+          setPending((p) => ({ ...p, [candidate.key]: { error: errorMessage(e) } }));
+          // an automatic pick whose download failed tries the next subtitle (a few
+          // times at most), unless the file changed or the user chose meanwhile
+          if (
+            automatic &&
+            forFile === fileSeqRef.current &&
+            userChose.current !== forFile &&
+            autoTries.current < MAX_AUTO_TRIES
+          ) {
+            setSubsDoneSeq(-1);
+          }
+        });
+    },
+    [],
+  );
+
+  const show = useCallback(
+    (entry: SubtitleEntry, automatic = false) => {
+      if (entry.trackId !== null) {
+        void playerSetProperty("sid", entry.trackId).catch(() => undefined);
+        return;
+      }
+      const candidate = candidates.find((c) => c.key === entry.key);
+      if (candidate && entry.status !== "loading") addCandidate(candidate, entry.title, true, automatic);
+    },
+    [candidates, addCandidate],
+  );
+
+  const selectSubtitle = useCallback(
+    (entry: SubtitleEntry) => {
+      chose();
+      show(entry);
+      if (entry.lang) remember({ subLang: entry.lang });
+    },
+    [chose, show, remember],
+  );
+
+  const subtitlesOff = useCallback(() => {
+    chose();
+    void playerSetProperty("sid", "no").catch(() => undefined);
+    remember({ subLang: "off" });
+  }, [chose, remember]);
+
+  const latest = useRef({ mpv, candidates, prefs, subtitles, pending });
+  latest.current = { mpv, candidates, prefs, subtitles, pending };
+
+  /** The automatic pick now, leaving out subtitles whose download failed for this file. */
+  const currentPick = useCallback((): AutomaticPick => {
+    const { mpv: now, candidates: offered, prefs: langs, pending: waits } = latest.current;
+    return pickAutomatic({
+      tracks: now.tracks,
+      sid: now.sid,
+      candidates: offered.filter((c) => !waits[c.key]?.error),
+      prefs: langs,
+    });
+  }, []);
+
+  /** Show what a pick chose (an automatic one's failed download tries the next). */
+  const showPick = useCallback(
+    (pick: AutomaticPick, automatic: boolean) => {
+      if (pick.kind === "track") {
+        void playerSetProperty("sid", pick.id).catch(() => undefined);
+      } else if (pick.kind === "candidate") {
+        const entry = latest.current.subtitles.find((e) => e.key === pick.candidate.key);
+        if (entry) show(entry, automatic);
+      }
+    },
+    [show],
+  );
+
+  const subtitlesOn = useCallback(() => {
+    chose();
+    const pick = currentPick();
+    let lang: string | null = null;
+    if (pick.kind !== "none") {
+      showPick(pick, false);
+      lang = pick.lang;
+    } else {
+      // nothing in a preferred language: the first subtitle there is
+      const entries = latest.current.subtitles;
+      const first = entries.find((e) => e.status !== "error") ?? entries[0];
+      if (first) {
+        show(first);
+        lang = first.lang;
+      }
+    }
+    if (lang) remember({ subLang: lang });
+  }, [chose, currentPick, showPick, show, remember]);
+
+  const pickLocal = useCallback(() => {
+    void playerSubtitlePickLocal()
+      .then((result) => {
+        if (!result || !mounted.current) return;
+        chose();
+        setLocal((l) => ({ ...l, [result.file]: { file: result.file, encoding: result.encoding } }));
+      })
+      .catch((e) => mounted.current && setNotice(`Could not load the file: ${errorMessage(e)}`));
+  }, [chose]);
+
+  const reencode = useCallback(
+    (encoding: string | null) => {
+      const entry = latest.current.subtitles.find((e) => e.selected && e.file);
+      if (!entry?.file) return;
+      const oldTrack = entry.trackId;
+      void playerSubtitleReencode(entry.file, encoding)
+        .then((result) => {
+          if (!mounted.current) return;
+          const next = { file: result.file, encoding: result.encoding };
+          if (entry.kind === "local") {
+            setLocal((l) => {
+              const { [entry.file ?? ""]: _, ...rest } = l;
+              return { ...rest, [result.file]: next };
+            });
+          } else {
+            setAdded((a) => ({ ...a, [entry.key]: next }));
+          }
+          if (oldTrack !== null) void playerCommand("sub-remove", oldTrack).catch(() => undefined);
+        })
+        .catch((e) => mounted.current && setNotice(`Could not read it that way: ${errorMessage(e)}`));
+    },
+    [],
+  );
+
+  const selectAudio = useCallback(
+    (entry: AudioEntry) => {
+      void playerSetProperty("aid", entry.id).catch(() => undefined);
+      if (entry.lang) remember({ audioLang: entry.lang });
+    },
+    [remember],
+  );
+
+  const setStyle = useCallback((patch: Partial<SubtitleStyle>) => {
+    void playerSetSubStyle(patch)
+      .then((refused) => {
+        if (refused.length > 0 && mounted.current) {
+          setNotice(
+            `This mpv cannot show that (${refused.join(", ")}). It is saved, and a newer mpv shows it.`,
+          );
+        }
+      })
+      .catch(() => undefined);
+    setSettings((s) => (s ? { ...s, subtitles: { ...s.subtitles, style: { ...s.subtitles.style, ...patch } } } : s));
+    void settingsPatch({ subtitles: { style: patch } }).catch(() => undefined);
+  }, []);
+
+  // --- once per file: the title's choices, then the automatic subtitle --------------------
+
+  // Rust already gave mpv the title's languages and whether a subtitle may show (`slang`,
+  // `alang`, `sid`). The delay, the speed and an audio track mpv missed come here, at once.
+  useEffect(() => {
+    if (!running || settledSeq === 0 || titlePrefs === undefined) return;
+    if (prefsDoneSeq === settledSeq) return;
+    setPrefsDoneSeq(settledSeq);
+    if (titlePrefs?.subDelaySec != null) {
+      void playerSetProperty("sub-delay", titlePrefs.subDelaySec).catch(() => undefined);
+    }
+    if (titlePrefs?.rate != null) void playerSetProperty("speed", titlePrefs.rate).catch(() => undefined);
+    const audioLang = titlePrefs?.audioLang;
+    if (audioLang) {
+      const tracks = latest.current.mpv.tracks.filter((t) => t.type === "audio");
+      const current = tracks.find((t) => t.selected);
+      const wanted = tracks.find((t) => normalizeLang(t.lang) === audioLang);
+      if (wanted && normalizeLang(current?.lang) !== audioLang) {
+        void playerSetProperty("aid", wanted.id).catch(() => undefined);
+      }
+    }
+  }, [running, settledSeq, prefsDoneSeq, titlePrefs]);
+
+  useEffect(() => {
+    if (!running || settledSeq === 0 || !settings || titlePrefs === undefined) return;
+    if (subsDoneSeq === settledSeq) return;
+    if (userChose.current === settledSeq) {
+      setSubsDoneSeq(settledSeq);
+      return;
+    }
+    const choice = titlePrefs?.subLang;
+    const automatic = choice ? choice !== "off" : settings.subtitles.autoLoad;
+    if (!automatic) {
+      // Rust asked mpv for no subtitle (`sid=no`); an external mpv's own scripts may differ
+      if (choice === "off" && latest.current.mpv.sid !== "no") {
+        void playerSetProperty("sid", "no").catch(() => undefined);
+      }
+      setSubsDoneSeq(settledSeq);
+      return;
+    }
+    const pick = currentPick();
+    // While the addons answer, only a subtitle in the first preferred language is sure to
+    // be the best one; anything else waits for them.
+    if (listing === "loading" && (pick.kind === "none" || pick.prefIndex > 0)) return;
+    setSubsDoneSeq(settledSeq);
+    if (pick.kind === "candidate") autoTries.current += 1;
+    showPick(pick, true);
+  }, [running, settledSeq, subsDoneSeq, settings, titlePrefs, listing, currentPick, showPick]);
+
+  // delay and speed are remembered whenever they change once the file settled
+  const settled = running && settledSeq > 0 && prefsDoneSeq === settledSeq;
+  useRemembered(settled, mpv.subDelay, titlePrefs?.subDelaySec ?? 0, (v) => remember({ subDelaySec: v === 0 ? null : v }));
+  useRemembered(settled, mpv.speed, titlePrefs?.rate ?? 1, (v) => remember({ rate: v === 1 ? null : v }));
+
+  return {
+    subtitles,
+    listing,
+    listErrors: groups.filter((g) => g.error).map((g) => `${g.addonName}: ${g.error}`),
+    enabled: mpv.sid !== "no" && mpv.sid !== "false" && subtitles.some((e) => e.selected),
+    selectSubtitle,
+    subtitlesOff,
+    subtitlesOn,
+    pickLocal,
+    reencode,
+    ensureListed: list,
+    audio,
+    selectAudio,
+    style: settings?.subtitles.style ?? null,
+    setStyle,
+    notice,
+    dismissNotice: useCallback(() => setNotice(null), []),
+  };
+}
+
+/** Calls `save(value)` once `value` rests at something other than `saved`. */
+function useRemembered(active: boolean, value: number, saved: number, save: (value: number) => void) {
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    if (!active || Math.abs(value - saved) < 1e-6) return;
+    const timer = window.setTimeout(() => saveRef.current(Math.round(value * 1000) / 1000), SAVE_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [active, value, saved]);
+}
+
+// --- building the lists ---------------------------------------------------------------------
+
+const KIND_ORDER: Record<SubtitleKind, number> = { embedded: 0, local: 1, stream: 2, addon: 3 };
+
+/** The file name an mpv track was added from, without its folder. */
+function trackFile(track: MpvTrack): string | null {
+  const path = track["external-filename"];
+  return path ? (path.split(/[\\/]/).pop() ?? null) : null;
+}
+
+export function subtitleEntries({
+  tracks,
+  sid,
+  candidates,
+  added,
+  pending,
+  local,
+  prefs,
+}: {
+  tracks: MpvTrack[];
+  sid: string;
+  candidates: SubtitleCandidate[];
+  added: Record<string, Added>;
+  pending: Record<string, { error: string | null }>;
+  local: Record<string, Added>;
+  prefs: string[];
+}): SubtitleEntry[] {
+  const subs = tracks.filter((t) => t.type === "sub");
+  const isSelected = (t: MpvTrack) => String(t.id) === sid || (t.selected === true && sid !== "no");
+  const byFile = new Map<string, MpvTrack>();
+  for (const t of subs) {
+    const file = trackFile(t);
+    if (t.external && file) byFile.set(file, t);
+  }
+  const claimed = new Set<string>();
+  const entries: SubtitleEntry[] = [];
+
+  for (const t of subs.filter((t) => !t.external)) {
+    const lang = normalizeLang(t.lang);
+    entries.push({
+      key: `track|${t.id}`,
+      kind: "embedded",
+      lang,
+      title: t.title?.trim() || languageName(lang),
+      tags: [
+        t.forced ? "Forced" : null,
+        t["hearing-impaired"] ? "SDH" : null,
+        t.default ? "Default" : null,
+        codecLabel(t.codec),
+      ].filter((x): x is string => !!x),
+      trackId: t.id,
+      selected: isSelected(t),
+      status: "ready",
+      error: null,
+      file: null,
+      encoding: null,
+    });
+  }
+
+  for (const c of candidates) {
+    const add = added[c.key];
+    const track = add ? byFile.get(add.file) : undefined;
+    if (add) claimed.add(add.file);
+    const wait = pending[c.key];
+    entries.push({
+      key: c.key,
+      kind: c.source,
+      lang: c.lang,
+      title: c.label ?? languageName(c.lang),
+      tags: [c.hearingImpaired ? "SDH" : null, c.addonName ?? (c.source === "stream" ? "Stream" : null)].filter(
+        (x): x is string => !!x,
+      ),
+      trackId: track?.id ?? null,
+      selected: track ? isSelected(track) : false,
+      status: wait ? (wait.error ? "error" : "loading") : "ready",
+      error: wait?.error ?? null,
+      file: add?.file ?? null,
+      encoding: add?.encoding ?? null,
+    });
+  }
+
+  // external tracks that are not one of the candidates: picked, dropped, or added by
+  // the user's own mpv (external backend)
+  for (const t of subs.filter((t) => t.external)) {
+    const file = trackFile(t);
+    if (file && claimed.has(file)) continue;
+    const mine = file ? local[file] : undefined;
+    const lang = normalizeLang(t.lang);
+    entries.push({
+      key: `file|${file ?? t.id}`,
+      kind: "local",
+      lang,
+      title: t.title?.trim() || file || languageName(lang),
+      tags: [lang ? languageName(lang) : null, "File"].filter((x): x is string => !!x),
+      trackId: t.id,
+      selected: isSelected(t),
+      status: "ready",
+      error: null,
+      file: mine ? file : null,
+      encoding: mine?.encoding ?? null,
+    });
+  }
+
+  entries.sort(
+    (a, b) =>
+      langRank(a.lang, prefs) - langRank(b.lang, prefs) ||
+      (a.lang ?? "~").localeCompare(b.lang ?? "~") ||
+      KIND_ORDER[a.kind] - KIND_ORDER[b.kind],
+  );
+  // number the untitled ones of a language: "English", "English 2", …
+  const counts = new Map<string, number>();
+  for (const e of entries) {
+    if (e.kind !== "addon" && e.kind !== "stream") continue;
+    if (e.title !== languageName(e.lang)) continue;
+    const n = (counts.get(e.title) ?? 0) + 1;
+    counts.set(e.title, n);
+    if (n > 1) e.title = `${e.title} ${n}`;
+  }
+  return entries;
+}
+
+export function audioEntries(tracks: MpvTrack[], aid: string): AudioEntry[] {
+  return tracks
+    .filter((t) => t.type === "audio")
+    .map((t) => {
+      const lang = normalizeLang(t.lang);
+      const named = lang ? languageName(lang) : null;
+      return {
+        id: t.id,
+        lang,
+        title: named ?? t.title?.trim() ?? `Track ${t.id}`,
+        tags: [
+          named && t.title?.trim() ? t.title.trim() : null,
+          channelLabel(t),
+          codecLabel(t.codec),
+          t.default ? "Default" : null,
+          t.external ? "File" : null,
+        ].filter((x): x is string => !!x),
+        selected: String(t.id) === aid || t.selected === true,
+      };
+    });
+}
