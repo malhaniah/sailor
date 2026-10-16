@@ -19,6 +19,12 @@ jobs:
             env: "WEBKIT_DISABLE_DMABUF_RENDERER=1"
           - name: no-compositing
             env: "WEBKIT_DISABLE_COMPOSITING_MODE=1"
+          - name: no-webview
+            env: "PROTO_NO_WEBVIEW=1"
+          - name: clear-only
+            env: "PROTO_CLEAR=1"
+          - name: clear-only-no-webview
+            env: "PROTO_CLEAR=1 PROTO_NO_WEBVIEW=1"
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

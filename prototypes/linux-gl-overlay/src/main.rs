@@ -94,9 +94,14 @@ fn main() {
         println!("PROTO: hardware acceleration policy {:?}", settings.hardware_acceleration_policy());
     }
     webview.load_html(PAGE, None);
-    overlay.add_overlay(&webview);
+    // PROTO_NO_WEBVIEW: the GL area alone (does the video draw at all?)
+    if std::env::var_os("PROTO_NO_WEBVIEW").is_none() {
+        overlay.add_overlay(&webview);
+    }
     // clicks go to the page, as in Zeiler
-    overlay.set_overlay_pass_through(&webview, false);
+    if webview.parent().is_some() {
+        overlay.set_overlay_pass_through(&webview, false);
+    }
     window.add(&overlay);
 
     let mpv = Rc::new(
@@ -149,6 +154,17 @@ fn main() {
     {
         let render = Rc::clone(&render);
         area.connect_render(move |area, _| {
+            // PROTO_CLEAR: plain blue instead of mpv (does any GL content show?)
+            if std::env::var_os("PROTO_CLEAR").is_some() {
+                type ClearColor = unsafe extern "C" fn(f32, f32, f32, f32);
+                type Clear = unsafe extern "C" fn(u32);
+                unsafe {
+                    std::mem::transmute::<*mut c_void, ClearColor>(get_proc_address(&(), "glClearColor"))(0.0, 0.0, 1.0, 1.0);
+                    std::mem::transmute::<*mut c_void, Clear>(get_proc_address(&(), "glClear"))(0x4000);
+                }
+                FRAMES.fetch_add(1, Ordering::Relaxed);
+                return glib::Propagation::Stop;
+            }
             if let Some(ctx) = render.borrow().as_ref() {
                 let fbo = gl_get_integer(0x8CA6); // GL_FRAMEBUFFER_BINDING
                 let scale = area.scale_factor();
