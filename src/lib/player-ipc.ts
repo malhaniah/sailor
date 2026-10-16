@@ -39,6 +39,7 @@ export const playerCommand = (...args: (string | number)[]) =>
 // external-mpv fallback (same backend command the v0.1 flow used)
 export const playerExternalPlay = (request: PlaybackRequest) =>
   invoke<void>("player_play", { request });
+export const playerExternalStop = () => invoke<void>("player_stop");
 
 // engine commands the player page uses to resolve/clean up torrent streams
 export interface ResolvedStream {

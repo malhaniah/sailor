@@ -4,6 +4,7 @@ import { PickCard } from "../components/cards";
 import { Spinner } from "../components/ui";
 import { catalogDisplayName, searchableCatalogs } from "../lib/catalogs";
 import { catalogLoad } from "../lib/ipc";
+import { playerActive } from "../lib/playback-handoff";
 import { useAddons, useSearch } from "../lib/store";
 import { useView } from "../lib/view";
 import type { MetaPreview } from "../lib/types";
@@ -36,7 +37,7 @@ export function SearchOverlay() {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape" && !playerActive()) setOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

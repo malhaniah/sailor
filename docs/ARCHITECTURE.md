@@ -71,6 +71,54 @@ Engine policy: per-infohash cache folder under the app cache dir, `overwrite: tr
 delete-on-stop by default (bounded disk usage), DHT + persistence under the app data dir
 (never rqbit's shared default), loopback-only HTTP with auth, upload cap exposed in settings.
 
+## Playback entry point
+
+Zeiler's own Player screen (`#/player`) is the single place playback starts, on every
+OS. The stream picker never resolves or launches anything itself for `url` and
+`infoHash` streams; `ytId` and `externalUrl` streams still leave the app, and an explicit
+secondary action ("Open in external mpv") keeps the v0.1 direct-to-mpv path.
+
+- **Handoff** (`src/lib/playback-handoff.ts`). The picker builds a typed `PlayerLaunch`
+  — the source (a direct URL with its headers, or a torrent: infoHash, fileIdx, sources,
+  fileMustInclude, filename), meta (type, id, name, poster, videos), video (id, season,
+  episode, title, thumbnail), stream (name, behaviorHints incl. bingeGroup, filename,
+  videoHash, videoSize; subtitles), transportUrl and addonName, and a `live` flag — and
+  calls `openPlayer(launch)`. That stashes the launch in memory under a random one-shot
+  id and navigates to `#/player?h=<id>`; the Player `takeLaunch(id)`s it exactly once.
+  Stream URLs, headers and transport URLs (which may embed credentials) therefore never
+  enter `location.hash` or the history stack. A reload or a stale history entry finds no
+  launch and the Player shows "nothing to play" with a Back action; because the
+  Rust-side player outlives a webview reload, that screen also stops any embedded
+  session left playing (`player_embedded_stop`, a no-op on non-embedded builds). Only
+  dev builds still accept the legacy `url=`/`infoHash=` params of the
+  `VITE_ZEILER_AUTOPLAY` hook. `openPlayer` returns the launch id, and the Player reports
+  a launch that ends in an error (`reportLaunchFailed`), so the picker underneath marks
+  that stream "Unavailable, try another." as it did when it played streams itself.
+- **App stays mounted** (`src/main.tsx`). The Player renders next to the app shell, which
+  stays mounted but hidden (`display:none` + `inert`), so the view stack, the picker's
+  stream list and its scroll offsets survive playback and Back (`history.back`) returns
+  exactly where the user was. Window-level key listeners of the hidden shell (Escape pops
+  frames in `src/lib/view.tsx`, `/` opens search in `src/chrome/Topbar.tsx`) check the
+  single `playerActive()` signal from the handoff module and stay quiet while the player
+  owns the keyboard.
+- **Backends** (`src/pages/player/`). Embedded builds (Windows `embedded` feature +
+  libmpv present) render mpv under the transparent webview, with the controls drawn as
+  overlays. Every other build hands the stream to an external mpv window (`player_play`)
+  and shows "Playing in mpv" (title, source, Stop → `player_stop`, Back keeps it
+  playing); remote control of that window arrives with the external JSON-IPC backend.
+  Torrents are resolved by the Player (`engine_resolve`, honouring `fileMustInclude`)
+  with live engine stats. The playback session owns the torrent: when the page goes
+  away by any route (Back, Escape, native history navigation) it is removed from the
+  engine per `deleteOnStop`, and a resolve that completes after the page is gone removes
+  the torrent it just added (librqbit holds a magnet only once its metadata arrives, so
+  an earlier remove finds nothing). A torrent handed to external mpv is the exception:
+  Back keeps it streaming and the "Playing in mpv" Stop removes it.
+- **Player page layout.** `PlayerPage.tsx` (shell), `launch.ts`, `usePlaybackSession.ts`
+  (backend choice, resolve, event pump), `playback-clock.ts` (time-pos, duration, pause,
+  buffering in a small subscribable store so a position tick re-renders only the seek
+  bar and readouts), `mpv-state.ts`, `PlayerChrome.tsx`, `ControlsBar.tsx`, `states.tsx`,
+  `TorrentStats.tsx`. Later player features add files here.
+
 ## Tauri IPC surface
 
 Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list matches the
@@ -164,6 +212,10 @@ everywhere fails `tsc`. Reserved now, unreachable from the UI until their milest
 root view `live`; frames `browse` (catalog browser) and `addon-detail` (marketplace).
 Reserved Settings section ids: `account`, `subtitles`, `playback`.
 
+The Player is not a frame: it is the `#/player?h=<id>` hash route, drawn over the
+still-mounted shell (see "Playback entry point"). The frame stack is untouched while it
+is up; leaving the player pops the history entry it pushed.
+
 ## Security posture
 
 - Strict CSP (no remote script/style; `img-src https: http:` because addon posters are
@@ -175,6 +227,9 @@ Reserved Settings section ids: `account`, `subtitles`, `playback`.
   attacker-controlled; infoHashes validated as 40-char hex.
 - Addon transport URLs may embed credentials (config-in-URL pattern) — they are secrets;
   never logged, never sent anywhere but the addon host.
+- Playback goes through the in-memory one-shot handoff, never the location hash: stream
+  URLs, headers and transport URLs stay out of the history stack, and release builds
+  ignore URL-carrying player params.
 - Engine HTTP binds 127.0.0.1 with per-session basic-auth credentials.
 - Deep links (`zeiler://`; `stremio://` opt-in later) are untrusted argv input and are
   parsed/validated before any navigation or install prompt.

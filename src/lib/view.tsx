@@ -9,6 +9,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { playerActive } from "./playback-handoff";
 import type { MetaItem, MetaPreview, Video } from "./types";
 
 // Names reserved for later milestones (docs/ARCHITECTURE.md, "Navigation names") are
@@ -145,10 +146,11 @@ export function ViewProvider({ children }: { children: ReactNode }) {
     };
   }, [stack, push, setView, goBack]);
 
-  // Escape pops overlay frames (never a root view).
+  // Escape pops overlay frames (never a root view). Not while the Player screen is up:
+  // the shell stays mounted underneath it, and the player's own Escape goes back.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || playerActive()) return;
       const target = e.target as HTMLElement | null;
       if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
       if (popsOnEscape(value.top)) value.goBack();

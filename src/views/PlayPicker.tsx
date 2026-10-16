@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, Play } from "lucide-react";
+import { ChevronDown, ChevronLeft, ExternalLink, Play } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AddonLogo } from "../components/cards";
@@ -13,8 +13,16 @@ import {
   settingsGet,
   streamsGet,
 } from "../lib/ipc";
+import {
+  launchForStream,
+  openPlayer,
+  subscribeLaunchFailures,
+  urlRequest,
+} from "../lib/playback-handoff";
 import { useView } from "../lib/view";
 import type { AddonStreams, MetaItem, Stream, Video } from "../lib/types";
+
+type Row = { stream: Stream; addonName: string; transportUrl: string; key: string };
 
 type Phase =
   | { kind: "idle" }
@@ -44,8 +52,19 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
     };
   }, [meta.type, videoId]);
 
+  // Launch id -> row key for streams this picker opened in the Player, so a failure
+  // reported there marks the row here too (this view stays mounted under the player).
+  const opened = useRef(new Map<string, string>());
+  useEffect(() => {
+    opened.current.clear();
+    return subscribeLaunchFailures((id) => {
+      const key = opened.current.get(id);
+      if (key !== undefined) setFailed((prev) => new Set(prev).add(key));
+    });
+  }, [meta.type, videoId]);
+
   const rows = useMemo(() => {
-    const result: { stream: Stream; addonName: string; transportUrl: string; key: string }[] = [];
+    const result: Row[] = [];
     if (video && video.streams.length > 0) {
       video.streams.forEach((stream, i) =>
         result.push({
@@ -83,47 +102,28 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
     return [...seen.entries()];
   }, [groups, video]);
 
-  async function play(row: { stream: Stream; key: string }) {
-    const { stream } = row;
-    const hints = stream.behaviorHints;
-    const headerEntries = Object.entries(hints.proxyHeaders?.request ?? {});
-    const uaEntry = headerEntries.find(([name]) => /^user-agent$/i.test(name));
-    const referrerEntry = headerEntries.find(([name]) => /^referer$/i.test(name));
-    const forwarded = headerEntries.filter((e) => e !== uaEntry && e !== referrerEntry);
-    const mediaTitle =
-      hints.filename ??
-      (video
-        ? `${meta.name} · S${video.season ?? "?"}E${video.episode ?? "?"}`
-        : (stream.name ?? meta.name));
+  function launchFor(row: Row) {
+    return launchForStream({
+      meta,
+      video,
+      stream: row.stream,
+      // "embedded" marks streams that came with the meta itself, not from an addon
+      transportUrl: row.transportUrl === "embedded" ? null : row.transportUrl,
+      addonName: row.addonName,
+    });
+  }
 
+  /** Direct and torrent streams open Zeiler's Player screen, which resolves and plays
+   * them; YouTube and external links leave the app. */
+  async function play(row: Row) {
+    const { stream } = row;
+    const launch = launchFor(row);
+    if (launch) {
+      opened.current.set(openPlayer(launch), row.key);
+      return;
+    }
     try {
-      if (stream.url) {
-        setPhase({ kind: "resolving", streamKey: row.key, label: "Starting player…" });
-        await playerPlay({
-          url: stream.url,
-          title: mediaTitle,
-          headers: forwarded as [string, string][],
-          userAgent: uaEntry?.[1] ?? null,
-          referrer: referrerEntry?.[1] ?? null,
-        });
-        setPhase({ kind: "playing" });
-      } else if (stream.infoHash) {
-        setPhase({
-          kind: "resolving",
-          streamKey: row.key,
-          label: "Finding peers and fetching metadata…",
-        });
-        const resolved = await engineResolve({
-          infoHash: stream.infoHash,
-          fileIdx: stream.fileIdx ?? null,
-          sources: stream.announce ?? [],
-          filename: hints.filename ?? null,
-          fileMustInclude: stream.fileMustInclude ?? [],
-        });
-        setPhase({ kind: "resolving", streamKey: row.key, label: "Starting player…" });
-        await playerPlay({ url: resolved.streamUrl, title: mediaTitle });
-        setPhase({ kind: "playing", infoHash: resolved.infoHash });
-      } else if (stream.externalUrl) {
+      if (stream.externalUrl) {
         if (/^https?:\/\//i.test(stream.externalUrl)) await openUrl(stream.externalUrl);
         setPhase({ kind: "idle" });
       } else if (stream.ytId) {
@@ -132,10 +132,44 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
       }
     } catch (e) {
       setFailed((prev) => new Set(prev).add(row.key));
+      setPhase({ kind: "error", message: errorMessage(e) });
+    }
+  }
+
+  /** Secondary action: hand the stream straight to an external mpv window (the v0.1
+   * path), resolving torrents here. */
+  async function playExternal(row: Row) {
+    const launch = launchFor(row);
+    if (!launch) return;
+    const { source } = launch;
+    try {
+      if (source.kind === "url") {
+        setPhase({ kind: "resolving", streamKey: row.key, label: "Starting player…" });
+        await playerPlay(urlRequest(source, launch));
+        setPhase({ kind: "playing" });
+      } else {
+        setPhase({
+          kind: "resolving",
+          streamKey: row.key,
+          label: "Finding peers and fetching metadata…",
+        });
+        const resolved = await engineResolve({
+          infoHash: source.infoHash,
+          fileIdx: source.fileIdx,
+          sources: source.sources,
+          filename: source.filename,
+          fileMustInclude: source.fileMustInclude,
+        });
+        setPhase({ kind: "resolving", streamKey: row.key, label: "Starting player…" });
+        await playerPlay({ url: resolved.streamUrl, title: launch.title });
+        setPhase({ kind: "playing", infoHash: resolved.infoHash });
+      }
+    } catch (e) {
+      setFailed((prev) => new Set(prev).add(row.key));
       setPhase({
         kind: "error",
         message: errorMessage(e),
-        streamUrl: errorKind(e) === "player" && stream.url ? stream.url : undefined,
+        streamUrl: errorKind(e) === "player" && source.kind === "url" ? source.url : undefined,
       });
     }
   }
@@ -233,6 +267,7 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
                 resolving={phase.kind === "resolving" ? phase.streamKey === row.key : false}
                 disabled={phase.kind === "resolving"}
                 onPlay={() => void play(row)}
+                onPlayExternal={() => void playExternal(row)}
               />
             ))}
           </div>
@@ -392,12 +427,14 @@ function StreamRow({
   resolving,
   disabled,
   onPlay,
+  onPlayExternal,
 }: {
   row: { stream: Stream; addonName: string };
   failed: boolean;
   resolving: boolean;
   disabled: boolean;
   onPlay: () => void;
+  onPlayExternal: () => void;
 }) {
   const { stream, addonName } = row;
   const unsupported = !stream.url && !stream.infoHash && !stream.externalUrl && !stream.ytId;
@@ -445,7 +482,18 @@ function StreamRow({
           )}
         </div>
       </div>
-      <div className="flex items-center">
+      <div className="flex items-center gap-3">
+        {(stream.url || stream.infoHash) && (
+          <button
+            disabled={disabled}
+            onClick={onPlayExternal}
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-raised text-ink-muted transition-colors hover:bg-elevated hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label="Open in external mpv"
+            title="Open in external mpv"
+          >
+            <ExternalLink size={16} />
+          </button>
+        )}
         <button
           disabled={disabled || unsupported}
           onClick={onPlay}
