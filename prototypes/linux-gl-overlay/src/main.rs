@@ -175,6 +175,11 @@ fn main() {
                 if let Err(e) = ctx.render::<()>(fbo, w, h, true) {
                     println!("PROTO: render error {e:?}");
                 }
+                // mpv leaves framebuffer 0 bound; GTK's stays the target
+                type BindFramebuffer = unsafe extern "C" fn(u32, u32);
+                unsafe {
+                    std::mem::transmute::<*mut c_void, BindFramebuffer>(get_proc_address(&(), "glBindFramebuffer"))(0x8D40, fbo as u32);
+                }
                 let n = FRAMES.fetch_add(1, Ordering::Relaxed);
                 if n % 100 == 0 {
                     type GetError = unsafe extern "C" fn() -> u32;
