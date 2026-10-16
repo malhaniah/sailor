@@ -23,10 +23,10 @@ function Root() {
   );
 }
 
-// dev-only hook so `VITE_SAILOR_AUTOPLAY="#/player?url=..." npm run tauri dev`
+// dev-only hook so `VITE_ZEILER_AUTOPLAY="#/player?url=..." npm run tauri dev`
 // drops straight into the player for testing
-if (import.meta.env.DEV && import.meta.env.VITE_SAILOR_AUTOPLAY && !window.location.hash) {
-  window.location.hash = import.meta.env.VITE_SAILOR_AUTOPLAY as string;
+if (import.meta.env.DEV && import.meta.env.VITE_ZEILER_AUTOPLAY && !window.location.hash) {
+  window.location.hash = import.meta.env.VITE_ZEILER_AUTOPLAY as string;
 }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<Root />);

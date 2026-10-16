@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use sailor_addon::{
-    AddonStreams, CatalogResponse, ExtraValue, MetaLookup, ResourcePath, aggregate_streams,
-    first_meta,
-};
 use serde::Deserialize;
 use tauri::State;
 use url::Url;
+use zeiler_addon::{
+    AddonStreams, CatalogResponse, ExtraValue, MetaLookup, ResourcePath, aggregate_streams,
+    first_meta,
+};
 
 use crate::error::IpcError;
 use crate::state::AppState;

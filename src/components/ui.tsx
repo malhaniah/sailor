@@ -22,7 +22,7 @@ export function EmptyState({ title, children }: { title: string; children?: Reac
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-[24px] border border-edge-soft/70 bg-canvas/80 px-9 py-16 text-center">
       <div className="text-[10.5px] font-semibold uppercase tracking-[0.42em] text-ink-subtle">
-        Sailor
+        Zeiler
       </div>
       <div className="font-display text-[28px] font-medium leading-tight text-ink">{title}</div>
       <div className="max-w-md text-[13.5px] leading-relaxed text-ink-muted">{children}</div>
@@ -228,7 +228,7 @@ export function ChipPicker<T extends string | number>({
   );
 }
 
-/** Harbor's "DesktopOnlyBlock" recipe, reused for Harbor-only features Sailor lacks. */
+/** Harbor's "DesktopOnlyBlock" recipe, reused for Harbor-only features Zeiler lacks. */
 export function ComingLaterBlock({ label = "Coming later", children }: { label?: string; children: ReactNode }) {
   return (
     <div className="relative">

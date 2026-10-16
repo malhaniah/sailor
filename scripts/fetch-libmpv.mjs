@@ -1,7 +1,7 @@
 // Fetch a pinned libmpv build for the Windows embedded player and prepare
 // src-tauri/libmpv/ for `cargo build --features embedded`:
 //
-//   libmpv-2.dll   runtime library (bundled beside sailor.exe, see
+//   libmpv-2.dll   runtime library (bundled beside zeiler.exe, see
 //                  src-tauri/tauri.embedded.conf.json — an opt-in overlay:
 //                  npm run tauri build -- --features embedded
 //                    --config src-tauri/tauri.embedded.conf.json)
@@ -16,8 +16,8 @@
 // together when updating.
 //
 // Usage: node scripts/fetch-libmpv.mjs [--force]
-// Env:   SAILOR_LIBMPV_URL=...  override the archive URL (hash still enforced
-//        unless SAILOR_LIBMPV_SHA256 is set too)
+// Env:   ZEILER_LIBMPV_URL=...  override the archive URL (hash still enforced
+//        unless ZEILER_LIBMPV_SHA256 is set too)
 
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -38,10 +38,10 @@ import { fileURLToPath } from "node:url";
 
 const TAG = "2026-10-15-5757d69708";
 const ASSET = "mpv-dev-lgpl-x86_64-20261015-git-5757d69708.7z";
-const SHA256 = process.env.SAILOR_LIBMPV_SHA256 ??
+const SHA256 = process.env.ZEILER_LIBMPV_SHA256 ??
   "5417be2641c31e2c5e676bb7cce90244edb43758936193c6c36dfcf5ea35eabd";
 const URL =
-  process.env.SAILOR_LIBMPV_URL ??
+  process.env.ZEILER_LIBMPV_URL ??
   `https://github.com/zhongfly/mpv-winbuild/releases/download/${TAG}/${ASSET}`;
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,7 +77,7 @@ if (
 // ---- download + verify ------------------------------------------------------
 // The archive is untrusted input: it goes into its own fresh temp directory and
 // is hash-verified before anything touches it.
-const work = mkdtempSync(join(tmpdir(), "sailor-libmpv-"));
+const work = mkdtempSync(join(tmpdir(), "zeiler-libmpv-"));
 try {
   log(`fetching ${URL}`);
   const res = await fetch(URL, { redirect: "follow" });

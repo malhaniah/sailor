@@ -13,7 +13,7 @@ export interface ThemePreset {
 export const THEME_PRESETS: ThemePreset[] = [
   {
     id: "harbor-grey",
-    name: "Sailor default",
+    name: "Zeiler default",
     blurb: "Cool grey with warm gold.",
     swatch: ["#2c2e36", "#3a3d47", "#dcdde4"],
     tokens: {}, // the @theme defaults

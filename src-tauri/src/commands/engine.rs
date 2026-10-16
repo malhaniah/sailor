@@ -1,5 +1,5 @@
-use sailor_engine::{ResolvedStream, TorrentStreamRequest};
 use tauri::State;
+use zeiler_engine::{ResolvedStream, TorrentStreamRequest};
 
 use crate::error::IpcError;
 use crate::state::AppState;

@@ -1,6 +1,6 @@
-use sailor_player::PlaybackRequest;
 use serde::Serialize;
 use tauri::State;
+use zeiler_player::PlaybackRequest;
 
 use crate::error::IpcError;
 use crate::state::AppState;

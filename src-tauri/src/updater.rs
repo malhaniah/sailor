@@ -1,10 +1,10 @@
 //! Automatic updates: install on the next launch, never mid-session.
 //!
-//! - At startup (release builds, when enabled) Sailor checks for an update. If one is
+//! - At startup (release builds, when enabled) Zeiler checks for an update. If one is
 //!   available it is installed right away, before the user has started anything: a
 //!   package already downloaded during an earlier session is reused, otherwise it is
 //!   downloaded first.
-//! - While running, Sailor re-checks every few hours and downloads quietly into the
+//! - While running, Zeiler re-checks every few hours and downloads quietly into the
 //!   cache; the UI shows that the update is ready and will install on next launch.
 //!
 //! Packages are signature-verified by the plugin inside `install()`, so a cached
@@ -181,7 +181,7 @@ pub async fn update_install_now(app: AppHandle) -> Result<(), IpcError> {
     let update = check(&app)
         .await
         .map_err(|e| IpcError::Storage(format!("couldn't check for updates: {e:#}")))?
-        .ok_or_else(|| IpcError::NotFound("Sailor is already up to date.".into()))?;
+        .ok_or_else(|| IpcError::NotFound("Zeiler is already up to date.".into()))?;
     let bytes = ensure_downloaded(&app, &update)
         .await
         .map_err(|e| IpcError::Storage(format!("couldn't download the update: {e:#}")))?;

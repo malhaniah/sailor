@@ -3,7 +3,7 @@
 //! One mpv instance lives behind an actor: callers talk to it through a command
 //! channel (so no caller ever blocks on libmpv), and a dedicated thread drains
 //! `mpv_wait_event`, forwarding a filtered event stream to a sink the shell
-//! provides (Sailor wires it to a `player://event` Tauri event).
+//! provides (Zeiler wires it to a `player://event` Tauri event).
 //!
 //! The Windows window wiring (mpv child HWND pinned under a transparent
 //! WebView2) is NOT here — this crate never touches the OS surface beyond
@@ -99,7 +99,7 @@ fn readable(e: &libmpv2::Error) -> String {
     match e {
         libmpv2::Error::Raw(code) => format!("{} (mpv error {code})", mpv_error::describe(*code)),
         libmpv2::Error::VersionMismatch { linked, loaded } => format!(
-            "incompatible libmpv: it provides client API {}.{}, Sailor needs {}.x",
+            "incompatible libmpv: it provides client API {}.{}, Zeiler needs {}.x",
             loaded >> 16,
             loaded & 0xffff,
             linked >> 16
@@ -216,7 +216,7 @@ fn actor_thread(
     // locale and Rust never changes it, so there is nothing to do here.
     // (The unix backends will need a setlocale call — v0.3.)
     let mpv = match Mpv::with_initializer(|init| {
-        // No config files, no scripts, no mpv-owned input: Sailor's UI is the
+        // No config files, no scripts, no mpv-owned input: Zeiler's UI is the
         // only control surface, and addon-supplied URLs must not be able to
         // pull in ytdl or user scripts.
         init.set_option("config", "no")?;
@@ -229,8 +229,8 @@ fn actor_thread(
         init.set_option("input-vo-keyboard", "no")?;
         init.set_option("input-cursor", "no")?;
         init.set_option("cursor-autohide", "no")?;
-        init.set_option("title", "Sailor")?;
-        init.set_option("audio-client-name", "Sailor")?;
+        init.set_option("title", "Zeiler")?;
+        init.set_option("audio-client-name", "Zeiler")?;
         // Keep the core alive at end-of-file so the UI can show a replay state
         // instead of the window tearing down mid-interaction.
         init.set_option("idle", "yes")?;
@@ -504,7 +504,7 @@ mod tests {
         };
         assert_eq!(
             readable(&e),
-            "incompatible libmpv: it provides client API 1.109, Sailor needs 2.x"
+            "incompatible libmpv: it provides client API 1.109, Zeiler needs 2.x"
         );
     }
 }

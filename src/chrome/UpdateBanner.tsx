@@ -38,9 +38,9 @@ export function UpdateBanner() {
     return (
       <div className="animate-fade-in fixed inset-0 z-[300] flex flex-col items-center justify-center gap-5 bg-canvas">
         <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-edge border-t-accent" />
-        <div className="font-display text-[32px] font-medium text-ink">Updating Sailor</div>
+        <div className="font-display text-[32px] font-medium text-ink">Updating Zeiler</div>
         <div className="text-[11px] font-semibold uppercase tracking-[0.32em] text-ink-subtle">
-          Installing v{installing} · Sailor will reopen
+          Installing v{installing} · Zeiler will reopen
         </div>
       </div>
     );
@@ -59,9 +59,9 @@ export function UpdateBanner() {
           </>
         ) : (
           <>
-            <span className="text-[13px] font-semibold text-ink">Sailor v{ready} is ready</span>
+            <span className="text-[13px] font-semibold text-ink">Zeiler v{ready} is ready</span>
             <span className="text-[12px] leading-snug text-ink-subtle">
-              It installs next time you open Sailor.
+              It installs next time you open Zeiler.
             </span>
             <button
               onClick={() =>

@@ -53,8 +53,8 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            cache_dir: PathBuf::from("sailor-cache"),
-            state_dir: PathBuf::from("sailor-state"),
+            cache_dir: PathBuf::from("zeiler-cache"),
+            state_dir: PathBuf::from("zeiler-state"),
             listen_port: 4240,
             enable_upnp: true,
             upload_limit_bps: None,

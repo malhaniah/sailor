@@ -1,10 +1,10 @@
 //! Live integration tests against real public addons. Ignored by default (network);
-//! run explicitly with: cargo test -p sailor-addon --test live -- --ignored
+//! run explicitly with: cargo test -p zeiler-addon --test live -- --ignored
 
 use std::time::Duration;
 
-use sailor_addon::{AddonClient, ResourcePath, aggregate_streams, first_meta};
 use url::Url;
+use zeiler_addon::{AddonClient, ResourcePath, aggregate_streams, first_meta};
 
 fn cinemeta() -> Url {
     Url::parse("https://v3-cinemeta.strem.io/manifest.json").unwrap()

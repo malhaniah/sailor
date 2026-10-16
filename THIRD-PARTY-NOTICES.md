@@ -1,11 +1,11 @@
 # Third-party notices
 
-Sailor is licensed under GPL-3.0-or-later (see [LICENSE](LICENSE)). It builds on the
+Zeiler is licensed under GPL-3.0-or-later (see [LICENSE](LICENSE)). It builds on the
 following third-party work:
 
 ## Protocol semantics
 
-`crates/sailor-addon` re-implements the Stremio addon protocol. Its lenient parsing
+`crates/zeiler-addon` re-implements the Stremio addon protocol. Its lenient parsing
 semantics (field aliases, null handling, URL construction, resource-routing rules) were
 written against the behavior of **stremio-core**
 (<https://github.com/Stremio/stremio-core>), MIT License, Copyright (c) 2019 SmartCode OOD,
@@ -25,7 +25,7 @@ the adapted files.
   Copyright 2021 Igor Katson. Used as the embedded BitTorrent engine.
 - **Tauri** (<https://tauri.app>) — MIT or Apache-2.0.
 - **mpv / libmpv** (<https://mpv.io>) — LGPL-2.1+ or GPL-2.0+ depending on build flavor.
-  Sailor does not bundle libmpv in development builds; release packaging will state the
+  Zeiler does not bundle libmpv in development builds; release packaging will state the
   exact build used and provide a corresponding source offer.
 
 A complete dependency license inventory can be generated with
@@ -33,5 +33,5 @@ A complete dependency license inventory can be generated with
 
 ## Trademarks
 
-"Stremio" is a trademark of its respective owner (Smart Code Ltd). Sailor is an
+"Stremio" is a trademark of its respective owner (Smart Code Ltd). Zeiler is an
 independent project, not affiliated with or endorsed by Stremio.

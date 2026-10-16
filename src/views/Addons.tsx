@@ -59,7 +59,7 @@ export function AddonsView() {
             Addons
           </h1>
           <p className="max-w-2xl text-[15px] leading-relaxed text-ink-muted">
-            Sailor ships no addons. Paste the manifest URL of an addon you trust — it ends in{" "}
+            Zeiler ships no addons. Paste the manifest URL of an addon you trust — it ends in{" "}
             <code className="rounded-md bg-elevated px-1.5 py-0.5 font-mono text-[12.5px]">
               /manifest.json
             </code>{" "}
@@ -175,7 +175,7 @@ function AddonSummary({ addon }: { addon: Descriptor }) {
         {addon.transportUrl}
       </div>
       <p className="text-[12px] leading-relaxed text-ink-subtle">
-        Addons are third-party services. Sailor only talks to this URL on your behalf; install
+        Addons are third-party services. Zeiler only talks to this URL on your behalf; install
         it only if you trust its operator.
       </p>
     </div>

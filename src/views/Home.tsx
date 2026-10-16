@@ -40,7 +40,7 @@ export function HomeView() {
     return (
       <main className="flex-1 overflow-y-auto px-12 pt-32">
         <EmptyState title="Welcome aboard">
-          Sailor ships with no content. Install an addon that provides catalogs and this page
+          Zeiler ships with no content. Install an addon that provides catalogs and this page
           becomes your harbor.
           <div className="mt-5">
             <button

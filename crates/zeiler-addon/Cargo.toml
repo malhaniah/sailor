@@ -1,5 +1,5 @@
 [package]
-name = "sailor-addon"
+name = "zeiler-addon"
 description = "Stremio addon-protocol client: manifests, catalogs, meta, streams, subtitles"
 version.workspace = true
 edition.workspace = true

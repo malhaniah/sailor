@@ -1,6 +1,6 @@
-# Sailor architecture
+# Zeiler architecture
 
-Sailor is a free, open-source (GPL-3.0-or-later) desktop client for the Stremio ecosystem.
+Zeiler is a free, open-source (GPL-3.0-or-later) desktop client for the Stremio ecosystem.
 It hosts no media, indexes no media, and ships no content addon — users install their own
 addon URLs. This document records the load-bearing decisions and the shape of the codebase.
 
@@ -11,29 +11,29 @@ addon URLs. This document records the load-bearing decisions and the shape of th
 | License | GPL-3.0-or-later | Copyleft for a FOSS media client; compatible with every dependency we use (MIT, Apache-2.0, LGPL-2.1, MPL-2.0). |
 | Shell | Tauri 2.12.x (stable; not the 3.0 alphas) | Proven by Harbor; Rust core + webview UI is the fastest path to a polished media UI. |
 | UI | Vite 8 + React 19 + TypeScript ~6.0 + Tailwind 4 | Current stable stack; matches the create-tauri-app template. |
-| Protocol client | Hand-rolled `sailor-addon` crate | `stremio-core` is git-only (frozen 0.1.0), framework-shaped (Elm runtime + static `Env`), hardwired to api.strem.io (incl. unauthenticated SeekLog telemetry), and assumes Stremio's `server.js` for torrents. The protocol surface is small; we mirror stremio-core's lenient serde semantics (MIT, referenced with attribution). |
+| Protocol client | Hand-rolled `zeiler-addon` crate | `stremio-core` is git-only (frozen 0.1.0), framework-shaped (Elm runtime + static `Env`), hardwired to api.strem.io (incl. unauthenticated SeekLog telemetry), and assumes Stremio's `server.js` for torrents. The protocol surface is small; we mirror stremio-core's lenient serde semantics (MIT, referenced with attribution). |
 | Torrent engine | librqbit, in-process | Pure Rust, Apache-2.0, first-class streaming (sequential priority + HTTP Range endpoint). Pinned to a git rev of `main` until 9.0.2 ships (crates.io 9.0.1 lacks three Windows fixes: NTFS sparse marking #681, DHT death on UDP 10054 #690, stream-during-init #689). |
-| Playback | libmpv (`libmpv2` 6.x crate) | v0 falls back to spawning a system `mpv`; the embedded surface (video under a transparent webview) is the `sailor-player` roadmap: Windows `wid`+HWND_BOTTOM, macOS render-API NSOpenGLView, Linux GtkGLArea overlay. libmpv is a link-time dependency, so the embedded backend is behind the `embedded` cargo feature until `libmpv-2.dll` + `mpv.lib` are vendored via a hash-pinned fetch script. |
-| Content neutrality | No seeded stream addons; one built-in metadata addon | Unlike Harbor (which also seeds Torrentio), Sailor builds in only Cinemeta — metadata only, from a manifest snapshot compiled into the app (`src-tauri/builtin/`), switchable in Settings → Content. Stream addons are installed by user-pasted URL only, behind a confirmation dialog showing the manifest (name, version, resources, p2p/adult hints). |
+| Playback | libmpv (`libmpv2` 6.x crate) | v0 falls back to spawning a system `mpv`; the embedded surface (video under a transparent webview) is the `zeiler-player` roadmap: Windows `wid`+HWND_BOTTOM, macOS render-API NSOpenGLView, Linux GtkGLArea overlay. libmpv is a link-time dependency, so the embedded backend is behind the `embedded` cargo feature until `libmpv-2.dll` + `mpv.lib` are vendored via a hash-pinned fetch script. |
+| Content neutrality | No seeded stream addons; one built-in metadata addon | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only Cinemeta — metadata only, from a manifest snapshot compiled into the app (`src-tauri/builtin/`), switchable in Settings → Content. Stream addons are installed by user-pasted URL only, behind a confirmation dialog showing the manifest (name, version, resources, p2p/adult hints). |
 | Updates | tauri-plugin-updater, install on next launch | Signed (minisign) packages from `releases/latest/download/latest.json`; releases are therefore regular, not pre-releases. Checked at launch (installed immediately, before the user starts anything) and every 6 h (downloaded to the cache, installed on the next launch). Signing key: `TAURI_SIGNING_PRIVATE_KEY` secret; release builds pass `--config src-tauri/tauri.release.conf.json` to emit updater artifacts. Dev builds never self-update. |
 
 ## Workspace layout
 
 ```
-sailor/
+zeiler/
   Cargo.toml              # virtual workspace: ["src-tauri", "crates/*"], resolver 3
   package.json  vite.config.ts  index.html  src/   # React UI at repo root
   crates/
-    sailor-addon/         # Stremio addon protocol: types, URL builder, HTTP client, fan-out
-    sailor-engine/        # librqbit session + local stream endpoint for the player
-    sailor-player/        # player control; external-mpv backend now, embedded libmpv later
+    zeiler-addon/         # Stremio addon protocol: types, URL builder, HTTP client, fan-out
+    zeiler-engine/        # librqbit session + local stream endpoint for the player
+    zeiler-player/        # player control; external-mpv backend now, embedded libmpv later
   src-tauri/              # Tauri shell: commands, state, config, capabilities
   docs/  scripts/  .github/workflows/
 ```
 
 Domain crates never depend on `tauri`; they test with plain `cargo test`.
 
-## The addon protocol (what `sailor-addon` implements)
+## The addon protocol (what `zeiler-addon` implements)
 
 - An addon is a **transport URL** ending in `/manifest.json`. Resources are fetched by
   replacing that suffix with `/{resource}/{type}/{id}[/{extra}].json` (string replace —
@@ -62,7 +62,7 @@ For a chosen video id, `streams_get` fans out to all supporting addons in parall
 | Stream source | Handling |
 | --- | --- |
 | `url` (http/https) | Played directly; `behaviorHints.proxyHeaders.request` → mpv `http-header-fields`. |
-| `infoHash` + `fileIdx` + `sources` | `sailor-engine`: magnet built from infoHash + `tr=` params (strip `tracker:` prefixes — librqbit ignores `AddTorrentOptions.trackers` for magnets), `only_files=[fileIdx]` (largest non-padding file via a `list_only` pre-add when fileIdx is absent), then a `127.0.0.1` Range-capable stream URL is handed to the player. |
+| `infoHash` + `fileIdx` + `sources` | `zeiler-engine`: magnet built from infoHash + `tr=` params (strip `tracker:` prefixes — librqbit ignores `AddTorrentOptions.trackers` for magnets), `only_files=[fileIdx]` (largest non-padding file via a `list_only` pre-add when fileIdx is absent), then a `127.0.0.1` Range-capable stream URL is handed to the player. |
 | `ytId` | Deferred (yt-dlp integration later); shown as external link. |
 | `externalUrl` | Opened in the system browser after scheme allow-listing (http/https only). |
 | rar/zip/nzb/playerFrame | Unsupported — hidden or marked as such. |
@@ -100,7 +100,7 @@ position) will move to `tauri::ipc::Channel` subscriptions when the embedded pla
 - Addon transport URLs may embed credentials (config-in-URL pattern) — they are secrets;
   never logged, never sent anywhere but the addon host.
 - Engine HTTP binds 127.0.0.1 with per-session basic-auth credentials.
-- Deep links (`sailor://`; `stremio://` opt-in later) are untrusted argv input and are
+- Deep links (`zeiler://`; `stremio://` opt-in later) are untrusted argv input and are
   parsed/validated before any navigation or install prompt.
 
 ## Packaging & licensing notes
