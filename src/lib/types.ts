@@ -193,7 +193,12 @@ export interface Settings {
   hideLiveTv: boolean;
   builtinCinemeta: boolean;
   autoUpdate: boolean;
+  /** Which player `player_start` uses for "auto" (Rust `zeiler_player::PlayerBackend`). */
+  playerBackend: PlayerBackend;
 }
+
+/** Player backend preference. */
+export type PlayerBackend = "auto" | "embedded" | "external";
 
 export interface PlayerStatus {
   available: boolean;

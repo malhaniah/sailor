@@ -13,7 +13,7 @@ addon URLs. This document records the load-bearing decisions and the shape of th
 | UI | Vite 8 + React 19 + TypeScript ~6.0 + Tailwind 4 | Current stable stack; matches the create-tauri-app template. |
 | Protocol client | Hand-rolled `zeiler-addon` crate | `stremio-core` is git-only (frozen 0.1.0), framework-shaped (Elm runtime + static `Env`), hardwired to api.strem.io (incl. unauthenticated SeekLog telemetry), and assumes Stremio's `server.js` for torrents. The protocol surface is small; we mirror stremio-core's lenient serde semantics (MIT, referenced with attribution). |
 | Torrent engine | librqbit, in-process | Pure Rust, Apache-2.0, first-class streaming (sequential priority + HTTP Range endpoint). Pinned to a git rev of `main` until 9.0.2 ships (crates.io 9.0.1 lacks three Windows fixes: NTFS sparse marking #681, DHT death on UDP 10054 #690, stream-during-init #689). |
-| Playback | libmpv (`libmpv2` 6.x crate) | v0 falls back to spawning a system `mpv`; the embedded surface (video under a transparent webview) is the `zeiler-player` roadmap: Windows `wid`+HWND_BOTTOM, macOS render-API NSOpenGLView, Linux GtkGLArea overlay. libmpv is a link-time dependency, so the embedded backend is behind the `embedded` cargo feature until `libmpv-2.dll` + `mpv.lib` are vendored via a hash-pinned fetch script. |
+| Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM now, macOS render-API NSOpenGLView next) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is behind the `embedded` cargo feature until `libmpv-2.dll` + `mpv.lib` are vendored via a hash-pinned fetch script. See "Player backends". |
 | Content neutrality | No seeded stream addons; one built-in metadata addon | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only Cinemeta — metadata only, from a manifest snapshot compiled into the app (`src-tauri/builtin/`), switchable in Settings → Content. Stream addons are installed by user-pasted URL only, behind a confirmation dialog showing the manifest (name, version, resources, p2p/adult hints). |
 | Updates | tauri-plugin-updater, install on next launch | Signed (minisign) packages from `releases/latest/download/latest.json`; releases are therefore regular, not pre-releases. Checked at launch (installed immediately, before the user starts anything) and every 6 h (downloaded to the cache, installed on the next launch). Signing key: `TAURI_SIGNING_PRIVATE_KEY` secret; release builds pass `--config src-tauri/tauri.release.conf.json` to emit updater artifacts. Dev builds never self-update. |
 
@@ -26,7 +26,7 @@ zeiler/
   crates/
     zeiler-addon/         # Stremio addon protocol: types, URL builder, HTTP client, fan-out
     zeiler-engine/        # librqbit session + local stream endpoint for the player
-    zeiler-player/        # player control; external-mpv backend now, embedded libmpv later
+    zeiler-player/        # player session: external mpv over JSON IPC; embedded libmpv (feature)
   src-tauri/              # Tauri shell: commands, state, config, capabilities
   docs/  scripts/  .github/workflows/
 ```
@@ -103,9 +103,11 @@ secondary action ("Open in external mpv") keeps the v0.1 direct-to-mpv path.
   owns the keyboard.
 - **Backends** (`src/pages/player/`). Embedded builds (Windows `embedded` feature +
   libmpv present) render mpv under the transparent webview, with the controls drawn as
-  overlays. Every other build hands the stream to an external mpv window (`player_play`)
-  and shows "Playing in mpv" (title, source, Stop → `player_stop`, Back keeps it
-  playing); remote control of that window arrives with the external JSON-IPC backend.
+  overlays. Every other build hands the stream to an external mpv window (`player_play`,
+  now an alias that starts the JSON-IPC backend) and shows "Playing in mpv" (title,
+  source, Stop → `player_stop`, Back keeps it playing). The Rust side can already
+  remote-control that window (see "Player backends"); the remote-control UI and the
+  Settings backend choice arrive in M2b.
   Torrents are resolved by the Player (`engine_resolve`, honouring `fileMustInclude`)
   with live engine stats. The playback session owns the torrent: when the page goes
   away by any route (Back, Escape, native history navigation) it is removed from the
@@ -135,18 +137,26 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   fileMustInclude } }` → `{ streamUrl, infoHash, fileIdx, fileName, fileSize }` ·
   `engine_stats { infoHash }` → librqbit stats JSON · `engine_remove { infoHash,
   deleteFiles }`
-- External player: `player_status()` → `{ available, path? }` · `player_play { request:
-  { url, title?, headers, userAgent?, referrer?, startAtSec? } }` · `player_stop()`
+- Player (backend-neutral; see "Player backends"): `player_backends()` →
+  `{ embedded: { available, reason?, libmpvVersion? }, external: { available, path? } }` ·
+  `player_start { request: { url, title?, headers, userAgent?, referrer?, startAtSec? },
+  backend?: "auto" | "embedded" | "external" }` → `{ backend, fallbackReason?,
+  remoteControl }` · `player_load { request }` · `player_stop()` (any backend) ·
+  `player_set_property { name, value }` · `player_command { args }` ·
+  `player_get_property { name }` → JSON value · `player_set_geometry { geometry: { x, y,
+  width, height } }` (embedded video rect, physical px)
+- Deprecated player aliases (one release; `commands/mpv/aliases.rs`): `player_status()` →
+  `{ available, path? }` (= `player_backends().external`) ·
+  `player_embedded_available()` → bool · `player_play { request }` (start external) ·
+  `player_embedded_start { request }` (start embedded, no fallback) ·
+  `player_embedded_stop()` (stops only an embedded session) ·
+  `player_embedded_set_property { name, value }` · `player_embedded_command { args }`
 - Settings: `settings_get()` → Settings · `settings_patch { patch }` → Settings (merges
   the given top-level keys server-side; unknown keys and wrongly typed values are
   rejected) · `settings_set { settings }` → Settings (**deprecated**, replaces every
   setting; kept for one release)
 - Updates: `update_status()` → `{ current, ready? }` · `update_check()` → new version or
   null · `update_install_now()`
-- Embedded player (`embedded` feature; stubs otherwise): `player_embedded_available()` →
-  bool · `player_embedded_start { request }` · `player_embedded_stop()` ·
-  `player_embedded_set_property { name, value }` · `player_embedded_command { args }` ·
-  `player_set_geometry { geometry: { x, y, width, height } }`
 
 Errors serialize as `{ kind, message }`; `message` is a full sentence shown as-is. Kinds:
 `invalidInput`, `addon`, `notFound`, `engine`, `player`, `storage`, plus kinds reserved
@@ -162,7 +172,8 @@ Events (named `<domain>://<event>`, rare notifications only):
   `settings_patch`/`settings_set`. `useSettings()` subscribes, so every part of the UI
   sees the latest values.
 - `update://ready` / `update://installing` (version) · `update://failed` (message)
-- `player://event` — embedded player events (`PlayerEvent`, kebab-case tagged)
+- `player://event` — player events from either backend (`PlayerEvent`, kebab-case
+  tagged; see "Player backends")
 
 High-frequency data (engine stats, player position) will move to `tauri::ipc::Channel`
 subscriptions when the embedded player lands.
@@ -197,12 +208,76 @@ Reserved key map — names are fixed now; each key is added only when its featur
 
 | Scope | Keys (existing **bold**) |
 | --- | --- |
-| Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, `playerBackend` (enum), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
+| Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
 | Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, `showAdult` (the single adult flag and age gate, also used by the marketplace), `hideP2pAddons`, `homeRows`, `subtitles{}` (languages, auto-load, style), `audio{}` (languages, normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
 | Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, `builtinOpensubtitles`, `builtinKitsu` |
 
 Per-profile keys live in `settings.json` until local profiles exist, then move into the
 profile store. There is no `profile{}` group in Settings.
+
+## Player backends
+
+`zeiler-player` owns one backend-neutral `Session` (`Embedded | External`) with
+`load`, `set_property`, `command`, `get_property` (answered through a oneshot) and
+`quit`; both backends emit the same `PlayerEvent` stream and observe the same property
+set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
+(`src-tauri/src/commands/mpv/`) keeps at most one session and forwards its events as
+`player://event`; events of a replaced session are dropped.
+
+- **Choosing a backend** (in Rust, because embedded init and video-output failures
+  are synchronous). `player_start`'s `backend` defaults to `auto`, which follows the
+  `playerBackend` setting. `auto` = embedded when this build has it and it starts,
+  else external; an embedded init/VO failure falls back to external and the result
+  carries `fallbackReason`. An explicit `embedded` never falls back (`unsupported` when
+  this build/OS has none, `player` when it fails). External needs mpv
+  (`mpvPath` or PATH/known locations).
+- **Embedded** (`embedded` feature): libmpv actor + event thread
+  (`crates/zeiler-player/src/embedded.rs`), `config=no`, no scripts/ytdl/OSC/input.
+  Per-OS surface code: `commands/mpv/windows.rs` (child HWND pinned under the
+  transparent WebView2), `macos.rs` / `linux.rs` (not available yet: macOS is next,
+  Linux keeps mpv in its own window), `stub.rs` (feature off).
+- **External, JSON IPC** (`crates/zeiler-player/src/external_ipc.rs`): spawns the
+  user's mpv with `--input-ipc-server=<endpoint> --idle=yes --keep-open=yes
+  --force-window=immediate --title=Zeiler --ytdl=no`, keeping the user's own config,
+  scripts and bindings. The URL, headers (`change-list http-header-fields clr` +
+  `append`), user agent, referrer, `start` and title go over the connection — never on
+  argv. Endpoint: Windows named pipe `\\.\pipe\zeiler-mpv-<uuid v4>`; Unix socket
+  `zeiler-mpv-<8 hex>.sock` in a private 0700 directory (`$XDG_RUNTIME_DIR` when short,
+  else `/tmp/zeiler-<uid>`; macOS caps socket paths at 104 bytes). Connects with retry
+  (50 × 100 ms), observes every property, then loads. When mpv exits (including the
+  user closing its window) the session emits `shutdown`, the shell forgets it, and the
+  socket is removed. If the IPC never comes up, the v0.1 launch (URL on stdin, headers
+  on argv, no control) is the last resort and `player_start` reports
+  `remoteControl: false`.
+- **Events.** `property { name, value }` for every observed property (`time-pos`
+  throttled to 200 ms, held rather than dropped; lists as real JSON; track ids in
+  mpv's string form `"1"`/`"no"`/`"auto"` on both backends; `null` once a property
+  becomes unavailable, e.g. `duration`/`chapter` after `end-file` — libmpv2 drops those
+  notifications, so the embedded backend re-reads the properties it last reported at
+  `start-file`/`file-loaded`/`end-file` and on an early wake-up, and reports `null` for
+  any that are gone) ·
+  `start-file` · `file-loaded` · `seek` · `playback-restart` · `end-file { reason,
+  fileError? }` (preceded by `error` when reason is `error`) · `error { message }` ·
+  `client-message { args }` · `shutdown`. One cache property is observed,
+  `demuxer-cache-time` (buffered-until timestamp; `demuxer-cache-state` is a large,
+  chatty node no UI needs).
+- **Requests.** `PlaybackRequest` is an IPC payload: http(s) only; header names must be
+  HTTP tokens and no header value, user agent or referrer may contain CR, LF or NUL
+  (refused with an error naming the field). The title is display text — addon stream
+  names are often multi-line (`"Addon\n1080p"`) — so it is flattened to one line
+  (control characters become a space, NULs are dropped), never refused. Its shell-only `options` (pre-load mpv options such as preferred languages) are
+  `#[serde(skip)]` — the webview can never set them.
+- **Validation policy** (`commands/mpv/validate.rs`, table-driven, unit-tested). The UI
+  may set only listed properties, each value checked (booleans; numeric ranges such as
+  `speed` 0.25–4, `sub-delay`/`audio-delay` ±600, `volume` 0–1000; `#RRGGBB[AA]`
+  colours; enums; track ids as integer ≥ 1 or `no`/`auto`; subtitle fonts from a fixed
+  list). Commands: `seek <number> [flags]`, `cycle <settable property> [up|down]`
+  (the target is checked against the property table so `cycle` cannot reach around
+  it), `stop`, `frame-step`, `frame-back-step`, `sub-remove <id>`, `sub-reload <id>`.
+  Reads: diagnostics (codecs, fps, bitrates, drops, cache, `mpv-version`) and the
+  observed set. Never exposed: `loadfile`, `sub-add`, `af`, `vf`, `glsl-shaders`, `run`,
+  `script-message`, `keybind`, `define-section`; features that need them get dedicated,
+  validated commands.
 
 ## Navigation names
 
@@ -221,7 +296,9 @@ is up; leaving the player pops the history entry it pushed.
 - Strict CSP (no remote script/style; `img-src https: http:` because addon posters are
   arbitrary hosts; loopback wildcards for the engine stream only).
 - Least-privilege capabilities; no fs/shell/http plugin — the webview can only invoke our
-  typed commands.
+  typed commands. Player property writes, reads and commands pass the allow-list tables
+  in `commands/mpv/validate.rs`; stream URLs, headers and tokens reach mpv over its
+  private IPC connection, never argv.
 - Addons are untrusted JSON: stream/external URLs are scheme-allow-listed before reaching
   mpv or the OS (mpv would happily open `file://`); `proxyHeaders` are treated as
   attacker-controlled; infoHashes validated as 40-char hex.

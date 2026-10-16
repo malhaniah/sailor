@@ -47,7 +47,6 @@ pub enum IpcError {
     Conflict(String),
     /// Not available on this platform or build (e.g. embedded playback without the
     /// `embedded` feature, a deep-link scheme on macOS).
-    #[allow(dead_code, reason = "reserved; first used by the player backends")]
     #[error("{0}")]
     Unsupported(String),
 }

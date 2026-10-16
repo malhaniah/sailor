@@ -7,26 +7,29 @@
 //!
 //! The Windows window wiring (mpv child HWND pinned under a transparent
 //! WebView2) is NOT here — this crate never touches the OS surface beyond
-//! passing the parent `wid` to mpv pre-init. See `src-tauri/src/commands/mpv.rs`.
+//! passing the parent `wid` to mpv pre-init. See
+//! `src-tauri/src/commands/mpv/windows.rs`.
+//!
+//! The event type ([`PlayerEvent`]) and the observed property set
+//! ([`crate::OBSERVED`]) are shared with the external JSON-IPC backend.
 //!
 //! The embedding approach is adapted from Harbor (github.com/harborstremio/harbor,
 //! MIT) — see THIRD-PARTY-NOTICES.md.
 
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use libmpv2::events::{Event, PropertyData};
 use libmpv2::{Format, Mpv};
-use serde::Serialize;
 use serde_json::{Value, json};
+use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
 
-use crate::{PlaybackRequest, mpv_error, redact_url};
-
-/// Minimum spacing between forwarded `time-pos` changes. mpv fires this every
-/// frame; the UI only needs it a few times a second.
-const TIME_POS_THROTTLE: Duration = Duration::from_millis(200);
+use crate::{
+    OBSERVED, PlaybackRequest, PlayerEvent, PropKind, SessionError, TIME_POS_THROTTLE, mpv_error,
+    property_kind, redact_url,
+};
 
 /// How close to the end of the throttle window a held `time-pos` may be
 /// flushed. Windows mpv rounds wait timeouts down to whole milliseconds, so a
@@ -34,29 +37,25 @@ const TIME_POS_THROTTLE: Duration = Duration::from_millis(200);
 /// loop would spin on zero-length waits until the window closes.
 const FLUSH_SLACK: Duration = Duration::from_millis(2);
 
-/// Properties observed on behalf of the UI. Node-shaped properties (lists) are
-/// observed as strings — mpv serializes them to JSON, and libmpv2 ≥ 5 has no
+/// libmpv read format for a property kind. Node-shaped properties (lists) are
+/// read as strings — mpv serializes them to JSON, and libmpv2 ≥ 5 has no
 /// MpvNode — and re-parsed before they are forwarded.
-const OBSERVED: &[(&str, Format)] = &[
-    ("time-pos", Format::Double),
-    ("duration", Format::Double),
-    ("pause", Format::Flag),
-    ("paused-for-cache", Format::Flag),
-    ("cache-buffering-state", Format::Int64),
-    ("eof-reached", Format::Flag),
-    ("seeking", Format::Flag),
-    ("volume", Format::Double),
-    ("mute", Format::Flag),
-    ("media-title", Format::String),
-    ("track-list", Format::String),
-    ("chapter-list", Format::String),
-    ("aid", Format::String),
-    ("sid", Format::String),
-    ("vid", Format::String),
-];
+fn format_of(kind: PropKind) -> Format {
+    match kind {
+        PropKind::Double => Format::Double,
+        PropKind::Int => Format::Int64,
+        PropKind::Flag => Format::Flag,
+        PropKind::Text | PropKind::Json => Format::String,
+    }
+}
 
-/// Property names whose string value is a JSON document (see [`OBSERVED`]).
-const JSON_PROPS: &[&str] = &["track-list", "chapter-list"];
+/// `mpv-version` of the last core this process initialized (for the backends report).
+static MPV_VERSION: OnceLock<String> = OnceLock::new();
+
+/// The libmpv version string (`mpv v0.40.0 …`), once a core has been initialized.
+pub fn mpv_version() -> Option<String> {
+    MPV_VERSION.get().cloned()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EmbeddedError {
@@ -64,33 +63,6 @@ pub enum EmbeddedError {
     Init(String),
     #[error("embedded player is shut down")]
     Closed,
-}
-
-/// Event stream forwarded to the UI. Serialized as `{ "type": ..., ... }`.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum PlayerEvent {
-    /// An observed property changed. List-valued properties arrive as parsed
-    /// JSON (arrays/objects), scalars as JSON scalars.
-    Property {
-        name: String,
-        value: Value,
-    },
-    StartFile,
-    FileLoaded,
-    Seek,
-    PlaybackRestart,
-    /// Playback of the current file ended. `reason` is one of
-    /// `eof | stop | quit | error | redirect | unknown`.
-    EndFile {
-        reason: &'static str,
-    },
-    /// A non-fatal player error (including end-of-file on error).
-    Error {
-        message: String,
-    },
-    /// The mpv core is gone; no further events will arrive.
-    Shutdown,
 }
 
 /// Readable text for a libmpv2 error. Its own `Display` is just `Debug`
@@ -138,10 +110,13 @@ fn end_file_reason(reason: libmpv2::EndFileReason) -> &'static str {
     }
 }
 
+type PropertyReply = oneshot::Sender<Result<Value, String>>;
+
 enum Cmd {
     Load(PlaybackRequest),
     SetProperty(String, Value),
     Command(Vec<String>),
+    GetProperty(String, PropertyReply),
     Quit,
 }
 
@@ -188,6 +163,17 @@ impl EmbeddedPlayer {
 
     pub fn command(&self, args: Vec<String>) -> Result<(), EmbeddedError> {
         self.send(Cmd::Command(args))
+    }
+
+    /// Read a property, typed per [`property_kind`]. Answered by the actor thread
+    /// in command order.
+    pub async fn get_property(&self, name: String) -> Result<Value, SessionError> {
+        let (tx, rx) = oneshot::channel();
+        self.send(Cmd::GetProperty(name, tx))
+            .map_err(|_| SessionError::Closed)?;
+        rx.await
+            .map_err(|_| SessionError::Closed)?
+            .map_err(SessionError::Mpv)
     }
 
     /// Ask the core to quit. The actor and event threads wind down on their own.
@@ -262,8 +248,11 @@ fn actor_thread(
         }
     };
 
-    for (i, (name, format)) in OBSERVED.iter().enumerate() {
-        if let Err(e) = mpv.observe_property(name, *format, i as u64) {
+    if let Ok(version) = mpv.get_property::<String>("mpv-version") {
+        let _ = MPV_VERSION.set(version);
+    }
+    for (i, (name, kind)) in OBSERVED.iter().enumerate() {
+        if let Err(e) = mpv.observe_property(name, format_of(*kind), i as u64) {
             warn!(property = name, error = %readable(&e), "mpv observe_property failed");
         }
     }
@@ -325,6 +314,9 @@ fn actor_thread(
                     warn!(command = %args[0], error = %readable(&e), "mpv command failed");
                 }
             }
+            Cmd::GetProperty(name, reply) => {
+                let _ = reply.send(read_property(&mpv, &name).map_err(|e| readable(&e)));
+            }
             Cmd::Quit => break,
         }
     }
@@ -333,6 +325,19 @@ fn actor_thread(
     // Whichever thread drops the last Arc destroys the handle.
     let _ = mpv.command("quit", &[]);
     debug!("mpv actor thread exiting");
+}
+
+fn read_property(mpv: &Mpv, name: &str) -> Result<Value, libmpv2::Error> {
+    Ok(match property_kind(name) {
+        PropKind::Double => json!(mpv.get_property::<f64>(name)?),
+        PropKind::Int => json!(mpv.get_property::<i64>(name)?),
+        PropKind::Flag => Value::Bool(mpv.get_property::<bool>(name)?),
+        PropKind::Text => Value::String(mpv.get_property::<String>(name)?),
+        PropKind::Json => {
+            let text = mpv.get_property::<String>(name)?;
+            serde_json::from_str(&text).unwrap_or(Value::String(text))
+        }
+    })
 }
 
 fn load(mpv: &Mpv, request: &PlaybackRequest) -> Result<(), libmpv2::Error> {
@@ -356,6 +361,10 @@ fn load(mpv: &Mpv, request: &PlaybackRequest) -> Result<(), libmpv2::Error> {
         _ => mpv.set_property("start", "none")?,
     }
     mpv.set_property("force-media-title", request.title.as_deref().unwrap_or(""))?;
+    // shell-only pre-load options (never set by the webview; see PlaybackRequest)
+    for (name, value) in &request.options {
+        mpv.set_property(name, value.as_str())?;
+    }
 
     mpv.command("loadfile", &[&request.url, "replace"])?;
     // `pause` persists across files (and keep-open leaves the core paused at
@@ -363,7 +372,66 @@ fn load(mpv: &Mpv, request: &PlaybackRequest) -> Result<(), libmpv2::Error> {
     mpv.set_property("pause", false)
 }
 
+/// The observed properties last reported with a value, so the event thread can
+/// report `null` when one becomes unavailable.
+///
+/// mpv announces "this property is now unavailable" (e.g. `duration` and `chapter`
+/// once a file ends) as a property change with `MPV_FORMAT_NONE`, which the external
+/// backend forwards as `null`. libmpv2's `wait_event` turns that change into `None`,
+/// indistinguishable from a timeout, so the embedded backend never sees it. Instead,
+/// at file boundaries and whenever a wait returns early, it re-reads the properties
+/// it last reported with a value and reports `null` for those that are gone — the
+/// same event stream the external backend produces.
+#[derive(Default)]
+struct Available(Vec<&'static str>);
+
+impl Available {
+    /// Record a reported value of an observed property.
+    fn note(&mut self, name: &str, value: &Value) {
+        let Some((name, _)) = OBSERVED.iter().find(|(n, _)| *n == name) else {
+            return;
+        };
+        if value.is_null() {
+            self.0.retain(|n| n != name);
+        } else if !self.0.contains(name) {
+            self.0.push(name);
+        }
+    }
+
+    /// Report `null` for each tracked property that `unavailable` says is gone.
+    /// Returns whether `time-pos` was among them.
+    fn sweep(&mut self, unavailable: impl Fn(&str) -> bool, events: &impl Fn(PlayerEvent)) -> bool {
+        let mut time_pos = false;
+        self.0.retain(|name| {
+            if !unavailable(name) {
+                return true;
+            }
+            time_pos |= *name == "time-pos";
+            events(PlayerEvent::Property {
+                name: (*name).to_string(),
+                value: Value::Null,
+            });
+            false
+        });
+        time_pos
+    }
+}
+
+fn unavailable(mpv: &Mpv, name: &str) -> bool {
+    // Any property reads as a string, so the only failure here is availability.
+    matches!(
+        mpv.get_property::<String>(name),
+        Err(libmpv2::Error::Raw(libmpv2::mpv_error::PropertyUnavailable))
+    )
+}
+
 fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
+    let mut available = Available::default();
+    let sweep = |available: &mut Available, held: &mut Option<Value>| {
+        if available.sweep(|name| unavailable(&mpv, name), &events) {
+            *held = None;
+        }
+    };
     let mut last_time_pos: Option<Instant> = None;
     // A time-pos change inside the throttle window is held, not dropped, and
     // forwarded once the window has passed: a seek while paused is followed by
@@ -374,7 +442,11 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
             (Some(_), Some(prev)) => TIME_POS_THROTTLE.saturating_sub(prev.elapsed()),
             _ => Duration::from_millis(500),
         };
+        let waited = Instant::now();
         let next = mpv.wait_event(timeout.as_secs_f64());
+        // A wait that ends early with no event is (barring a spurious wake-up) a
+        // property that became unavailable — see `Available`.
+        let woke_early = next.is_none() && waited.elapsed() + FLUSH_SLACK < timeout;
         if last_time_pos.is_some_and(|prev| prev.elapsed() + FLUSH_SLACK >= TIME_POS_THROTTLE)
             && let Some(value) = held_time_pos.take()
         {
@@ -385,7 +457,11 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
             });
         }
         match next {
-            None => {}
+            None => {
+                if woke_early {
+                    sweep(&mut available, &mut held_time_pos);
+                }
+            }
             Some(Err(e)) => {
                 // Includes end-of-file on error (a failed stream): libmpv2
                 // reports it as an Err in place of the EndFile event. Surfaced
@@ -402,7 +478,7 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
                 Event::PropertyChange { name, change, .. } => {
                     let value = match change {
                         PropertyData::Str(s) | PropertyData::OsdStr(s) => {
-                            if JSON_PROPS.contains(&name) {
+                            if property_kind(name) == PropKind::Json {
                                 serde_json::from_str(s).unwrap_or(Value::String(s.to_string()))
                             } else {
                                 Value::String(s.to_string())
@@ -420,6 +496,7 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
                         last_time_pos = Some(Instant::now());
                         held_time_pos = None;
                     }
+                    available.note(name, &value);
                     events(PlayerEvent::Property {
                         name: name.to_string(),
                         value,
@@ -428,13 +505,21 @@ fn event_thread(mpv: Arc<Mpv>, events: impl Fn(PlayerEvent)) {
                 Event::StartFile => {
                     held_time_pos = None; // belongs to the previous file
                     events(PlayerEvent::StartFile);
+                    sweep(&mut available, &mut held_time_pos);
                 }
-                Event::FileLoaded => events(PlayerEvent::FileLoaded),
+                Event::FileLoaded => {
+                    events(PlayerEvent::FileLoaded);
+                    sweep(&mut available, &mut held_time_pos);
+                }
                 Event::Seek => events(PlayerEvent::Seek),
                 Event::PlaybackRestart => events(PlayerEvent::PlaybackRestart),
-                Event::EndFile(reason) => events(PlayerEvent::EndFile {
-                    reason: end_file_reason(reason),
-                }),
+                Event::EndFile(reason) => {
+                    events(PlayerEvent::EndFile {
+                        reason: end_file_reason(reason),
+                        file_error: None,
+                    });
+                    sweep(&mut available, &mut held_time_pos);
+                }
                 _ => {}
             },
         }
@@ -494,6 +579,131 @@ mod tests {
         );
         let other = libmpv2::Error::Raw(libmpv2::mpv_error::OptionError);
         assert_eq!(readable_init(&other), readable(&other));
+    }
+
+    /// A headless core (no `wid`, nothing loaded, so no window or audio device is
+    /// ever opened) answers typed property reads through the actor.
+    #[tokio::test]
+    async fn get_property_reads_typed_values() {
+        let player = EmbeddedPlayer::spawn(None, |_| {}).expect("libmpv initializes");
+        let version = player.get_property("mpv-version".into()).await.unwrap();
+        assert!(version.as_str().is_some_and(|v| v.starts_with("mpv")));
+        assert_eq!(mpv_version().as_deref(), version.as_str());
+        let volume = player.get_property("volume".into()).await.unwrap();
+        assert!(volume.is_f64(), "volume reads as a number: {volume}");
+        let paused = player.get_property("pause".into()).await.unwrap();
+        assert!(paused.is_boolean());
+        let tracks = player.get_property("track-list".into()).await.unwrap();
+        assert_eq!(tracks, json!([]), "node properties arrive parsed");
+        let missing = player.get_property("no-such-property".into()).await;
+        assert!(matches!(missing, Err(SessionError::Mpv(m)) if m.contains("mpv error")));
+        player.quit();
+        assert!(matches!(
+            player.get_property("volume".into()).await,
+            Err(SessionError::Closed)
+        ));
+    }
+
+    fn property(name: &str, value: Value) -> PlayerEvent {
+        PlayerEvent::Property {
+            name: name.into(),
+            value,
+        }
+    }
+
+    /// libmpv2 swallows mpv's "property unavailable" changes; the sweep restores
+    /// them as `null`, like the external backend, and only for properties last
+    /// reported with a value.
+    #[test]
+    fn properties_that_become_unavailable_are_reported_as_null() {
+        use std::cell::RefCell;
+        let sent = RefCell::new(Vec::new());
+        let emit = |e: PlayerEvent| sent.borrow_mut().push(e);
+        let mut available = Available::default();
+        available.note("duration", &json!(60.0));
+        available.note("chapter", &json!(2));
+        available.note("volume", &json!(100.0));
+        available.note("time-pos", &json!(1.5));
+        available.note("not-observed", &json!(1));
+        available.note("sid", &Value::Null); // never had a value
+
+        let gone = ["duration", "chapter", "time-pos", "sid", "not-observed"];
+        assert!(
+            available.sweep(|n| gone.contains(&n), &emit),
+            "time-pos went"
+        );
+        assert_eq!(
+            sent.take(),
+            vec![
+                property("duration", Value::Null),
+                property("chapter", Value::Null),
+                property("time-pos", Value::Null),
+            ]
+        );
+        // Reported once: a second sweep has nothing left to report but volume.
+        assert!(!available.sweep(|_| true, &emit));
+        assert_eq!(sent.take(), vec![property("volume", Value::Null)]);
+
+        // A property that comes back is tracked again; a null value untracks it.
+        available.note("duration", &json!(30.0));
+        available.note("duration", &Value::Null);
+        assert!(!available.sweep(|_| true, &emit));
+        assert!(sent.take().is_empty());
+    }
+
+    /// Against a real core: `duration` exists only while a file is loaded, and the
+    /// availability probe tells it apart from properties that always exist.
+    #[test]
+    fn availability_probe_reads_mpv_errors() {
+        let mpv = Mpv::new().expect("libmpv initializes");
+        assert!(unavailable(&mpv, "duration"));
+        assert!(unavailable(&mpv, "chapter"));
+        assert!(!unavailable(&mpv, "volume"));
+        assert!(!unavailable(&mpv, "pause"));
+        assert!(!unavailable(&mpv, "track-list"));
+    }
+
+    /// End to end on a real core with no video or audio output: after `stop`, the
+    /// file's `duration` is reported as `null` (libmpv2 alone would stay silent).
+    #[test]
+    #[ignore = "plays generated media through libmpv"]
+    fn a_stopped_file_reports_its_duration_as_null() {
+        let mpv = Arc::new(
+            Mpv::with_initializer(|init| {
+                init.set_option("config", "no")?;
+                init.set_option("vo", "null")?;
+                init.set_option("ao", "null")?;
+                init.set_option("idle", "yes")?;
+                Ok(())
+            })
+            .expect("libmpv initializes"),
+        );
+        mpv.observe_property("duration", Format::Double, 0).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let thread = {
+            let mpv = Arc::clone(&mpv);
+            std::thread::spawn(move || event_thread(mpv, move |e| drop(tx.send(e))))
+        };
+        let next = || rx.recv_timeout(Duration::from_secs(10)).expect("an event");
+        mpv.command("loadfile", &["av://lavfi:testsrc=duration=5", "replace"])
+            .unwrap();
+        while !matches!(next(), PlayerEvent::Property { name, value }
+            if name == "duration" && value.is_number())
+        {}
+        mpv.command("stop", &[]).unwrap();
+        // lavfi keeps refining the duration while it plays, so earlier updates may
+        // still be queued; once the file has ended the next report must be null.
+        while !matches!(next(), PlayerEvent::EndFile { .. }) {}
+        let duration = loop {
+            if let PlayerEvent::Property { name, value } = next()
+                && name == "duration"
+            {
+                break value;
+            }
+        };
+        assert_eq!(duration, Value::Null);
+        mpv.command("quit", &[]).unwrap();
+        thread.join().unwrap();
     }
 
     #[test]

@@ -40,7 +40,7 @@ librsvg, patchelf — see `.github/workflows/ci.yml` for the exact list).
 | --- | --- |
 | `crates/zeiler-addon` | Stremio addon-protocol client (types, URL building, fan-out) |
 | `crates/zeiler-engine` | Embedded librqbit torrent engine + loopback stream endpoint |
-| `crates/zeiler-player` | Playback (external mpv backend; embedded libmpv behind the `embedded` feature) |
+| `crates/zeiler-player` | Playback session: external mpv over JSON IPC; embedded libmpv behind the `embedded` feature |
 | `src-tauri` | Tauri shell: typed IPC commands, state, capabilities, config |
 | `src/` | React/TypeScript UI (design system mirrors Harbor's tokens — see `docs/ARCHITECTURE.md`) |
 | `docs/ARCHITECTURE.md` | Load-bearing decisions; read this first |

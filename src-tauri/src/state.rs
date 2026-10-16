@@ -7,7 +7,7 @@ use tokio::sync::{OnceCell, RwLock};
 use tracing::{info, warn};
 use zeiler_addon::{AddonClient, Descriptor};
 use zeiler_engine::{Engine, EngineConfig};
-use zeiler_player::Player;
+use zeiler_player::{Player, PlayerBackend};
 
 use crate::error::IpcError;
 use crate::persist::{read_json, write_json};
@@ -49,6 +49,10 @@ pub struct Settings {
     pub builtin_cinemeta: bool,
     /// Download updates in the background and install them on the next launch.
     pub auto_update: bool,
+    /// Which player `player_start` uses when asked for `auto`: `auto` (built-in when
+    /// this build has it and it starts, else external mpv), `embedded` or `external`.
+    /// An unknown stored value resets just this setting (lenient read).
+    pub player_backend: PlayerBackend,
 }
 
 impl Default for Settings {
@@ -66,6 +70,7 @@ impl Default for Settings {
             hide_live_tv: false,
             builtin_cinemeta: true,
             auto_update: true,
+            player_backend: PlayerBackend::Auto,
         }
     }
 }
@@ -329,6 +334,39 @@ mod tests {
         assert_eq!(settings.engine_listen_port, defaults.engine_listen_port);
         assert_eq!(settings.builtin_cinemeta, defaults.builtin_cinemeta);
         assert_eq!(settings.mpv_path, None);
+    }
+
+    #[test]
+    fn player_backend_defaults_to_auto_and_an_unknown_value_resets_only_itself() {
+        assert_eq!(Settings::default().player_backend, PlayerBackend::Auto);
+        let stored: Settings = serde_json::from_value(json!({
+            "theme": "ocean",
+            "playerBackend": "vlc",
+            "hideAnime": true
+        }))
+        .unwrap();
+        assert_eq!(stored.player_backend, PlayerBackend::Auto);
+        assert_eq!(stored.theme, "ocean");
+        assert!(stored.hide_anime);
+
+        let external: Settings =
+            serde_json::from_value(json!({"playerBackend": "external"})).unwrap();
+        assert_eq!(external.player_backend, PlayerBackend::External);
+        assert_eq!(
+            serde_json::to_value(&external).unwrap()["playerBackend"],
+            "external"
+        );
+
+        let patched = Settings::default()
+            .patched(json!({"playerBackend": "embedded"}))
+            .unwrap();
+        assert_eq!(patched.player_backend, PlayerBackend::Embedded);
+        assert!(
+            Settings::default()
+                .patched(json!({"playerBackend": "vlc"}))
+                .is_err(),
+            "patch stays strict"
+        );
     }
 
     #[tokio::test]

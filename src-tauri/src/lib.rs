@@ -46,8 +46,6 @@ pub fn run() {
             let cache_dir = app.path().app_cache_dir()?;
             let state = tauri::async_runtime::block_on(AppState::load(data_dir, cache_dir))?;
             app.manage(state);
-            // a unit struct without the `embedded` feature, a real state holder with it
-            #[allow(clippy::default_constructed_unit_structs)]
             app.manage(commands::mpv::PlayerState::default());
             updater::start(app.handle().clone());
             info!("zeiler started");
@@ -64,21 +62,28 @@ pub fn run() {
             commands::engine::engine_resolve,
             commands::engine::engine_stats,
             commands::engine::engine_remove,
-            commands::player::player_status,
-            commands::player::player_play,
-            commands::player::player_stop,
             commands::settings::settings_get,
             commands::settings::settings_patch,
             commands::settings::settings_set,
             updater::update_status,
             updater::update_check,
             updater::update_install_now,
-            commands::mpv::player_embedded_available,
-            commands::mpv::player_embedded_start,
-            commands::mpv::player_embedded_stop,
-            commands::mpv::player_embedded_set_property,
-            commands::mpv::player_embedded_command,
+            commands::mpv::player_backends,
+            commands::mpv::player_start,
+            commands::mpv::player_load,
+            commands::mpv::player_stop,
+            commands::mpv::player_set_property,
+            commands::mpv::player_command,
+            commands::mpv::player_get_property,
             commands::mpv::player_set_geometry,
+            // deprecated aliases, kept for one release (commands/mpv/aliases.rs)
+            commands::mpv::aliases::player_status,
+            commands::mpv::aliases::player_play,
+            commands::mpv::aliases::player_embedded_available,
+            commands::mpv::aliases::player_embedded_start,
+            commands::mpv::aliases::player_embedded_stop,
+            commands::mpv::aliases::player_embedded_set_property,
+            commands::mpv::aliases::player_embedded_command,
         ])
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
