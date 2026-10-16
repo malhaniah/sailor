@@ -604,8 +604,10 @@ is up; leaving the player pops the history entry it pushed.
   script's notice — versions, provenance, source links and the written source offer —
   as `licenses/libmpv-NOTICE.txt`). It is the LGPL
   flavour of zhongfly/mpv-winbuild, pinned by tag and archive SHA-256 in
-  `scripts/fetch-libmpv.mjs`; THIRD-PARTY-NOTICES.md names the exact mpv and FFmpeg
-  commits and carries the source offer. The archive has no `.def`, so the script writes
+  `scripts/fetch-libmpv.mjs`, which downloads it from Zeiler's own `libmpv-<tag>`
+  pre-release (zhongfly prunes old releases; the mirror also holds the build inputs and
+  LGPL sources, recorded in `docs/libmpv/`); THIRD-PARTY-NOTICES.md names the exact mpv
+  and FFmpeg commits and carries the source offer. The archive has no `.def`, so the script writes
   one from the DLL's export table (`LIBRARY libmpv-2.dll`) and generates `mpv.lib` with
   MSVC `lib /def:`. The app links it DELAYLOAD (`src-tauri/build.rs`) so it starts —
   and falls back to external mpv — when the DLL is missing. macOS (M13) will bundle a

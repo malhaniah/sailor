@@ -112,11 +112,15 @@ build. Next to it, in `licenses\`, the installer puts:
 - `libmpv-NOTICE.txt`, with the versions, the provenance and the source offer below
   (written by `scripts/fetch-libmpv.mjs`).
 
-- **Build**: the LGPL flavour of zhongfly/mpv-winbuild, release
-  [`2026-10-15-5757d69708`](https://github.com/zhongfly/mpv-winbuild/releases/tag/2026-10-15-5757d69708),
+- **Build**: the LGPL flavour of zhongfly/mpv-winbuild, release `2026-10-15-5757d69708`,
   archive `mpv-dev-lgpl-x86_64-20261015-git-5757d69708.7z`, SHA-256
   `5417be2641c31e2c5e676bb7cce90244edb43758936193c6c36dfcf5ea35eabd` (pinned and checked
-  by `scripts/fetch-libmpv.mjs`).
+  by `scripts/fetch-libmpv.mjs`). zhongfly prunes old releases, so Zeiler keeps the
+  archive unchanged on its own pre-release
+  [`libmpv-2026-10-15-5757d69708`](https://github.com/malhaniah/zeiler/releases/tag/libmpv-2026-10-15-5757d69708),
+  which is where the script downloads it from. The build inputs (workflow run,
+  toolchain, the commit of every bundled library) are recorded in
+  [`docs/libmpv/2026-10-15-5757d69708.md`](docs/libmpv/2026-10-15-5757d69708.md).
 - **Versions** (as reported by the DLL): mpv `v0.41.0-1184-g5757d6970`, built with
   `-Dgpl=false`; FFmpeg `N-127570-gaf25036ac`.
 - **License**:
@@ -130,13 +134,18 @@ build. Next to it, in `licenses\`, the installer puts:
   - The libraries those builds link statically (FreeType, HarfBuzz, libass, libplacebo,
     OpenSSL, dav1d, libvpx and more) keep their own licences. Their notices are in
     `src-tauri/licenses/libmpv-THIRD-PARTY.txt`, which the installer ships.
-- **Source offer.** The complete corresponding source is available at:
-  - mpv: <https://github.com/mpv-player/mpv/tree/5757d6970>
-  - FFmpeg: <https://github.com/FFmpeg/FFmpeg/tree/af25036ac>
-  - build scripts: <https://github.com/zhongfly/mpv-winbuild/tree/2026-10-15-5757d69708>
-    (CI and package versions for that release), which drive
-    <https://github.com/shinchiro/mpv-winbuild-cmake> (the per-library source URLs and
-    patches)
+- **Source offer.** The complete corresponding source is kept by Zeiler at
+  <https://github.com/malhaniah/zeiler/releases/tag/libmpv-2026-10-15-5757d69708>:
+  - source archives of mpv, FFmpeg and every other LGPL library inside the DLL
+    (libplacebo, FriBidi, libbluray, libudfread, libiconv, LAME, libsoxr, OpenAL Soft,
+    libssh, uchardet, the VapourSynth headers), at the exact commits built;
+  - the build scripts: zhongfly/mpv-winbuild at `8a39c51` (with its
+    `compile-lgpl-libmpv.patch`), which drives shinchiro/mpv-winbuild-cmake at
+    `1f8d2e7` (the per-library source URLs, options and patches);
+  - `BUILD-INPUTS.md`, the same record as `docs/libmpv/2026-10-15-5757d69708.md`.
+
+  Upstream: mpv <https://github.com/mpv-player/mpv/tree/5757d6970>, FFmpeg
+  <https://github.com/FFmpeg/FFmpeg/tree/af25036ac>.
 
   Written offer: for at least three years after the last Zeiler release that ships
   this build, Zeiler's maintainers will give anyone a copy of that complete
