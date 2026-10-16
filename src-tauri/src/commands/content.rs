@@ -5,7 +5,7 @@ use tauri::State;
 use url::Url;
 use zeiler_addon::{
     AddonStreams, CatalogResponse, ExtraValue, MetaLookup, ResourcePath, aggregate_streams,
-    first_meta,
+    find_meta,
 };
 
 use crate::error::IpcError;
@@ -38,8 +38,11 @@ pub async fn catalog_load(
 }
 
 /// Fetch the meta object for an item: first success across supporting addons, in
-/// install order. A missing meta is not an error — the UI falls back to the catalog
-/// preview — so the outcome says who was asked and what failed.
+/// install order. An anime id (`kitsu:`, `mal:`, `anilist:`, `anidb:`) that nobody
+/// answers under its catalog type is retried as series, movie and anime, since anime
+/// addons file titles under types other than the catalog's. A missing meta is not an
+/// error — the UI falls back to the catalog preview — so the outcome says who was asked
+/// and what failed. Streams a built-in embeds in its videos are dropped.
 #[tauri::command]
 pub async fn meta_get(
     state: State<'_, AppState>,
@@ -47,7 +50,8 @@ pub async fn meta_get(
     id: String,
 ) -> Result<MetaLookup, IpcError> {
     let addons = state.effective_addons().await;
-    Ok(first_meta(&state.client, &addons, &r#type, &id, META_TIMEOUT).await)
+    let lookup = find_meta(&state.client, &addons, &r#type, &id, META_TIMEOUT).await;
+    Ok(crate::builtin::without_builtin_streams(lookup, &addons))
 }
 
 /// Fan out a stream request to every supporting addon; per-addon results, in install order.

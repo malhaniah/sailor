@@ -70,7 +70,7 @@ const SECTIONS: {
         id: "content",
         label: "Content",
         icon: Compass,
-        sub: "Which rooms show up in the sidebar.",
+        sub: "Built-in addons, and which rooms show up in the sidebar.",
       },
     ],
   },
@@ -514,25 +514,73 @@ function ThemeSection() {
   );
 }
 
+/** The built-in addons, mirroring `BUILTINS` in src-tauri/src/builtin.rs: the setting
+ * that switches each one, and what it sends where (the disclosure under its switch). */
+const BUILTIN_ADDONS: {
+  setting: "builtinCinemeta" | "builtinKitsu" | "builtinOpensubtitles";
+  name: string;
+  /** a user install with this transport URL or manifest id replaces the built-in */
+  transportUrl: string;
+  manifestId: string;
+  sub: string;
+}[] = [
+  {
+    setting: "builtinCinemeta",
+    name: "Cinemeta",
+    transportUrl: "https://v3-cinemeta.strem.io/manifest.json",
+    manifestId: "com.linvo.cinemeta",
+    sub: "Metadata · Movie and series catalogs, plus details for IMDb titles from any catalog. Stremio's v3-cinemeta.strem.io sees your searches and the titles you browse and open.",
+  },
+  {
+    setting: "builtinKitsu",
+    name: "Anime Kitsu",
+    transportUrl: "https://anime-kitsu.strem.fun/manifest.json",
+    manifestId: "community.anime.kitsu",
+    sub: "Metadata · Anime catalogs for Home and the Anime room, plus details for Kitsu and MyAnimeList titles. A community addon: anime-kitsu.strem.fun sees your searches and the anime you browse and open.",
+  },
+  {
+    setting: "builtinOpensubtitles",
+    name: "OpenSubtitles v3",
+    transportUrl: "https://opensubtitles-v3.strem.io/manifest.json",
+    manifestId: "org.stremio.opensubtitlesv3",
+    sub: "Subtitles · Subtitles for movies and series. When Zeiler looks for subtitles, Stremio's opensubtitles-v3.strem.io gets the title's IMDb id and, if the stream names them, the file's name, size and hash.",
+  },
+];
+
 function ContentSection() {
   const { settings, save } = useSettings();
-  const { reload } = useAddons();
+  const { addons, reload } = useAddons();
   if (!settings) return <Spinner label="Loading…" />;
   return (
     <>
       <SectionCard
-        title="Built-in metadata"
-        description="Catalogs, details, cast and episode lists. Metadata only: Zeiler still ships no stream addon, so add your own on the Addons page to play anything."
+        title="Built-in addons"
+        description="Metadata and subtitles only: none of them serves streams, so add your own addons on the Addons page to play anything. Each one is asked only while it's on."
       >
-        <ToggleRow
-          label="Cinemeta"
-          sub="Popular movies and series, plus details for IMDb titles from any catalog."
-          on={settings.builtinCinemeta}
-          onChange={async (on) => {
-            await save({ builtinCinemeta: on });
-            await reload();
-          }}
-        />
+        {BUILTIN_ADDONS.map((builtin) => {
+          const ownCopy = addons.some(
+            (a) =>
+              !a.flags.protected &&
+              (a.transportUrl === builtin.transportUrl ||
+                a.manifest.id === builtin.manifestId),
+          );
+          return (
+            <ToggleRow
+              key={builtin.setting}
+              label={builtin.name}
+              sub={
+                ownCopy
+                  ? `You installed ${builtin.name} yourself, so your copy is used whether this is on or off. Remove it on the Addons page to use the built-in one.`
+                  : builtin.sub
+              }
+              on={settings[builtin.setting]}
+              onChange={async (on) => {
+                await save({ [builtin.setting]: on });
+                await reload();
+              }}
+            />
+          );
+        })}
       </SectionCard>
       <SectionCard title="Rooms" description="Hide sidebar rooms you don't use.">
         <ToggleRow
@@ -619,8 +667,9 @@ function AboutSection() {
         </div>
         <p className="mt-2 text-[13px] leading-relaxed text-ink-muted">
           Zeiler hosts no media, indexes no media, and ships no content addon. Streams come
-          only from third-party addons you choose to install. Catalogs and metadata come from
-          those addons and from the built-in Cinemeta metadata addon, which you can turn off in
+          only from third-party addons you choose to install. Catalogs, metadata and subtitles
+          come from those addons and from a few built-in metadata and subtitle addons (Cinemeta,
+          Anime Kitsu, OpenSubtitles v3), none of which serves streams; you can turn each off in
           Settings → Content. Zeiler is an independent project and is not affiliated with or
           endorsed by Stremio (Smart Code Ltd).
         </p>

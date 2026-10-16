@@ -192,6 +192,8 @@ export interface Settings {
   hideAnime: boolean;
   hideLiveTv: boolean;
   builtinCinemeta: boolean;
+  builtinKitsu: boolean;
+  builtinOpensubtitles: boolean;
   autoUpdate: boolean;
   /** Which player `player_start` uses for "auto" (Rust `zeiler_player::PlayerBackend`). */
   playerBackend: PlayerBackend;

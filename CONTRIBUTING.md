@@ -13,9 +13,15 @@ default content sources, scrapers, or anything that turns Zeiler itself into a c
 source will be declined regardless of code quality. Features that help users manage
 addons *they* choose to install are always welcome.
 
-The single exception is metadata: Zeiler builds in the Cinemeta metadata addon
-(catalogs, details, episode lists — it serves no streams), and users can turn it off in
-Settings. Any further built-in source must likewise be metadata-only and switchable.
+The single exception is metadata and subtitles. Zeiler builds in Cinemeta (catalogs,
+details, episode lists), Anime Kitsu (anime catalogs and details) and OpenSubtitles v3
+(subtitles), and users can turn each one off in Settings → Content. Any built-in must be
+**metadata or subtitles only, switchable, and never serve streams**. The tests in
+`src-tauri/src/builtin.rs` fail if a built-in's manifest declares a `stream` resource or
+anything other than catalogs (of titles or of addons), details and subtitles; each
+built-in is also trimmed to the resources of its role, and streams embedded in a
+built-in's details are dropped. Their manifests are snapshots compiled into the app;
+refresh them with `node scripts/refresh-builtin-manifests.mjs`.
 
 ## Getting set up
 

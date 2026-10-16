@@ -1,7 +1,7 @@
 # Feature plan handoff
 
 How to pick up the feature plan locally. Written when the cloud session handed over on
-2026-10-16, and updated after M4a and M4b were finished locally the same day.
+2026-10-16, and updated after M4a, M4b and M5 were finished locally the same day.
 
 ## Where things stand
 
@@ -20,6 +20,7 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 | `21887d4` | M3 | Built-in (embedded libmpv) playback is the Windows default; CI covers it; the Windows installer artifact; licensing |
 | `1bf37c9` | M4a | `crates/zeiler-account` (stremio-core-compatible LibraryItem, watched bitfield, progress rules, video order, sorts), `library.json` under `profile_dir()`, `library_*` commands + `library://changed`, progress tracked in Rust from player events via `player_start`'s `context`; three review rounds with adversarial verification |
 | `d085e4c` | M4b | The library on screen (`src/lib/library.tsx` provider and hooks, re-read on `library://changed`): My Library tabs (Continue Watching / Library / History, the six sorts), a Continue Watching row on Home with dismiss, Detail's Add to Library and watched marks (title, season, episode; only released episodes), Resume / Continue on Play, a "Resume from 12:34" prompt in the stream picker, progress bars on posters; two reviews plus a check of their fixes |
+| PR #6 (rebased onto M4b) | M5 | Built-ins: Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) snapshots next to Cinemeta, `scripts/refresh-builtin-manifests.mjs`, each built-in trimmed to its role (Kitsu's own `subtitles`, which redirect to OSv3, are dropped) and streams embedded in a built-in's meta stripped; dedupe by URL or snapshot manifest id; `builtinKitsu`/`builtinOpensubtitles` (an older settings file inherits `builtinCinemeta`, Kitsu also off with `hideAnime`) with Settings → Content switches and disclosures; `find_meta` retries `kitsu:`/`mal:`/`anilist:`/`anidb:` ids as series/movie/anime without re-asking an unreachable addon; policy text now "metadata or subtitles only, switchable, never streams"; two reviews with adversarial verification |
 
 ## Decisions already made by the owner
 
@@ -49,10 +50,9 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 
 | # | Milestone | Scope (see critique.md §4 and the named spec) |
 |---|---|---|
-| M5 | Built-ins | OpenSubtitles v3 (subtitles) and anime metadata snapshots in the builtin registry, per-built-in toggles, meta-type fallback for `kitsu:`/`mal:` ids. Update the CONTRIBUTING/ARCHITECTURE policy text to "metadata or subtitles only" (the owner asked for OpenSubtitles). |
-| M6 | Subtitles and audio | `subtitles_get` fan-out, subtitle fetch and normalize (gzip, encoding detection), `player_subtitle_add`, pick a local file (tauri-plugin-dialog, Rust-side only), subtitle menu with sources, delay, style and saved preferences, audio delay and speed (player-ui.json steps 4–7) |
+| M6 | Subtitles and audio | `subtitles_get` fan-out, subtitle fetch and normalize (gzip, encoding detection), `player_subtitle_add`, pick a local file (tauri-plugin-dialog, Rust-side only), subtitle menu with sources, delay, style and saved preferences, audio delay and speed (player-ui.json steps 4–7). The built-in OpenSubtitles v3 is already in `addon_list`; Kitsu-as-built-in declares no subtitles (dropped on purpose), so the fan-out only asks it if the user installed Kitsu themselves. The OpenSubtitles disclosure in Settings → Content ("When Zeiler looks for subtitles…") becomes live then |
 | M7 | Skip and next episode | A `zeiler-skip` crate (AniSkip for anime, TheIntroDB, chapter-name fallback), a skip pill, an Up Next card, auto-skip off by default with Undo, bingeGroup next episode via `player_load` (player-ui.json) |
-| M8 | Catalogs | Every type and genre, driven by manifest extras; a Browse view; manifest-driven genre tiles; lazy rows; row customization; adult gating (catalogs.json) |
+| M8 | Catalogs | Every type and genre, driven by manifest extras; a Browse view; manifest-driven genre tiles; lazy rows; row customization; adult gating (catalogs.json). Since M5, Home shows the built-in Kitsu's four anime rows and `hideAnime` only hides the sidebar room, so rooms.ts should drop anime from Home when it is set. Kitsu's genre options include adult tags (Hentai, Ecchi, …): gate them before any manifest-driven genre picker shows them |
 | M9 | Live | A: the addon `tv`/`channel` room and its Sidebar entry. B: M3U/XMLTV/Xtream, with credentials in a SecretStore and the `live` flag in the player (catalogs.json) |
 | M10 | Marketplace | URL normalization, replace and reorder, update detection, an opt-in community directory with a detail page and labels; stremio:// handler on Windows and Linux (macOS needs an owner decision) (marketplace.json) |
 | M11 | Local profiles | `profiles.json`, migration by copy (not move), Argon2 PIN, avatars, a picker, per-profile addons, library and preferences |
@@ -132,6 +132,11 @@ purpose; see the comment in `Cargo.toml`.
   the webview, focus hand-back, and Escape/fullscreen. CI linked the code and ran the
   headless libmpv tests on Windows, but nobody has watched a video yet. Try the
   `windows-installer` artifact from PR #4.
+- The M5 built-ins in the real app: the Settings → Content switches, the Anime room and
+  Kitsu details were smoke-tested in the browser with mocked IPC only, and the live Kitsu
+  and OpenSubtitles responses only through `cargo test -p zeiler-addon --test live --
+  --ignored`. mpv was not installed on the machine that built M5 either, so the real-mpv
+  tests were not run there.
 - The Sailor → Zeiler NSIS hook (`src-tauri/windows/hooks.nsh`) runs only when a real
   Sailor v0.1.2 install updates.
 

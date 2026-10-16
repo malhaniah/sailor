@@ -118,7 +118,8 @@ export function AddonLogo({
     boxShadow: "0 0 0 1px rgba(255,255,255,0.08)",
   };
   if (logo) {
-    return <img src={logo} alt="" style={{ ...style, objectFit: "cover" }} />;
+    // contain, not cover: some logos are wide wordmarks (OpenSubtitles' is 4:1)
+    return <img src={logo} alt="" style={{ ...style, objectFit: "contain" }} />;
   }
   return (
     <div

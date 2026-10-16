@@ -5,7 +5,7 @@ import { Row } from "../components/Row";
 import { EmptyState } from "../components/ui";
 import { browsableCatalogs, catalogDisplayName } from "../lib/catalogs";
 import { dedupRows, useCatalogRows } from "../lib/rows";
-import { useAddons } from "../lib/store";
+import { useAddons, useSettings } from "../lib/store";
 import { useView } from "../lib/view";
 import { RowSkeletons } from "./Home";
 
@@ -32,13 +32,14 @@ const ROOMS = {
     hero: "mast" as const,
     kicker: "Simulcast",
     title: "Anime harbor",
-    subtitle: "Catalogs from your anime addons. Install one (e.g. a Kitsu addon) to fill this room.",
+    subtitle: "Every anime catalog your addons provide, in one room.",
   },
 };
 
 export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
   const config = ROOMS[room];
-  const { addons } = useAddons();
+  const { addons, reload } = useAddons();
+  const { settings, save } = useSettings();
   const { openMeta, setView } = useView();
   const catalogs = useMemo(
     () => browsableCatalogs(addons).filter((c) => config.types.includes(c.catalog.type)),
@@ -47,14 +48,33 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
   const { rows, loadMore } = useCatalogRows(catalogs);
 
   if (catalogs.length === 0) {
+    // the built-in Anime Kitsu fills the Anime room; point at its switch when it is off
+    const kitsuOff = room === "anime" && settings?.builtinKitsu === false;
     return (
       <main className="flex-1 overflow-y-auto px-12 pt-32">
         <EmptyState title={`No ${config.label.toLowerCase()} catalogs`}>
-          None of your installed addons provides {config.label.toLowerCase()} catalogs yet.
-          <div className="mt-5">
+          {kitsuOff
+            ? "The built-in Anime Kitsu addon is switched off (Settings → Content), and none of your installed addons provides anime catalogs."
+            : `None of your installed addons provides ${config.label.toLowerCase()} catalogs yet.`}
+          <div className="mt-5 flex justify-center gap-3">
+            {kitsuOff && (
+              <button
+                onClick={async () => {
+                  await save({ builtinKitsu: true });
+                  await reload();
+                }}
+                className="h-11 rounded-full bg-ink px-6 text-[14px] font-semibold text-canvas transition-transform hover:scale-[1.03]"
+              >
+                Turn on Anime Kitsu
+              </button>
+            )}
             <button
               onClick={() => setView("addons")}
-              className="h-11 rounded-full bg-ink px-6 text-[14px] font-semibold text-canvas transition-transform hover:scale-[1.03]"
+              className={
+                kitsuOff
+                  ? "h-11 rounded-full border border-edge px-6 text-[14px] font-semibold text-ink-muted transition-colors hover:border-ink hover:text-ink"
+                  : "h-11 rounded-full bg-ink px-6 text-[14px] font-semibold text-canvas transition-transform hover:scale-[1.03]"
+              }
             >
               Open Addons
             </button>

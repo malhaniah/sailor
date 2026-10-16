@@ -10,7 +10,7 @@ Zeiler is a self-contained media client that speaks the open [Stremio addon prot
 ## What it is
 
 - **Self-contained** — a built-in torrent streaming engine and mpv-based playback (built into the window on Windows); no external streaming server, no browser, no Node runtime required.
-- **Bring your own addons** — paste any addon manifest URL. Zeiler ships no stream or content addon and endorses none. For browsing out of the box, the Cinemeta *metadata* addon (catalogs, details, episode lists; no streams) is built in and can be turned off in Settings.
+- **Bring your own addons** — paste any addon manifest URL. Zeiler ships no stream or content addon and endorses none. For browsing out of the box, a few *metadata and subtitle* addons are built in — Cinemeta (catalogs, details, episode lists), Anime Kitsu (anime catalogs and details) and OpenSubtitles v3 (subtitles) — none serves streams, and each can be turned off in Settings.
 - **Updates itself** — signed updates install automatically the next time you open Zeiler.
 - **Rust core** — the addon protocol client, streaming engine, and playback orchestration are Rust crates; the UI is a thin TypeScript layer in a Tauri 2 shell.
 - **Cross-platform** — Windows, macOS, Linux.

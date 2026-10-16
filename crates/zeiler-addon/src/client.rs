@@ -21,14 +21,27 @@ pub struct AddonClient {
 
 impl AddonClient {
     pub fn new() -> Result<Self, AddonError> {
-        let http = reqwest::Client::builder()
+        Ok(Self {
+            http: Self::http_builder().build()?,
+        })
+    }
+
+    /// A client that ignores proxy settings, for tests against a loopback server (a
+    /// proxy from the environment would otherwise get those requests).
+    #[cfg(test)]
+    pub(crate) fn for_loopback_tests() -> Self {
+        Self {
+            http: Self::http_builder().no_proxy().build().unwrap(),
+        }
+    }
+
+    fn http_builder() -> reqwest::ClientBuilder {
+        reqwest::Client::builder()
             .user_agent(concat!("Zeiler/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::limited(10))
             .gzip(true)
-            .build()?;
-        Ok(Self { http })
     }
 
     async fn get_json<T: DeserializeOwned>(&self, url: Url) -> Result<T, AddonError> {
