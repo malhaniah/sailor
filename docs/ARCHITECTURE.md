@@ -71,22 +71,98 @@ Engine policy: per-infohash cache folder under the app cache dir, `overwrite: tr
 delete-on-stop by default (bounded disk usage), DHT + persistence under the app data dir
 (never rqbit's shared default), loopback-only HTTP with auth, upload cap exposed in settings.
 
-## Tauri IPC surface (v0)
+## Tauri IPC surface
 
-Commands (all async, `Result<T, IpcError>`; payloads camelCase):
+Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list matches the
+`generate_handler!` in `src-tauri/src/lib.rs` exactly — update both together.
 
-- `addon_preview(url)` → Descriptor (fetch + parse, not persisted — feeds the confirm dialog)
-- `addon_add(url)` / `addon_remove(transportUrl)` / `addon_list()`
-- `catalog_load { transportUrl, type, id, extra }` → `{ metas }`
-- `meta_get { type, id }` → first successful Meta across supporting addons
-- `streams_get { type, id }` → per-addon stream groups (parallel fan-out)
-- `engine_resolve { infoHash, fileIdx?, sources, filename? }` → `{ streamUrl, torrentId, … }`
-- `engine_stats { torrentId }` / `engine_remove { torrentId, deleteFiles }`
-- `player_status()` / `player_play { url, title?, headers? }` (external mpv backend in v0)
-- `settings_get()` / `settings_set(settings)`
+- Addons: `addon_preview { url }` → Descriptor (fetch + parse, not persisted — feeds the
+  confirm dialog) · `addon_add { url }` → Descriptor · `addon_remove { transportUrl }` ·
+  `addon_list()` → Descriptor[] (built-ins first, then the user's addons)
+- Content: `catalog_load { args: { transportUrl, type, id, extra } }` → `{ metas }` ·
+  `meta_get { type, id }` → `{ meta, asked, errors }` (first successful Meta across
+  supporting addons) · `streams_get { type, id }` → per-addon stream groups (parallel
+  fan-out)
+- Engine: `engine_resolve { request: { infoHash, fileIdx?, sources, filename?,
+  fileMustInclude } }` → `{ streamUrl, infoHash, fileIdx, fileName, fileSize }` ·
+  `engine_stats { infoHash }` → librqbit stats JSON · `engine_remove { infoHash,
+  deleteFiles }`
+- External player: `player_status()` → `{ available, path? }` · `player_play { request:
+  { url, title?, headers, userAgent?, referrer?, startAtSec? } }` · `player_stop()`
+- Settings: `settings_get()` → Settings · `settings_patch { patch }` → Settings (merges
+  the given top-level keys server-side; unknown keys and wrongly typed values are
+  rejected) · `settings_set { settings }` → Settings (**deprecated**, replaces every
+  setting; kept for one release)
+- Updates: `update_status()` → `{ current, ready? }` · `update_check()` → new version or
+  null · `update_install_now()`
+- Embedded player (`embedded` feature; stubs otherwise): `player_embedded_available()` →
+  bool · `player_embedded_start { request }` · `player_embedded_stop()` ·
+  `player_embedded_set_property { name, value }` · `player_embedded_command { args }` ·
+  `player_set_geometry { geometry: { x, y, width, height } }`
 
-Events are reserved for rare notifications; high-frequency data (engine stats, player
-position) will move to `tauri::ipc::Channel` subscriptions when the embedded player lands.
+Errors serialize as `{ kind, message }`; `message` is a full sentence shown as-is. Kinds:
+`invalidInput`, `addon`, `notFound`, `engine`, `player`, `storage`, plus kinds reserved
+for later milestones — `network` (service unreachable or timed out; retryable),
+`auth` (credentials rejected), `sessionExpired` (sign in again), `locked` (wrong PIN,
+or addon sync locked after a failed pull), `conflict` (clashes with existing state,
+e.g. the same addon under another URL) and `unsupported` (not on this platform/build).
+The TS mirror is `IpcErrorKind` in `src/lib/types.ts`.
+
+Events (named `<domain>://<event>`, rare notifications only):
+
+- `settings://changed` — the full new Settings, after every successful
+  `settings_patch`/`settings_set`. `useSettings()` subscribes, so every part of the UI
+  sees the latest values.
+- `update://ready` / `update://installing` (version) · `update://failed` (message)
+- `player://event` — embedded player events (`PlayerEvent`, kebab-case tagged)
+
+High-frequency data (engine stats, player position) will move to `tauri::ipc::Channel`
+subscriptions when the embedded player lands.
+
+## Persistence
+
+All durable state is Rust-owned JSON under the app data dir; there is no localStorage.
+`src-tauri/src/persist.rs` holds the rules: a missing file reads as defaults; an
+unparseable one is moved to `*.json.corrupt.bak` and replaced by defaults; any other IO
+error fails startup; writes are atomic (`*.json.tmp` + rename). `AppState` keeps
+`settings.json` and `addons.json`. Every later feature owns a `JsonStore<T>` (load / get /
+update-and-persist under its own lock), registered with `app.manage` — it does not grow
+`AppState`. New files carry a `{"version": N, ...}` envelope. Per-user files take their
+path from `AppState::profile_dir()` (the data dir until profiles exist, then the active
+profile's folder); re-creatable caches go under the cache dir.
+
+Built-in addons are a table in `src-tauri/src/builtin.rs` (transport URL, compiled-in
+manifest snapshot from `src-tauri/builtin/`, an enabled-by-settings predicate). A test
+asserts that no built-in declares a `stream` resource.
+
+### Settings schema
+
+`settings.json` is additive only: a new key always has a default, and an existing key
+never changes name or type. Reading is lenient per top-level key — a wrongly typed value
+resets just that setting to its default (with a warning) instead of moving the whole file
+aside — while `settings_patch` is strict. Nested groups must be lenient per field inside
+(serde_with `DefaultOnError` where the type's `Default` is the intended default),
+otherwise one bad sub-field resets the whole group. Settings are mirrored wholesale to
+the webview, so secrets (Stremio authKey, IPTV credentials) never go here.
+
+Reserved key map — names are fixed now; each key is added only when its feature ships:
+
+| Scope | Keys (existing **bold**) |
+| --- | --- |
+| Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, `playerBackend` (enum), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
+| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, `showAdult` (the single adult flag and age gate, also used by the marketplace), `hideP2pAddons`, `homeRows`, `subtitles{}` (languages, auto-load, style), `audio{}` (languages, normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
+| Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, `builtinOpensubtitles`, `builtinKitsu` |
+
+Per-profile keys live in `settings.json` until local profiles exist, then move into the
+profile store. There is no `profile{}` group in Settings.
+
+## Navigation names
+
+The frontend navigates with a frame stack (`src/lib/view.tsx`). Every switch over
+`RootView` or `Frame` kinds ends in `unreachable(x)`, so a new kind that is not handled
+everywhere fails `tsc`. Reserved now, unreachable from the UI until their milestones:
+root view `live`; frames `browse` (catalog browser) and `addon-detail` (marketplace).
+Reserved Settings section ids: `account`, `subtitles`, `playback`.
 
 ## Security posture
 

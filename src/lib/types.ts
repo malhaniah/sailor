@@ -169,6 +169,7 @@ export interface AddonStreams {
   error?: string | null;
 }
 
+// Mirrors zeiler_engine::ResolvedStream (crates/zeiler-engine/src/engine.rs).
 export interface ResolvedStream {
   streamUrl: string;
   infoHash: string;
@@ -177,6 +178,8 @@ export interface ResolvedStream {
   fileSize: number;
 }
 
+// Device settings (Rust `state::Settings`). Keys reserved for later features are listed
+// in docs/ARCHITECTURE.md ("Settings schema"); add them here only when they ship.
 export interface Settings {
   mpvPath?: string | null;
   engineListenPort: number;
@@ -197,7 +200,24 @@ export interface PlayerStatus {
   path?: string | null;
 }
 
+/** `kind` mirrors the Rust `IpcError` variants (src-tauri/src/error.rs). */
+export type IpcErrorKind =
+  | "invalidInput"
+  | "addon"
+  | "notFound"
+  | "engine"
+  | "player"
+  | "storage"
+  // reserved for later milestones (marketplace, account, profiles, player backends)
+  | "network"
+  | "auth"
+  | "sessionExpired"
+  | "locked"
+  | "conflict"
+  | "unsupported";
+
 export interface IpcError {
-  kind: "invalidInput" | "addon" | "notFound" | "engine" | "player" | "storage";
+  kind: IpcErrorKind;
+  /** a full sentence, safe to show as-is */
   message: string;
 }

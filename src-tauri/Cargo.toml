@@ -24,6 +24,9 @@ zeiler-engine = { workspace = true }
 zeiler-player = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# DefaultOnError for nested settings groups (subtitles{}, skip{}, …), added in M0 so
+# later milestones do not all touch this file and Cargo.lock
+serde_with = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }

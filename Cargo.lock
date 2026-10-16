@@ -6866,6 +6866,7 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_json",
+ "serde_with",
  "tauri",
  "tauri-build",
  "tauri-plugin-deep-link",

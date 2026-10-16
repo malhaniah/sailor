@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::{Map, Value};
 use tokio::sync::{OnceCell, RwLock};
 use tracing::{info, warn};
 use zeiler_addon::{AddonClient, Descriptor};
@@ -9,9 +10,21 @@ use zeiler_engine::{Engine, EngineConfig};
 use zeiler_player::Player;
 
 use crate::error::IpcError;
+use crate::persist::{read_json, write_json};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
+/// Device settings, persisted as `settings.json` and mirrored wholesale to the UI (so
+/// never put secrets here). The reserved key map for later features is in
+/// docs/ARCHITECTURE.md ("Settings schema").
+///
+/// Evolution is additive only: new fields get a default, and an existing field's name
+/// or type never changes. Reading is lenient per top-level key (see the `Deserialize`
+/// impl), so one bad value resets only that setting; `settings_patch` is strict.
+///
+/// `remote = "Self"` makes the derives generate inherent `Settings::serialize` /
+/// `Settings::deserialize` (the strict, whole-object forms) instead of the trait impls,
+/// which are written by hand below.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(remote = "Self", rename_all = "camelCase", default)]
 pub struct Settings {
     /// Explicit mpv binary path; None = search PATH.
     pub mpv_path: Option<String>,
@@ -57,21 +70,73 @@ impl Default for Settings {
     }
 }
 
-const CINEMETA_TRANSPORT_URL: &str = "https://v3-cinemeta.strem.io/manifest.json";
+impl Serialize for Settings {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Settings::serialize(self, serializer)
+    }
+}
 
-/// The built-in Cinemeta descriptor, from a manifest snapshot compiled into the app so
-/// startup never depends on the network. Flagged `official` + `protected` so the UI
-/// shows it as built-in (turned off in Settings rather than removed).
-fn builtin_cinemeta() -> Descriptor {
-    let manifest = serde_json::from_str(include_str!("../builtin/cinemeta-manifest.json"))
-        .expect("bundled Cinemeta manifest is valid");
-    Descriptor {
-        manifest,
-        transport_url: url::Url::parse(CINEMETA_TRANSPORT_URL).expect("valid URL"),
-        flags: zeiler_addon::DescriptorFlags {
-            official: true,
-            protected: true,
-        },
+/// Lenient read: any JSON object is accepted. Unknown keys are ignored, and a key whose
+/// value has the wrong type keeps that setting's default (with a warning) instead of
+/// failing the whole file, which would move all of settings.json aside.
+impl<'de> Deserialize<'de> for Settings {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let object = Map::<String, Value>::deserialize(deserializer)?;
+        let mut settings = Settings::default();
+        for (key, value) in object {
+            match settings.with_key(&key, value) {
+                Ok(next) => settings = next,
+                Err(KeyError::Unknown) => {}
+                Err(KeyError::Invalid(e)) => {
+                    warn!(key = %key, error = %e, "invalid stored setting; using its default");
+                }
+            }
+        }
+        Ok(settings)
+    }
+}
+
+enum KeyError {
+    Unknown,
+    Invalid(serde_json::Error),
+}
+
+impl Settings {
+    /// A copy with one top-level key (camelCase) replaced, type-checked strictly.
+    fn with_key(&self, key: &str, value: Value) -> Result<Settings, KeyError> {
+        let Ok(Value::Object(mut object)) =
+            Settings::serialize(self, serde_json::value::Serializer)
+        else {
+            unreachable!("Settings serializes to a JSON object");
+        };
+        let Some(slot) = object.get_mut(key) else {
+            return Err(KeyError::Unknown);
+        };
+        *slot = value;
+        Settings::deserialize(Value::Object(object)).map_err(KeyError::Invalid)
+    }
+
+    /// Merge a partial update (top-level camelCase keys) into a copy of these settings.
+    /// Strict: an unknown key or a wrongly typed value rejects the whole patch, so a
+    /// buggy caller never silently resets a setting.
+    pub fn patched(&self, patch: Value) -> Result<Settings, IpcError> {
+        let Value::Object(patch) = patch else {
+            return Err(IpcError::InvalidInput(
+                "A settings update must be an object of setting names to values.".into(),
+            ));
+        };
+        let mut next = self.clone();
+        for (key, value) in patch {
+            next = next.with_key(&key, value).map_err(|e| match e {
+                KeyError::Unknown => {
+                    IpcError::InvalidInput(format!("\"{key}\" is not a known setting."))
+                }
+                KeyError::Invalid(e) => IpcError::InvalidInput(format!(
+                    "The value for the setting \"{key}\" is invalid: {e}."
+                )),
+            })?;
+        }
+        Ok(next)
     }
 }
 
@@ -142,22 +207,25 @@ impl AppState {
         })
     }
 
-    /// The addons in effect: built-in Cinemeta first (when enabled and not also
-    /// installed by the user), then the user's addons in install order.
+    /// The addons in effect: enabled built-ins first (each skipped when the user
+    /// installed the same transport URL), then the user's addons in install order.
     pub async fn effective_addons(&self) -> Vec<Descriptor> {
         let user = self.addons.read().await.clone();
-        let enabled = self.settings.read().await.builtin_cinemeta;
-        let user_has_it = user
-            .iter()
-            .any(|d| d.transport_url.as_str() == CINEMETA_TRANSPORT_URL);
-        if enabled && !user_has_it {
-            let mut all = Vec::with_capacity(user.len() + 1);
-            all.push(builtin_cinemeta());
-            all.extend(user);
-            all
-        } else {
-            user
-        }
+        let settings = self.settings.read().await.clone();
+        crate::builtin::with_builtins(user, &settings)
+    }
+
+    /// Where per-profile files (library, profile preferences, …) live. Until profiles
+    /// exist this is the data dir itself; once they do it becomes
+    /// `data_dir/profiles/<active id>/`, so new per-user stores must take their path
+    /// from here rather than from the data dir. Device-wide files (settings.json,
+    /// engine state) stay in the data dir.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "first per-profile store lands after M0")
+    )]
+    pub fn profile_dir(&self) -> PathBuf {
+        self.data_dir.clone()
     }
 
     /// The torrent engine, started on first use (avoids a firewall prompt at app launch).
@@ -194,69 +262,162 @@ impl AppState {
         write_json(&self.data_dir.join("addons.json"), &snapshot).await
     }
 
-    pub async fn persist_settings(&self) -> Result<(), IpcError> {
-        let _guard = self.persist_lock.lock().await;
-        let snapshot = self.settings.read().await.clone();
-        write_json(&self.data_dir.join("settings.json"), &snapshot).await
+    /// Compute the next settings from the current ones, persist them, and only then
+    /// publish them in memory, like `JsonStore::update`: if the write fails, memory is
+    /// left unchanged, so it never runs ahead of disk. The settings write lock is held
+    /// throughout, so concurrent updates serialize; `on_commit` (side effects such as
+    /// relocating the player, and the change event) runs under it after the write.
+    pub async fn update_settings(
+        &self,
+        next: impl FnOnce(&Settings) -> Result<Settings, IpcError>,
+        on_commit: impl FnOnce(&Settings),
+    ) -> Result<Settings, IpcError> {
+        let mut current = self.settings.write().await;
+        let next = next(&current)?;
+        {
+            let _guard = self.persist_lock.lock().await;
+            write_json(&self.data_dir.join("settings.json"), &next).await?;
+        }
+        *current = next.clone();
+        on_commit(&next);
+        Ok(next)
     }
-}
-
-/// Missing file → defaults. Corrupt file → moved aside to `.corrupt.bak` (so the next
-/// persist cannot overwrite the user's real data), then defaults. Any other IO error
-/// (permissions, AV sharing violation) fails startup rather than silently losing state.
-async fn read_json<T: serde::de::DeserializeOwned + Default>(
-    path: &std::path::Path,
-) -> anyhow::Result<T> {
-    match tokio::fs::read(path).await {
-        Ok(bytes) => match serde_json::from_slice(&bytes) {
-            Ok(value) => Ok(value),
-            Err(e) => {
-                let backup = path.with_extension("json.corrupt.bak");
-                let _ = tokio::fs::rename(path, &backup).await;
-                warn!(
-                    path = %path.display(),
-                    backup = %backup.display(),
-                    error = %e,
-                    "stored file is corrupt; moved aside, using defaults"
-                );
-                Ok(T::default())
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
-        Err(e) => Err(anyhow::Error::new(e).context(format!("failed to read {}", path.display()))),
-    }
-}
-
-async fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<(), IpcError> {
-    let json = serde_json::to_vec_pretty(value)
-        .map_err(|e| IpcError::Storage(format!("failed to serialize: {e}")))?;
-    let tmp = path.with_extension("json.tmp");
-    tokio::fs::write(&tmp, &json)
-        .await
-        .map_err(|e| IpcError::Storage(format!("failed to write {}: {e}", tmp.display())))?;
-    tokio::fs::rename(&tmp, path)
-        .await
-        .map_err(|e| IpcError::Storage(format!("failed to replace {}: {e}", path.display())))?;
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use serde_json::json;
+
     #[test]
-    fn bundled_cinemeta_manifest_parses_and_serves_meta_for_imdb_ids() {
-        let cinemeta = builtin_cinemeta();
-        assert_eq!(cinemeta.manifest.id, "com.linvo.cinemeta");
-        assert!(cinemeta.flags.protected);
-        assert!(!cinemeta.manifest.catalogs.is_empty());
-        let meta = zeiler_addon::ResourcePath::new("meta", "series", "tt0108778");
-        assert!(cinemeta.manifest.is_resource_supported(&meta));
-        let stream = zeiler_addon::ResourcePath::new("stream", "movie", "tt0111161");
+    fn settings_round_trip_as_camel_case() {
+        let settings = Settings {
+            mpv_path: Some("/usr/bin/mpv".into()),
+            upload_limit_kibps: Some(512),
+            ..Settings::default()
+        };
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["mpvPath"], "/usr/bin/mpv");
+        assert_eq!(value["builtinCinemeta"], true);
+        let back: Settings = serde_json::from_value(value).unwrap();
+        assert_eq!(back, settings);
+    }
+
+    #[test]
+    fn missing_keys_take_their_defaults() {
+        let settings: Settings = serde_json::from_str(r#"{"theme":"ocean"}"#).unwrap();
+        assert_eq!(settings.theme, "ocean");
+        assert_eq!(settings.engine_listen_port, 4240);
+        assert!(settings.builtin_cinemeta);
+    }
+
+    #[test]
+    fn a_wrong_typed_key_falls_back_to_its_default_and_keeps_the_rest() {
+        let settings: Settings = serde_json::from_value(json!({
+            "theme": "ocean",
+            "engineListenPort": "not a port",
+            "builtinCinemeta": "yes",
+            "deleteOnStop": false,
+            "mpvPath": 42,
+            "someFutureKey": {"nested": true}
+        }))
+        .unwrap();
+        assert_eq!(settings.theme, "ocean");
+        assert!(!settings.delete_on_stop);
+        let defaults = Settings::default();
+        assert_eq!(settings.engine_listen_port, defaults.engine_listen_port);
+        assert_eq!(settings.builtin_cinemeta, defaults.builtin_cinemeta);
+        assert_eq!(settings.mpv_path, None);
+    }
+
+    #[tokio::test]
+    async fn a_settings_file_with_one_bad_field_is_not_moved_aside() {
+        let dir = crate::persist::tests::temp_dir("settings-lenient");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"theme":"ocean","autoUpdate":"sometimes"}"#).unwrap();
+
+        let settings: Settings = read_json(&path).await.unwrap();
+
+        assert_eq!(settings.theme, "ocean");
+        assert!(settings.auto_update, "bad value → that setting's default");
+        assert!(path.exists());
+        assert!(!dir.join("settings.json.corrupt.bak").exists());
+    }
+
+    #[test]
+    fn patch_merges_only_the_given_keys() {
+        let current = Settings {
+            theme: "ocean".into(),
+            hide_anime: true,
+            ..Settings::default()
+        };
+        let next = current
+            .patched(json!({"instantPlay": true, "mpvPath": "/opt/mpv"}))
+            .unwrap();
+        assert!(next.instant_play);
+        assert_eq!(next.mpv_path.as_deref(), Some("/opt/mpv"));
+        assert_eq!(next.theme, "ocean", "untouched keys keep their value");
+        assert!(next.hide_anime);
+
+        let cleared = next.patched(json!({"mpvPath": null})).unwrap();
+        assert_eq!(cleared.mpv_path, None);
+    }
+
+    #[test]
+    fn patch_rejects_unknown_keys_wrong_types_and_non_objects() {
+        let current = Settings::default();
+        let unknown = current.patched(json!({"themes": "ocean"})).unwrap_err();
+        assert!(matches!(&unknown, IpcError::InvalidInput(m) if m.contains("\"themes\"")));
+        let wrong = current
+            .patched(json!({"theme": "ocean", "engineListenPort": 70000}))
+            .unwrap_err();
+        assert!(matches!(&wrong, IpcError::InvalidInput(m) if m.contains("engineListenPort")));
+        assert!(current.patched(json!(["theme"])).is_err());
+    }
+
+    #[tokio::test]
+    async fn settings_update_persists_before_publishing() {
+        let dir = crate::persist::tests::temp_dir("settings-update");
+        let state = AppState::load(dir.join("data"), dir.join("cache"))
+            .await
+            .unwrap();
+
+        let ok = state
+            .update_settings(|s| s.patched(json!({"hideAnime": true})), |_| {})
+            .await
+            .unwrap();
+        assert!(ok.hide_anime);
+        let on_disk: Settings = read_json(&dir.join("data/settings.json")).await.unwrap();
+        assert!(on_disk.hide_anime);
+
+        // a directory where the temp file should go makes the write fail
+        std::fs::create_dir_all(dir.join("data/settings.json.tmp")).unwrap();
+        let mut committed = false;
+        let failed = state
+            .update_settings(
+                |s| s.patched(json!({"builtinCinemeta": false})),
+                |_| committed = true,
+            )
+            .await;
+
+        assert!(matches!(failed, Err(IpcError::Storage(_))));
+        assert!(!committed, "no side effects or event after a failed write");
+        let in_memory = state.settings.read().await.clone();
         assert!(
-            !cinemeta.manifest.is_resource_supported(&stream),
-            "metadata only"
+            in_memory.builtin_cinemeta,
+            "memory never runs ahead of disk"
         );
+        assert!(in_memory.hide_anime);
+    }
+
+    #[tokio::test]
+    async fn profile_dir_is_the_data_dir_until_profiles_exist() {
+        let dir = crate::persist::tests::temp_dir("profile-dir");
+        let state = AppState::load(dir.join("data"), dir.join("cache"))
+            .await
+            .unwrap();
+        assert_eq!(state.profile_dir(), dir.join("data"));
     }
 
     /// `<tmp>/<test>/{app.sailor.desktop,io.zeiler.desktop}`, mirroring the OS data dir.

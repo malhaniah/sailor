@@ -4,7 +4,7 @@
 //! pinned to the bottom of the z-order, while the WebView2 on top is given a
 //! fully transparent default background — so the React UI draws over the video
 //! wherever it paints, and the video shows through wherever it doesn't.
-//! Windows wiring adapted from Harbor (github.com/9000000/harbor, MIT); see
+//! Windows wiring adapted from Harbor (github.com/harborstremio/harbor, MIT); see
 //! THIRD-PARTY-NOTICES.md.
 //!
 //! libmpv-2.dll is linked DELAYLOAD (see build.rs): when the feature is off or

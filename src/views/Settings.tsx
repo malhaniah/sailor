@@ -28,7 +28,18 @@ import { useAddons, useSettings } from "../lib/store";
 import { THEME_PRESETS } from "../lib/theme";
 import type { PlayerStatus } from "../lib/types";
 
-type SectionId = "player" | "engine" | "theme" | "content" | "integrations" | "about";
+/** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
+ * section shows only once it has a SECTIONS entry, so these stay hidden until then. */
+type ReservedSectionId = "account" | "subtitles" | "playback";
+
+type SectionId =
+  | "player"
+  | "engine"
+  | "theme"
+  | "content"
+  | "integrations"
+  | "about"
+  | ReservedSectionId;
 
 const SECTIONS: {
   group: string;

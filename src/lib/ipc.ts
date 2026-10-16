@@ -81,5 +81,12 @@ export const updateCheck = () => invoke<string | null>("update_check");
 export const updateInstallNow = () => invoke<void>("update_install_now");
 
 export const settingsGet = () => invoke<Settings>("settings_get");
+/** Merges just these keys server-side; resolves to the full new settings. */
+export const settingsPatch = (patch: Partial<Settings>) =>
+  invoke<Settings>("settings_patch", { patch });
+/** @deprecated replaces every setting (lost-update prone); use settingsPatch */
 export const settingsSet = (settings: Settings) =>
   invoke<Settings>("settings_set", { settings });
+
+/** Emitted by Rust with the full new settings after every successful change. */
+export const SETTINGS_CHANGED = "settings://changed";

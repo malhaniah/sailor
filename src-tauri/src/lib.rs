@@ -1,5 +1,7 @@
+mod builtin;
 mod commands;
 mod error;
+mod persist;
 mod state;
 mod updater;
 
@@ -66,6 +68,7 @@ pub fn run() {
             commands::player::player_play,
             commands::player::player_stop,
             commands::settings::settings_get,
+            commands::settings::settings_patch,
             commands::settings::settings_set,
             updater::update_status,
             updater::update_check,

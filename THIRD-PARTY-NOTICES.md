@@ -15,9 +15,9 @@ and the **stremio-addon-sdk** protocol documentation
 ## Architecture reference
 
 The Tauri + libmpv integration approach planned for the embedded player follows the
-technique shipped by **Harbor** (<https://github.com/9000000/harbor>), MIT License,
-Copyright (c) Harbor contributors. Any code adapted from Harbor retains its MIT notice in
-the adapted files.
+technique shipped by **Harbor** (<https://github.com/harborstremio/harbor>), MIT License,
+Copyright (c) 2026 Harbor. Any code adapted from Harbor retains its MIT notice in the
+adapted files. Zeiler's design tokens (`src/index.css`) also mirror Harbor's.
 
 ## Bundled/linked libraries
 

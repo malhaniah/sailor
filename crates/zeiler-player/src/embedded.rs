@@ -9,7 +9,7 @@
 //! WebView2) is NOT here — this crate never touches the OS surface beyond
 //! passing the parent `wid` to mpv pre-init. See `src-tauri/src/commands/mpv.rs`.
 //!
-//! The embedding approach is adapted from Harbor (github.com/9000000/harbor,
+//! The embedding approach is adapted from Harbor (github.com/harborstremio/harbor,
 //! MIT) — see THIRD-PARTY-NOTICES.md.
 
 use std::sync::Arc;
