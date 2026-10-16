@@ -1,0 +1,20 @@
+[package]
+name = "zeiler-skip"
+description = "Skip segments (intro, recap, credits) from AniSkip and TheIntroDB"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# lenient answers (nulls, numbers as strings, a bad entry skipped), as the addon client
+serde_with = { workspace = true }
+url = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

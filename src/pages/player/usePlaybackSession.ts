@@ -25,6 +25,13 @@
  * arrives. The one exception is external mpv that is playing: Back keeps that window
  * playing (and its torrent streaming), as in M1; its Stop button ends both. Back while
  * mpv is still opening the stream cancels it instead (`backKeepsPlaying`).
+ *
+ * **Next episode** (`loadNext`): another launch of the same title plays in the same
+ * player (`player_load`: same window, same backend), resolving its torrent first. It
+ * counts as a new run, so the subtitle hook takes its file as the title's own, and from
+ * then on `launch` is the new one (the subtitle query, labels, skip times, progress).
+ * The session then owns the new torrent; the old one is removed once the new file is
+ * asked for, unless it is the same torrent (another file of a season pack).
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorKind } from "../../lib/ipc";
@@ -45,6 +52,7 @@ import {
   type PlaybackRequest,
   type PlayerEvent,
   playerBackends,
+  playerLoad,
   playerStart,
   playerStop,
   settingsGet,
@@ -97,6 +105,8 @@ type PlayerSlot =
   | { state: "gone" }; // stopped by us, shut down on its own, or never started
 
 export interface PlaybackSession {
+  /** the launch playing now: the page's, or the one `loadNext` moved on to */
+  launch: PlayerLaunch;
   phase: Phase;
   backend: Backend;
   /**
@@ -116,6 +126,8 @@ export interface PlaybackSession {
   playAgain: () => void;
   /** stop the player, drop the torrent, leave the page (external mpv's Stop) */
   stopAndLeave: () => Promise<void>;
+  /** play another launch of the title in the same player (the next episode) */
+  loadNext: (next: PlayerLaunch) => void;
   /**
    * Follow this session's events (only those of its own player, as the page sees them);
    * returns the unsubscribe function. `run` counts the page's player starts: the events
@@ -131,6 +143,7 @@ export function usePlaybackSession(
   clock: PlaybackClock,
   sendGeometry: () => void,
 ): PlaybackSession {
+  const [current, setCurrent] = useState(launch);
   const [phase, setPhase] = useState<Phase>({ kind: "loading", label: "Preparing player…" });
   const [backend, setBackend] = useState<Backend>("unknown");
   const [videoBehind, setVideoBehind] = useState(false);
@@ -140,9 +153,14 @@ export function usePlaybackSession(
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
   const listeners = useRef(new Set<PlayerEventListener>());
-  const actions = useRef<{ playAgain: () => void; stopAndLeave: () => Promise<void> }>({
+  const actions = useRef<{
+    playAgain: () => void;
+    stopAndLeave: () => Promise<void>;
+    loadNext: (next: PlayerLaunch) => void;
+  }>({
     playAgain: () => undefined,
     stopAndLeave: async () => leavePlayer(),
+    loadNext: () => undefined,
   });
 
   useEffect(() => {
@@ -152,25 +170,39 @@ export function usePlaybackSession(
     // set while our own Stop runs, so the shutdown it causes is not shown as "closed"
     let stopping = false;
     let request: PlaybackRequest | null = null;
-    // player_start calls so far (Play again makes another): the run events belong to
+    // player starts and next-episode loads so far (Play again and loadNext make
+    // another): the run events belong to
     let run = 0;
+    // the launch playing (loadNext moves it on), and whether a loadNext is under way
+    // (one at a time)
+    let playing = launch;
+    let loadingNext = false;
+    // the file before reached its end while the next one was opening
+    let endedMeanwhile = false;
     const source = launch.source;
-    const torrentHash = source.kind === "torrent" ? source.infoHash : null;
-    // the cleanup and a late start/resolve may both drop it: remove it once
-    let torrentDropped = false;
+    // the torrent playing now (the next episode's may replace it)
+    let owned: string | null = source.kind === "torrent" ? source.infoHash : null;
+    // every torrent this session holds in the engine and has not removed yet: the
+    // cleanup and a late start/resolve may both drop one, so each goes once — until a
+    // later resolve adds it again (back to an earlier episode)
+    const held = new Set<string>(owned ? [owned] : []);
+    const drop = (hash: string | null) => {
+      if (!hash || !held.has(hash)) return;
+      held.delete(hash);
+      void removeTorrent(hash);
+    };
     const dropTorrent = () => {
-      if (!torrentHash || torrentDropped) return;
-      torrentDropped = true;
-      void removeTorrent(torrentHash);
+      for (const hash of [...held]) drop(hash);
     };
 
     const fail = (e: unknown) => {
       if (cancelled) return;
+      const failed = playing.source;
       setPhase({
         kind: "error",
         message: startErrorMessage(e),
         // mpv missing or failing to launch: a direct URL still plays in any other player
-        streamUrl: errorKind(e) === "player" && source.kind === "url" ? source.url : undefined,
+        streamUrl: errorKind(e) === "player" && failed.kind === "url" ? failed.url : undefined,
       });
     };
 
@@ -186,7 +218,11 @@ export function usePlaybackSession(
           if (phaseRef.current.kind === "loading") setPhase({ kind: "playing" });
           break;
         case "end-file":
-          if (event.reason === "eof") setPhase({ kind: "ended" });
+          // (the episode before reaching its end while the next one opens is no news)
+          if (event.reason === "eof") {
+            if (loadingNext) endedMeanwhile = true;
+            else setPhase({ kind: "ended" });
+          }
           else if (event.reason === "error" && phaseRef.current.kind !== "error") {
             setPhase({ kind: "error", message: "playback failed (stream error)" });
           }
@@ -201,7 +237,10 @@ export function usePlaybackSession(
           break;
         case "property":
           if (event.name === "eof-reached") {
-            if (event.value === true) setPhase({ kind: "ended" });
+            if (event.value === true) {
+              if (loadingNext) endedMeanwhile = true;
+              else setPhase({ kind: "ended" });
+            }
             else if (phaseRef.current.kind === "ended") setPhase({ kind: "playing" });
           }
           break;
@@ -223,7 +262,7 @@ export function usePlaybackSession(
       let result;
       try {
         // with the context, Rust saves this playback's progress to the library
-        result = await playerStart(request, launch.backend, playbackContext(launch));
+        result = await playerStart(request, launch.backend, playbackContext(playing));
       } catch (e) {
         // A refused start leaves nothing of ours running: Rust validates the request
         // before it replaces the previous session, and a later failure has already
@@ -266,7 +305,7 @@ export function usePlaybackSession(
       playAgain: () => {
         dispatch({ type: "start-file" });
         void (async () => {
-          if (request) request = { ...request, startAtSec: await resumeAtSec(launch) };
+          if (request) request = { ...request, startAtSec: await resumeAtSec(playing) };
           if (!cancelled) await start();
         })().catch(fail);
       },
@@ -277,6 +316,75 @@ export function usePlaybackSession(
         setVideoBehind(false);
         dropTorrent();
         leavePlayer();
+      },
+      loadNext: (next) => {
+        if (cancelled || player.state !== "running" || loadingNext) return;
+        loadingNext = true;
+        endedMeanwhile = false;
+        // the file before stays loaded until the next one is asked for: a failure up
+        // to then leaves it as it was, with a notice
+        const before = phaseRef.current;
+        setPhase({ kind: "loading", label: "Opening the next episode…" });
+        let switched = false;
+        void (async () => {
+          let prepared: PlaybackRequest;
+          let hash: string | null = null;
+          if (next.source.kind === "url") {
+            prepared = urlRequest(next.source, next);
+          } else {
+            hash = next.source.infoHash;
+            const resolved = await engineResolve({
+              infoHash: next.source.infoHash,
+              fileIdx: next.source.fileIdx,
+              sources: next.source.sources,
+              filename: next.source.filename,
+              fileMustInclude: next.source.fileMustInclude,
+            });
+            if (cancelled) {
+              // The page left while the magnet resolved: its cleanup removed what the
+              // session held, which did not include this one yet.
+              if (!held.has(hash)) void removeTorrent(hash);
+              return;
+            }
+            held.add(hash);
+            if (player.state !== "running") {
+              // the player went away meanwhile (mpv closed): nobody plays it
+              if (hash !== owned) drop(hash);
+              return;
+            }
+            prepared = {
+              url: resolved.streamUrl,
+              title: next.title ?? resolved.fileName ?? null,
+              headers: [],
+              userAgent: null,
+              referrer: null,
+              startAtSec: next.startAtSec,
+            };
+          }
+          if (player.state !== "running") return;
+          request = prepared;
+          const previous = owned;
+          owned = hash;
+          playing = next;
+          // a run of its own: the subtitle hook takes this file as the title's again
+          run += 1;
+          switched = true;
+          setCurrent(next);
+          await playerLoad(prepared, playbackContext(next));
+          if (previous && previous !== hash) drop(previous);
+        })()
+          .catch((e) => {
+            if (cancelled) return;
+            if (switched) {
+              fail(e);
+            } else {
+              setPhase(endedMeanwhile ? { kind: "ended" } : before);
+              setNotice(`Could not open the next episode: ${errorMessage(e)}`);
+            }
+          })
+          .finally(() => {
+            loadingNext = false;
+          });
       },
     };
 
@@ -316,7 +424,7 @@ export function usePlaybackSession(
           // nothing (the engine holds a magnet only once its metadata arrives), so
           // remove the torrent it has only just added — past the run-once guard, which
           // that no-op remove already tripped.
-          torrentDropped = true;
+          held.delete(source.infoHash);
           void removeTorrent(source.infoHash);
           return;
         }
@@ -353,6 +461,7 @@ export function usePlaybackSession(
 
   const playAgain = useCallback(() => actions.current.playAgain(), []);
   const stopAndLeave = useCallback(() => actions.current.stopAndLeave(), []);
+  const loadNext = useCallback((next: PlayerLaunch) => actions.current.loadNext(next), []);
   const subscribeEvents = useCallback((listener: PlayerEventListener) => {
     listeners.current.add(listener);
     return () => {
@@ -360,6 +469,7 @@ export function usePlaybackSession(
     };
   }, []);
   return {
+    launch: current,
     phase,
     backend,
     videoBehind,
@@ -370,6 +480,7 @@ export function usePlaybackSession(
     dismissFallback: useCallback(() => setFallbackReason(null), []),
     playAgain,
     stopAndLeave,
+    loadNext,
     subscribeEvents,
   };
 }

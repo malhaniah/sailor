@@ -73,6 +73,12 @@ pub fn run() {
             app.manage(library);
             app.manage(prefs);
             app.manage(commands::mpv::PlayerState::default());
+            // skip times (AniSkip, TheIntroDB): asked from Rust, the CSP keeps the
+            // webview off those hosts
+            app.manage(zeiler_skip::SkipClient::new(concat!(
+                "Zeiler/",
+                env!("CARGO_PKG_VERSION")
+            ))?);
             updater::start(app.handle().clone());
             info!("zeiler started");
             Ok(())
@@ -122,6 +128,9 @@ pub fn run() {
             commands::mpv::subtitles::player_set_sub_style,
             commands::mpv::subtitles::player_prefs_get,
             commands::mpv::subtitles::player_prefs_set,
+            // skip and next episode
+            commands::skip::skip_segments_get,
+            commands::mpv::osd::player_osd_prompt,
             // deprecated aliases, kept for one release (commands/mpv/aliases.rs)
             commands::mpv::aliases::player_status,
             commands::mpv::aliases::player_play,

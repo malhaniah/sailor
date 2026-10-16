@@ -28,18 +28,28 @@
  * PlayerChrome.tsx (embedded), ExternalRemote.tsx (external), ControlsBar.tsx (both),
  * states.tsx (status cards, title labels), surface-sync.ts (embedded surface after
  * window changes), TorrentStats.tsx, useTracks.ts (subtitles and audio: sources, the
- * automatic pick, per-title choices), SubtitleMenu.tsx, AudioMenu.tsx, menu.tsx.
+ * automatic pick, per-title choices), SubtitleMenu.tsx, AudioMenu.tsx, menu.tsx,
+ * useSkip.ts (intro/recap/credits: where, Skip, by itself with Undo), useNextEpisode.ts
+ * (the next episode: binge stream, Up Next, by itself), SkipLayer.tsx (their pill,
+ * card, toast and keys, over either screen).
+ *
+ * The next episode plays in the same player (`player_load`), so the page stays: from
+ * then on `session.launch` is that episode's launch, and everything below follows it.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { leavePlayer, type PlayerLaunch, reportLaunchFailed } from "../../lib/playback-handoff";
-import { playerSetGeometry, playerStop } from "../../lib/player-ipc";
+import { playerSetGeometry, playerStop, settingsGet } from "../../lib/player-ipc";
+import type { SkipSettings } from "../../lib/types";
 import { ExternalRemote } from "./ExternalRemote";
 import { launchForRoute, launchIdForRoute, releaseRoute } from "./launch";
 import { createPlaybackClock } from "./playback-clock";
 import { PlayerChrome } from "./PlayerChrome";
+import { SkipLayer } from "./SkipLayer";
 import { NothingToPlay, UncontrolledPlayback } from "./states";
 import { useSurfaceSync } from "./surface-sync";
+import { useNextEpisode } from "./useNextEpisode";
 import { usePlaybackSession } from "./usePlaybackSession";
+import { useSkip } from "./useSkip";
 import { useTracks } from "./useTracks";
 
 /** `hash` is the player route this page was mounted for (the page is keyed by it). */
@@ -58,10 +68,26 @@ export function PlayerPage({ hash }: { hash: string }) {
   return <PlayerSession launch={launch} launchId={launchIdForRoute(hash)} />;
 }
 
-function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: string | null }) {
+/** The skip and next-episode settings the player reads once per page. */
+interface PlayerSettings {
+  skip: SkipSettings;
+  bingeWatching: boolean;
+  upNextSeconds: number;
+}
+
+function PlayerSession({ launch: launched, launchId }: { launch: PlayerLaunch; launchId: string | null }) {
   const [clock] = useState(createPlaybackClock);
   const videoRef = useRef<HTMLDivElement>(null);
-  const infoHash = launch.source.kind === "torrent" ? launch.source.infoHash : null;
+  const [settings, setSettings] = useState<PlayerSettings | null>(null);
+  useEffect(() => {
+    let live = true;
+    settingsGet()
+      .then((s) => live && setSettings({ skip: s.skip, bingeWatching: s.bingeWatching, upNextSeconds: s.upNextSeconds }))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
 
   const sendGeometry = useCallback(() => {
     const el = videoRef.current;
@@ -76,14 +102,46 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
     }).catch(() => undefined);
   }, []);
 
-  const session = usePlaybackSession(launch, clock, sendGeometry);
+  const session = usePlaybackSession(launched, clock, sendGeometry);
   const { phase, backend, mpv, videoBehind } = session;
+  // the launch playing now (the next episode replaces the page's own)
+  const launch = session.launch;
+  const infoHash = launch.source.kind === "torrent" ? launch.source.infoHash : null;
   const tracks = useTracks({
     launch,
     mpv,
     running: phase.kind === "playing" || phase.kind === "ended",
     subscribeEvents: session.subscribeEvents,
   });
+  const upNextSeconds = settings?.upNextSeconds ?? 15;
+  const next = useNextEpisode({
+    launch,
+    clock,
+    phase,
+    foreign: tracks.foreign,
+    bingeWatching: settings?.bingeWatching ?? false,
+    upNextSeconds,
+    loadNext: session.loadNext,
+    subscribeEvents: session.subscribeEvents,
+  });
+  const skip = useSkip({
+    launch,
+    clock,
+    mpv,
+    backend,
+    playing: phase.kind === "playing",
+    foreign: tracks.foreign,
+    settings: settings?.skip ?? null,
+    hasNext: next.next !== null,
+    onNext: next.playNext,
+    subscribeEvents: session.subscribeEvents,
+  });
+  // the credits started: find the next episode's stream now
+  const { prefetch } = next;
+  const inCredits = skip.inOutro;
+  useEffect(() => {
+    if (inCredits) prefetch();
+  }, [inCredits, prefetch]);
 
   // While a built-in video runs, the document must not paint a background — the
   // native video window sits directly behind the webview. Not before player_start has
@@ -119,11 +177,12 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
 
   // Tell the screen that opened this launch (the stream picker) that it failed, once.
   const reported = useRef(false);
+  // (not for a next episode that failed: the picker's row is the first episode's)
   useEffect(() => {
-    if (phase.kind !== "error" || reported.current || !launchId) return;
+    if (phase.kind !== "error" || reported.current || !launchId || launch !== launched) return;
     reported.current = true;
     reportLaunchFailed(launchId);
-  }, [phase.kind, launchId]);
+  }, [phase.kind, launchId, launch, launched]);
 
   // The session's cleanup stops the player (except external mpv that is playing, which
   // Back keeps — see backKeepsPlaying) and removes the torrent (also when its resolve
@@ -143,43 +202,57 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
     );
   }
 
+  const controllable = phase.kind === "playing" || phase.kind === "ended";
+  const layer = controllable && (
+    <SkipLayer skip={skip} next={next} upNextSeconds={upNextSeconds} keys={controllable} />
+  );
+  const onNext = next.next ? next.playNext : null;
+
   if (backend === "external") {
     return (
-      <ExternalRemote
-        launch={launch}
-        phase={phase}
-        mpv={mpv}
-        tracks={tracks}
-        clock={clock}
-        notice={session.notice}
-        dismissNotice={session.dismissNotice}
-        fallbackReason={session.fallbackReason}
-        dismissFallback={session.dismissFallback}
-        infoHash={infoHash}
-        onBack={leave}
-        onStop={session.stopAndLeave}
-        onPlayAgain={session.playAgain}
-      />
+      <>
+        <ExternalRemote
+          launch={launch}
+          phase={phase}
+          mpv={mpv}
+          tracks={tracks}
+          clock={clock}
+          notice={session.notice}
+          dismissNotice={session.dismissNotice}
+          fallbackReason={session.fallbackReason}
+          dismissFallback={session.dismissFallback}
+          infoHash={infoHash}
+          onBack={leave}
+          onStop={session.stopAndLeave}
+          onPlayAgain={session.playAgain}
+          onNext={onNext}
+        />
+        {layer}
+      </>
     );
   }
 
   const filename = launch.source.kind === "torrent" ? launch.source.filename : null;
   return (
-    <PlayerChrome
-      phase={phase}
-      backend={backend}
-      videoBehind={videoBehind}
-      mpv={mpv}
-      tracks={tracks}
-      clock={clock}
-      notice={session.notice}
-      dismissNotice={session.dismissNotice}
-      title={mpv.mediaTitle ?? launch.title ?? filename ?? "Now playing"}
-      infoHash={infoHash}
-      videoRef={videoRef}
-      onWindowChanged={kickSurface}
-      onLeave={leave}
-      onPlayAgain={session.playAgain}
-    />
+    <>
+      <PlayerChrome
+        phase={phase}
+        backend={backend}
+        videoBehind={videoBehind}
+        mpv={mpv}
+        tracks={tracks}
+        clock={clock}
+        notice={session.notice}
+        dismissNotice={session.dismissNotice}
+        title={mpv.mediaTitle ?? launch.title ?? filename ?? "Now playing"}
+        infoHash={infoHash}
+        videoRef={videoRef}
+        onWindowChanged={kickSurface}
+        onLeave={leave}
+        onPlayAgain={session.playAgain}
+        onNext={onNext}
+      />
+      {layer}
+    </>
   );
 }

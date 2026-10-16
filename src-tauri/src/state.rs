@@ -13,7 +13,7 @@ use crate::error::IpcError;
 use crate::home_rows::HomeRows;
 use crate::persist::{read_json, write_json};
 use crate::settings_groups::{
-    AudioSettings, KeyError, SettingsObject, SubtitleSettings, survives, with_key,
+    AudioSettings, KeyError, SettingsObject, SkipSettings, SubtitleSettings, survives, with_key,
 };
 
 /// Device settings, persisted as `settings.json` and mirrored wholesale to the UI (so
@@ -75,6 +75,13 @@ pub struct Settings {
     pub subtitles: SubtitleSettings,
     /// Preferred audio languages.
     pub audio: AudioSettings,
+    /// The skip button, skipping by itself, and where skip times come from.
+    pub skip: SkipSettings,
+    /// Play the next episode by itself when one ends (when the same addon has a stream
+    /// for it in the same `bingeGroup`; otherwise its stream picker opens).
+    pub binge_watching: bool,
+    /// How many seconds before the end the Up Next card shows (5–60).
+    pub up_next_seconds: u32,
 }
 
 impl Default for Settings {
@@ -99,6 +106,9 @@ impl Default for Settings {
             player_backend: PlayerBackend::Auto,
             subtitles: SubtitleSettings::default(),
             audio: AudioSettings::default(),
+            skip: SkipSettings::default(),
+            binge_watching: true,
+            up_next_seconds: 15,
         }
     }
 }
@@ -149,7 +159,11 @@ impl SettingsObject for Settings {
     }
 
     fn from_object(object: Map<String, Value>) -> Result<Self, serde_json::Error> {
-        Settings::deserialize(Value::Object(object))
+        let settings = Settings::deserialize(Value::Object(object))?;
+        if !(5..=60).contains(&settings.up_next_seconds) {
+            return Err(serde::de::Error::custom("upNextSeconds must be 5 to 60"));
+        }
+        Ok(settings)
     }
 }
 
@@ -548,6 +562,32 @@ mod tests {
 
         let cleared = next.patched(json!({"mpvPath": null})).unwrap();
         assert_eq!(cleared.mpv_path, None);
+    }
+
+    #[test]
+    fn skip_and_binge_settings_default_and_check_their_range() {
+        let defaults = Settings::default();
+        assert!(defaults.binge_watching);
+        assert_eq!(defaults.up_next_seconds, 15);
+        assert!(!defaults.skip.auto_skip_intro && defaults.skip.online_lookup);
+        let next = defaults
+            .patched(json!({"skip": {"autoSkipIntro": true}, "upNextSeconds": 30}))
+            .unwrap();
+        assert!(next.skip.auto_skip_intro);
+        assert!(next.skip.show_button, "the rest of the group stays");
+        assert_eq!(next.up_next_seconds, 30);
+        for bad in [
+            json!({"upNextSeconds": 0}),
+            json!({"upNextSeconds": 600}),
+            json!({"skip": {"autoSkipIntro": "yes"}}),
+            json!({"bingeWatching": 1}),
+        ] {
+            assert!(defaults.patched(bad.clone()).is_err(), "{bad}");
+        }
+        let stored: Settings =
+            serde_json::from_value(json!({"upNextSeconds": 999, "bingeWatching": false})).unwrap();
+        assert_eq!(stored.up_next_seconds, 15, "out of range → its default");
+        assert!(!stored.binge_watching);
     }
 
     #[test]

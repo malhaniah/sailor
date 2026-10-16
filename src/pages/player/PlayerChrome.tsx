@@ -17,7 +17,7 @@ import { ControlsBar } from "./ControlsBar";
 import type { Backend, MpvState, Phase } from "./mpv-state";
 import type { Tracks } from "./useTracks";
 import { type PlaybackClock, useClock } from "./playback-clock";
-import { BackButton, CenterCard, ClosedCard, Spinner } from "./states";
+import { BackButton, CenterCard, ClosedCard, NextButton, Spinner } from "./states";
 import { TorrentStats } from "./TorrentStats";
 import { usePlayerControls, usePlayerKeys } from "./usePlayerControls";
 
@@ -36,6 +36,7 @@ export function PlayerChrome({
   onWindowChanged,
   onLeave,
   onPlayAgain,
+  onNext,
 }: {
   phase: Phase;
   backend: Backend;
@@ -53,6 +54,8 @@ export function PlayerChrome({
   onWindowChanged: () => void;
   onLeave: () => void;
   onPlayAgain: () => void;
+  /** play the next episode (null: there is none) */
+  onNext: (() => void) | null;
 }) {
   const [visible, setVisible] = useState(true);
   const hideTimer = useRef<number | null>(null);
@@ -171,6 +174,7 @@ export function PlayerChrome({
             >
               ↺ Replay
             </button>
+            {onNext && <NextButton onClick={onNext} />}
             <BackButton onClick={onLeave} />
           </div>
         </CenterCard>

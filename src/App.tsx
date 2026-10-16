@@ -1,9 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { SearchOverlay } from "./chrome/SearchOverlay";
 import { Sidebar } from "./chrome/Sidebar";
 import { Topbar } from "./chrome/Topbar";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { LibraryProvider } from "./lib/library";
+import { subscribePickerRequests } from "./lib/playback-handoff";
 import { StoreProvider, useSettings } from "./lib/store";
 import { EmptyState } from "./components/ui";
 import {
@@ -40,6 +41,7 @@ export default function App() {
 function Shell() {
   const { stack, top, setView } = useView();
   const { settings } = useSettings();
+  usePickerRequests();
   // Harbor rule: side chrome hides when the picker or settings sit on top.
   const hideSidebar = top.kind === "picker" || top.kind === "settings";
   const rootFrame = stack.find((f) => ROOT_VIEWS.includes(f.kind as RootView));
@@ -71,6 +73,28 @@ function Shell() {
       <SearchOverlay />
       <UpdateBanner />
     </div>
+  );
+}
+
+/** The Player asks for another video's stream picker (the next episode, when no stream
+ * continues the current one): it replaces the picker the player was opened from, if
+ * that is the same title's, else it opens on top. */
+function usePickerRequests() {
+  const view = useView();
+  const latest = useRef(view);
+  latest.current = view;
+  useEffect(
+    () =>
+      subscribePickerRequests((meta, video) => {
+        const { top, goBack, openPicker } = latest.current;
+        if (top.kind === "picker" && top.meta.id === meta.id) {
+          goBack();
+          openPicker(top.meta, top.meta.videos.find((v) => v.id === video.id) ?? video);
+        } else {
+          openPicker(meta, video);
+        }
+      }),
+    [],
   );
 }
 

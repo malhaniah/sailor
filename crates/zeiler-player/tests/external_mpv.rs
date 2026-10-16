@@ -411,6 +411,56 @@ async fn the_player_screen_remote_controls_work_over_json_ipc() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// The next episode (M7) loads into the same mpv after the episode before reached its
+/// end: keep-open leaves that file paused at its end, and `load` must start the next
+/// one playing (the Player screen's `loadNext` → `player_load`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs mpv and ffmpeg"]
+async fn the_next_file_plays_after_the_end_of_the_last() {
+    let dir = temp_dir("next");
+    let server = Server::start(generate_media(&dir));
+    let (events, mut rx) = sink();
+    let request = PlaybackRequest {
+        url: server.url(),
+        start_at_sec: Some(4.5),
+        ..PlaybackRequest::default()
+    };
+    let player = ExternalIpcPlayer::start_with_args(&mpv(), &headless(), &request, events)
+        .await
+        .expect("mpv starts and accepts the file");
+    wait_for(&mut rx, "the end of the first file", |e| {
+        is_property(e, "eof-reached", |v| *v == json!(true))
+    })
+    .await;
+
+    let next = PlaybackRequest {
+        url: server.url(),
+        title: Some("Episode 2".into()),
+        ..PlaybackRequest::default()
+    };
+    player.load(&next).await.unwrap();
+    let seen = wait_for(&mut rx, "the next file loaded", |e| {
+        *e == PlayerEvent::FileLoaded
+    })
+    .await;
+    assert!(seen.contains(&PlayerEvent::StartFile), "{seen:?}");
+    wait_for(&mut rx, "the next file playing from its start", |e| {
+        is_property(e, "time-pos", |v| {
+            v.as_f64().is_some_and(|t| t > 0.2 && t < 3.0)
+        })
+    })
+    .await;
+    assert_eq!(player.get_property("pause").await.unwrap(), json!(false));
+    assert_eq!(
+        player.get_property("eof-reached").await.unwrap(),
+        json!(false)
+    );
+
+    player.quit();
+    wait_for(&mut rx, "shutdown", |e| *e == PlayerEvent::Shutdown).await;
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs mpv"]
 async fn a_failing_stream_reports_an_error_and_quit_shuts_down() {

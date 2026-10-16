@@ -15,6 +15,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { PlaybackContext } from "./library-ipc";
 import type {
+  AddonStreams,
   AddonSubtitles,
   PlayerBackend,
   Settings,
@@ -120,7 +121,16 @@ export const engineRemove = (infoHash: string, deleteFiles: boolean) =>
   invoke<void>("engine_remove", { infoHash, deleteFiles });
 export const settingsGet = () =>
   invoke<
-    Pick<Settings, "deleteOnStop" | "playerBackend" | "subtitles" | "audio">
+    Pick<
+      Settings,
+      | "deleteOnStop"
+      | "playerBackend"
+      | "subtitles"
+      | "audio"
+      | "skip"
+      | "bingeWatching"
+      | "upNextSeconds"
+    >
   >("settings_get");
 /** Merges these keys into the settings (a group field by field), as `settings_patch`. */
 export const settingsPatch = (patch: SettingsPatch) =>
@@ -186,6 +196,28 @@ export const playerPrefsSet = (
   patch: Partial<Omit<TitlePrefs, "metaId">>,
 ) => invoke<TitlePrefs>("player_prefs_set", { metaId, patch });
 
+// --- skip and next episode (src-tauri/src/commands/skip.rs, commands/mpv/osd.rs) -----------
+
+/** A skip segment from AniSkip or TheIntroDB (Rust `zeiler_skip::Segment`). */
+export interface OnlineSegment {
+  kind: "intro" | "recap" | "outro";
+  startSec: number;
+  endSec: number;
+  source: "aniskip" | "introdb";
+}
+
+/** Where a video's intro, recap and credits are, from AniSkip (anime) or TheIntroDB
+ * (IMDb/TMDB titles); empty when online lookups are off or nothing is known. */
+export const skipSegmentsGet = (query: { metaId: string; videoId: string; durationSec: number }) =>
+  invoke<OnlineSegment[]>("skip_segments_get", { query });
+/** Offer a skip in external mpv's own window (OSD text, Enter sends `zeiler-skip` back
+ * as a client-message); null takes it back. A no-op for built-in playback. */
+export const playerOsdPrompt = (kind: "intro" | "recap" | "outro" | "next" | null) =>
+  invoke<void>("player_osd_prompt", { kind });
+/** Every addon's streams for a video (the next episode's, to binge with). */
+export const streamsGet = (type: string, id: string) =>
+  invoke<AddonStreams[]>("streams_get", { type, id });
+
 /** How a subtitle file dropped on the window went (Rust emits it while a player runs). */
 export type SubtitleDropped =
   | { name: string; added: AddedSubtitle }
@@ -204,6 +236,12 @@ export function errorMessage(error: unknown): string {
 }
 
 // --- events -----------------------------------------------------------------------------
+
+/** One entry of mpv's `chapter-list` (observed as JSON). */
+export interface MpvChapter {
+  time: number;
+  title?: string;
+}
 
 /** One entry of mpv's `track-list` (observed as JSON). */
 export interface MpvTrack {

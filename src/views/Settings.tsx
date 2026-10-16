@@ -24,6 +24,7 @@ import { useAddons, useSettings } from "../lib/store";
 import { THEME_PRESETS } from "../lib/theme";
 import type { PlayerBackend } from "../lib/types";
 import { AdultContentSetting } from "./AdultContentSetting";
+import { SkipAndNextCards } from "./SkipSettings";
 import { SubtitlesSection } from "./SubtitleSettings";
 
 /** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
@@ -346,6 +347,8 @@ function PlayerSection() {
           onChange={(on) => void save({ instantPlay: on })}
         />
       </SectionCard>
+
+      <SkipAndNextCards />
     </>
   );
 }

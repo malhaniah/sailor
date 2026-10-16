@@ -73,6 +73,7 @@ zeiler-account = { path = "crates/zeiler-account" }
 zeiler-addon = { path = "crates/zeiler-addon" }
 zeiler-engine = { path = "crates/zeiler-engine" }
 zeiler-player = { path = "crates/zeiler-player" }
+zeiler-skip = { path = "crates/zeiler-skip" }
 
 [profile.release]
 codegen-units = 1

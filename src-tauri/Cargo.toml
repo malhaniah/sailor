@@ -23,6 +23,7 @@ zeiler-account = { workspace = true }
 zeiler-addon = { workspace = true }
 zeiler-engine = { workspace = true }
 zeiler-player = { workspace = true }
+zeiler-skip = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # DefaultOnError for nested settings groups (subtitles{}, skip{}, …), added in M0 so
