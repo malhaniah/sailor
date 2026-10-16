@@ -12,6 +12,11 @@ v0.2.0 the same day.
   release named Zeiler.
 - **Merged through:** PR #4 (M0 to M4a), #5 (M4b), #6 (M5) and #7 (M6 and the v0.2.0
   version bump). Everything below is on main.
+- **Since v0.2.0, released as v0.2.1:** #8/#11 and #12 (another file opened in external
+  mpv no longer gets the title's subtitles, and a subtitle add fails if the file changed
+  meanwhile), #9 (libmpv from Zeiler's own mirror, with its sources), #10 (dependency
+  licences checked in CI and their notices in every bundle) and #14 (a release is a draft
+  until all four builds are in it).
 
 | Commit | Milestone | What it did |
 |---|---|---|
