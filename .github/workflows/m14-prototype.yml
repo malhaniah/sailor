@@ -13,24 +13,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: default
-            env: ""
-          - name: no-dmabuf
-            env: "WEBKIT_DISABLE_DMABUF_RENDERER=1"
-          - name: no-compositing
-            env: "WEBKIT_DISABLE_COMPOSITING_MODE=1"
-          - name: no-webview
-            env: "PROTO_NO_WEBVIEW=1"
-          - name: default-again
-            env: "PROTO_RUN=2"
-          - name: vto0
-            env: "PROTO_VTO0=1"
-          - name: vto0-again
-            env: "PROTO_VTO0=1 PROTO_RUN=2"
-          - name: clear-only
-            env: "PROTO_CLEAR=1"
-          - name: clear-only-no-webview
-            env: "PROTO_CLEAR=1 PROTO_NO_WEBVIEW=1"
+          - { name: run1, env: "PROTO_RUN=1" }
+          - { name: run2, env: "PROTO_RUN=2" }
+          - { name: run3, env: "PROTO_RUN=3" }
+          - { name: run4, env: "PROTO_RUN=4" }
+          - { name: vto0-1, env: "PROTO_VTO0=1 PROTO_RUN=1" }
+          - { name: vto0-2, env: "PROTO_VTO0=1 PROTO_RUN=2" }
+          - { name: vto0-3, env: "PROTO_VTO0=1 PROTO_RUN=3" }
+          - { name: vto0-4, env: "PROTO_VTO0=1 PROTO_RUN=4" }
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

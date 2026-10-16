@@ -19,6 +19,7 @@ use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamA
 use webkit2gtk::{WebViewExt, SettingsExt};
 
 static FRAMES: AtomicU64 = AtomicU64::new(0);
+static START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
 
 /// GL entry points from the loader of the context that is current: GDK's GL context
 /// is GLX on X11 and EGL on Wayland. Asking EGL for a GLX context's functions (WebKit
@@ -84,6 +85,7 @@ html, body { margin: 0; background: transparent; }
 </style></head><body><div id="box"></div><div id="label">webview above the video</div></body></html>"#;
 
 fn main() {
+    std::sync::LazyLock::force(&START);
     gtk::init().expect("GTK initializes");
     // GTK sets the user's locale; libmpv needs "C" numerics
     unsafe { libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr()) };
@@ -126,7 +128,7 @@ fn main() {
             }
             // the prototype's diagnostics: mpv's own log on stdout
             init.set_option("terminal", "yes")?;
-            init.set_option("msg-level", "all=info,vo=v,libmpv_render=v,vd=v")?;
+            init.set_option("msg-level", "all=info,vo=debug,libmpv_render=v,vd=v")?;
             Ok(())
         })
         .expect("libmpv initializes"),
@@ -161,6 +163,7 @@ fn main() {
                 glib::ControlFlow::Continue
             });
             *render.borrow_mut() = Some(ctx);
+            println!("PROTO: loadfile at {:?}", START.elapsed());
             mpv.command("loadfile", &["av://lavfi:color=c=0x00ff00:s=640x360:r=25", "replace"])
                 .expect("loadfile");
             println!("PROTO: render context created, playing");
@@ -193,7 +196,7 @@ fn main() {
                     std::mem::transmute::<*mut c_void, BindFramebuffer>(get_proc_address(&(), "glBindFramebuffer"))(0x8D40, fbo as u32);
                 }
                 let n = FRAMES.fetch_add(1, Ordering::Relaxed);
-                if n % 100 == 0 {
+                if n < 3 || n % 100 == 0 {
                     type GetError = unsafe extern "C" fn() -> u32;
                     type ReadPixels = unsafe extern "C" fn(i32, i32, i32, i32, u32, u32, *mut u8);
                     let err = unsafe { std::mem::transmute::<*mut c_void, GetError>(get_proc_address(&(), "glGetError"))() };
@@ -201,7 +204,7 @@ fn main() {
                     unsafe {
                         std::mem::transmute::<*mut c_void, ReadPixels>(get_proc_address(&(), "glReadPixels"))(w / 2, h / 2, 1, 1, 0x1908, 0x1401, px.as_mut_ptr());
                     }
-                    println!("PROTO: render #{n} fbo={fbo} {w}x{h} glError={err:#x} center={px:?} draw_fbo_after={}", gl_get_integer(0x8CA6));
+                    println!("PROTO: render #{n} at {:?} fbo={fbo} {w}x{h} glError={err:#x} center={px:?} draw_fbo_after={}", START.elapsed(), gl_get_integer(0x8CA6));
                 }
             }
             glib::Propagation::Stop
@@ -216,7 +219,7 @@ fn main() {
     let mpv_q = Rc::clone(&mpv);
     glib::timeout_add_local_once(Duration::from_secs(seconds), move || {
         println!("PROTO: frames rendered {}", FRAMES.load(Ordering::Relaxed));
-        for p in ["vo-configured", "video-params", "video-out-params", "hwdec-current", "time-pos"] {
+        for p in ["vo-configured", "hwdec-current", "time-pos", "frame-drop-count", "decoder-frame-drop-count", "vo-delayed-frame-count", "estimated-vf-fps", "display-fps"] {
             println!("PROTO: {p} = {:?}", mpv_q.get_property::<String>(p));
         }
         // free the render context before the core (GL current)
