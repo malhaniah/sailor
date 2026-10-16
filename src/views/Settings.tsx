@@ -23,6 +23,7 @@ import { type PlayerBackends, playerBackends } from "../lib/player-ipc";
 import { useAddons, useSettings } from "../lib/store";
 import { THEME_PRESETS } from "../lib/theme";
 import type { PlayerBackend } from "../lib/types";
+import { AdultContentSetting } from "./AdultContentSetting";
 import { SubtitlesSection } from "./SubtitleSettings";
 
 /** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
@@ -592,10 +593,11 @@ function ContentSection() {
           );
         })}
       </SectionCard>
+      <AdultContentSetting />
       <SectionCard title="Rooms" description="Hide sidebar rooms you don't use.">
         <ToggleRow
           label="Hide Anime"
-          sub="Removes the Anime room from the sidebar."
+          sub="Removes the Anime room from the sidebar and anime rows from Home and Discover."
           on={settings.hideAnime}
           onChange={(on) => void save({ hideAnime: on })}
         />

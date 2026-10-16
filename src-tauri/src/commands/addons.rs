@@ -1,5 +1,7 @@
 use tauri::State;
-use zeiler_addon::{Descriptor, normalize_transport_input};
+use zeiler_addon::{
+    Descriptor, is_adult_manifest, normalize_transport_input, without_adult_options,
+};
 
 use crate::error::IpcError;
 use crate::state::AppState;
@@ -60,7 +62,23 @@ pub async fn addon_remove(
     state.persist_addons().await
 }
 
+/// The addons in effect, as the UI shows them: while adult content is hidden, their
+/// catalogs have no adult options or adult-named catalogs (`catalog_load` refuses
+/// those too), and an addon whose id or name is adult is flagged `adult` like one that
+/// says so itself. A flagged addon keeps its catalogs here, for the Addons page; the
+/// rooms leave them out.
 #[tauri::command]
 pub async fn addon_list(state: State<'_, AppState>) -> Result<Vec<Descriptor>, IpcError> {
-    Ok(state.effective_addons().await)
+    let addons = state.effective_addons().await;
+    if state.settings.read().await.show_adult {
+        return Ok(addons);
+    }
+    Ok(addons
+        .into_iter()
+        .map(|d| {
+            let mut manifest = without_adult_options(d.manifest);
+            manifest.behavior_hints.adult = is_adult_manifest(&manifest);
+            Descriptor { manifest, ..d }
+        })
+        .collect())
 }

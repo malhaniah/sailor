@@ -154,6 +154,9 @@ macro_rules! settings_object {
     };
 }
 
+// usable by groups defined in other modules (`home_rows.rs`)
+pub(crate) use settings_object;
+
 /// Most languages a preference list holds.
 const MAX_LANGUAGES: usize = 12;
 

@@ -1,17 +1,19 @@
+import { LayoutGrid } from "lucide-react";
 import { useMemo } from "react";
-import { PickCard, TopRankCard } from "../components/cards";
+import { CatalogRows } from "../components/CatalogRows";
+import { TopRankCard } from "../components/cards";
+import { GenreTiles } from "../components/GenreTiles";
 import { HeroCarousel } from "../components/Hero";
 import { Row } from "../components/Row";
 import { EmptyState } from "../components/ui";
-import { browsableCatalogs, catalogDisplayName } from "../lib/catalogs";
-import { dedupRows, useCatalogRows } from "../lib/rows";
+import { catalogDisplayName, catalogTitle, looksAnime } from "../lib/catalogs";
+import { ROOM_TYPES, roomCatalogs, spotlightCatalogs, spotlightGenre } from "../lib/rooms";
+import { type RowState, leadRow, useCatalogRows } from "../lib/rows";
 import { useAddons, useSettings } from "../lib/store";
 import { useView } from "../lib/view";
-import { RowSkeletons } from "./Home";
 
 const ROOMS = {
   movies: {
-    types: ["movie"],
     label: "Movies",
     hero: "bleed" as const,
     kicker: "Featured tonight",
@@ -19,7 +21,6 @@ const ROOMS = {
     subtitle: "Every movie catalog your addons provide, in one room.",
   },
   shows: {
-    types: ["series", "tv"],
     label: "Series",
     hero: "mast" as const,
     kicker: "Tonight",
@@ -27,7 +28,6 @@ const ROOMS = {
     subtitle: "Series from your installed addons — trending, returning, and all-time runs.",
   },
   anime: {
-    types: ["anime"],
     label: "Anime",
     hero: "mast" as const,
     kicker: "Simulcast",
@@ -40,12 +40,19 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
   const config = ROOMS[room];
   const { addons, reload } = useAddons();
   const { settings, save } = useSettings();
-  const { openMeta, setView } = useView();
-  const catalogs = useMemo(
-    () => browsableCatalogs(addons).filter((c) => config.types.includes(c.catalog.type)),
-    [addons, config.types],
-  );
-  const { rows, loadMore } = useCatalogRows(catalogs);
+  const { openMeta, openBrowse, setView } = useView();
+  const hideAnime = settings?.hideAnime ?? false;
+  const showAdult = settings?.showAdult ?? false;
+  // the room's catalogs, then a row per spotlight genre of its first genre catalog
+  const catalogs = useMemo(() => {
+    const own = roomCatalogs(addons, room, { hideAnime, showAdult });
+    return [...own, ...spotlightCatalogs(own, room)];
+  }, [addons, room, hideAnime, showAdult]);
+  const { rows, loadMore, request, version } = useCatalogRows(catalogs);
+  // the room's own type when it has catalogs of it (the Anime room may also hold
+  // anime catalogs filed under series, whose genres are Cinemeta's)
+  const ownType = ROOM_TYPES[room].find((t) => catalogs.some((c) => c.catalog.type === t));
+  const browseType = ownType ?? catalogs[0]?.catalog.type ?? ROOM_TYPES[room][0];
 
   if (catalogs.length === 0) {
     // the built-in Anime Kitsu fills the Anime room; point at its switch when it is off
@@ -84,15 +91,16 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
     );
   }
 
-  const first = rows.get(catalogs[0]?.key ?? "");
+  // a catalog that turns out to be anime is left out of Movies and Shows (it still
+  // shows on Home and Discover; the Anime room takes catalogs it can tell apart before
+  // loading them)
+  const keep =
+    room === "anime" ? undefined : (state: RowState) => !looksAnime(state.items.map((m) => m.id));
+  const first = rows.get(leadRow(catalogs, rows, keep)?.key ?? "");
   const heroItems = (first?.items ?? []).filter((m) => m.background || m.poster).slice(0, 5);
   const heroIds = new Set(heroItems.map((m) => m.id));
   const rankItems = (first?.items ?? []).filter((m) => !heroIds.has(m.id)).slice(0, 10);
   const reserved = new Set([...heroIds, ...rankItems.map((m) => m.id)]);
-  const ordered = catalogs
-    .map((c) => ({ key: c.key, state: rows.get(c.key) }))
-    .filter((r): r is { key: string; state: NonNullable<typeof r.state> } => !!r.state);
-  const deduped = dedupRows(ordered, reserved);
 
   const rowsBlock = (
     <>
@@ -108,24 +116,32 @@ export function TypeRoomView({ room }: { room: keyof typeof ROOMS }) {
           ))}
         </Row>
       )}
-      {ordered.length === 0 && <RowSkeletons count={4} />}
-      {deduped.map(({ key, state, items }) => (
-        <Row
-          key={key}
-          title={catalogDisplayName(state.ref.catalog)}
-          kicker={`${state.ref.addon.manifest.name}`}
-          min={148}
-          onEndReached={() => loadMore(key)}
+      <CatalogRows
+        refs={catalogs}
+        rows={rows}
+        request={request}
+        loadMore={loadMore}
+        version={version}
+        reserved={reserved}
+        onOpen={openMeta}
+        title={(ref) => spotlightGenre(ref) ?? catalogTitle(ref)}
+        kicker={(ref) =>
+          spotlightGenre(ref)
+            ? `${ref.addon.manifest.name} · ${catalogDisplayName(ref.catalog)}`
+            : ref.addon.manifest.name
+        }
+        keep={keep}
+      />
+      <GenreTiles type={browseType} refs={catalogs} />
+      <div className="flex justify-center">
+        <button
+          onClick={() => openBrowse({ type: browseType, extra: [] })}
+          className="flex h-10 items-center gap-2 rounded-full border border-edge-soft px-5 text-[13px] font-medium text-ink-muted transition-colors hover:border-ink hover:text-ink"
         >
-          {items.map((meta, i) => (
-            <PickCard
-              key={`${meta.id}-${i}`}
-              meta={meta}
-              onClick={() => openMeta(meta)}
-            />
-          ))}
-        </Row>
-      ))}
+          <LayoutGrid size={15} />
+          Browse all {config.label.toLowerCase()}
+        </button>
+      </div>
     </>
   );
 

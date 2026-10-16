@@ -8,6 +8,7 @@
 //! are documented, unknown fields, and aliased field names. The semantics intentionally
 //! mirror Stremio's reference implementation (stremio-core, MIT) without depending on it.
 
+mod adult;
 mod client;
 mod error;
 mod fanout;
@@ -16,6 +17,7 @@ mod request;
 mod resource;
 mod subfile;
 
+pub use adult::{is_adult_manifest, is_adult_meta, is_adult_text, without_adult_options};
 pub use client::{AddonClient, MAX_RESPONSE_BYTES};
 // encoding overrides are named by encoding_rs labels (`Encoding::for_label`)
 pub use encoding_rs::Encoding;

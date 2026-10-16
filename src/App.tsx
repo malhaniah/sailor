@@ -14,9 +14,9 @@ import {
   useView,
 } from "./lib/view";
 import { AddonsView } from "./views/Addons";
+import { BrowseView } from "./views/Browse";
 import { DetailView } from "./views/Detail";
 import { DiscoverView } from "./views/Discover";
-import { FilterView } from "./views/Filter";
 import { HomeView } from "./views/Home";
 import { LibraryView } from "./views/Library";
 import { PlayPickerView } from "./views/PlayPicker";
@@ -93,7 +93,6 @@ function RootViewHost({ view }: { view: RootView }) {
 function isOverlay(frame: Frame): boolean {
   switch (frame.kind) {
     case "meta":
-    case "filter":
     case "picker":
     case "settings":
     case "browse":
@@ -126,8 +125,6 @@ function OverlayFrame({ frame }: { frame: Frame }) {
   switch (frame.kind) {
     case "meta":
       return <DetailView type={frame.type} id={frame.id} preview={frame.preview} />;
-    case "filter":
-      return <FilterView type={frame.type} genre={frame.genre} />;
     case "picker":
       return <PlayPickerView meta={frame.meta} video={frame.video} />;
     case "settings":
@@ -137,7 +134,7 @@ function OverlayFrame({ frame }: { frame: Frame }) {
         </div>
       );
     case "browse":
-      return <ReservedView title="Browse" />;
+      return <BrowseView frame={frame} />;
     case "addon-detail":
       return <ReservedView title="Addon" />;
     // root views render in RootViewHost
