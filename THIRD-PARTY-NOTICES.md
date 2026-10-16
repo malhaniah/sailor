@@ -81,6 +81,13 @@ Adapted files:
 - `src/lib/home-customization.ts` — Home row order, hiding and renaming
 - `src/lib/rooms.ts`, `src/lib/catalogs.ts` (`isAnimeCatalog`) — which rows go to Home
   and which to the Anime room
+- `crates/zeiler-addon/src/request.rs` (`normalize_transport_input`) — the rules for the
+  addon links people paste (`parseAddonUrl`)
+- `crates/zeiler-addon/src/directory.rs` — the directory endpoints and the merge by
+  manifest id (`src/lib/providers/stremio-addons.ts`, `src/lib/addons-store/community.ts`)
+- `src-tauri/src/deeplink.rs` — runtime `stremio://` registration
+  (`deeplink_set_stremio`); `src/views/addons/*` — install match kinds, the facts table
+  and masked addresses (`install-modal.tsx`, `addon-detail.tsx`)
 
 ```text
 MIT License

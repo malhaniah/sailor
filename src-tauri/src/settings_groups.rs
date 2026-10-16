@@ -376,6 +376,33 @@ impl SkipSettings {
 
 settings_object!(SkipSettings, "skip");
 
+/// `marketplaceSources{}`: which directories the opt-in addon marketplace lists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(remote = "Self", rename_all = "camelCase", default)]
+pub struct MarketplaceSources {
+    /// The stremio-addons.net community directory (stars, categories, documentation).
+    pub stremio_addons_net: bool,
+    /// Stremio's community and official addon catalogs, served by Cinemeta.
+    pub stremio_catalog: bool,
+}
+
+impl Default for MarketplaceSources {
+    fn default() -> Self {
+        Self {
+            stremio_addons_net: true,
+            stremio_catalog: true,
+        }
+    }
+}
+
+impl MarketplaceSources {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+settings_object!(MarketplaceSources, "marketplaceSources");
+
 #[cfg(test)]
 mod tests {
     use super::*;

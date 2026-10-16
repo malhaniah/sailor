@@ -213,6 +213,18 @@ export interface Settings {
   bingeWatching: boolean;
   /** Seconds before the end the Up Next card shows, 5–60. */
   upNextSeconds: number;
+  /** Browse third-party addon directories on the Addons page (opt-in). */
+  marketplaceEnabled: boolean;
+  marketplaceSources: MarketplaceSources;
+  /** Hide addons that declare P2P from the directory (they're flagged either way). */
+  hideP2pAddons: boolean;
+  /** Read-only here: change it with `deeplinkSetStremio`, which also registers with the OS. */
+  stremioDeepLink: boolean;
+}
+
+export interface MarketplaceSources {
+  stremioAddonsNet: boolean;
+  stremioCatalog: boolean;
 }
 
 export interface SkipSettings {
@@ -325,4 +337,99 @@ export interface IpcError {
   kind: IpcErrorKind;
   /** a full sentence, safe to show as-is */
   message: string;
+}
+
+// ---- marketplace (Rust commands/addons.rs, commands/marketplace.rs) ------------------
+
+export type MatchKind = "sameUrl" | "sameId" | "sameHost";
+
+export interface ExistingMatch {
+  kind: MatchKind;
+  name: string;
+  transportUrl: string;
+  maskedUrl: string;
+}
+
+/** `addon_preview`: what the install confirmation shows. */
+export interface InstallPreview {
+  descriptor: Descriptor;
+  maskedUrl: string;
+  existing: ExistingMatch | null;
+  configureUrl: string | null;
+  /** where the live manifest differs from the directory listing it was picked from */
+  listingChanges: string[];
+  listingRequiresReview: boolean;
+}
+
+export interface AddonUpdate {
+  transportUrl: string;
+  maskedUrl: string;
+  name: string;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  changes: string[];
+  capabilitiesChanged: boolean;
+  requiresReview: boolean;
+}
+
+export type DirectorySource = "stremioCommunity" | "stremioOfficial" | "stremioAddonsNet";
+
+export interface DirectoryCategory {
+  name: string;
+  slug: string;
+}
+
+export type DirectorySort = "stars" | "newest" | "name";
+
+export interface DirectoryQuery {
+  search?: string | null;
+  types: string[];
+  resources: string[];
+  category?: string | null;
+  sort: DirectorySort;
+}
+
+export interface MarketEntry {
+  key: string;
+  /** the listing's copy: display only, untrusted */
+  manifest: Manifest;
+  transportUrl: string;
+  sources: DirectorySource[];
+  stars: number | null;
+  categories: DirectoryCategory[];
+  listedAt: string | null;
+  updatedAt: string | null;
+  slug: string | null;
+  adult: boolean;
+  p2p: boolean;
+  configurable: boolean;
+  configurationRequired: boolean;
+  installState: "builtIn" | "installed" | "available";
+  siteUrl: string | null;
+}
+
+export interface SourceFailure {
+  source: DirectorySource;
+  message: string;
+}
+
+export interface MarketPage {
+  entries: MarketEntry[];
+  total: number;
+  hasMore: boolean;
+  sourcesOk: DirectorySource[];
+  sourcesFailed: SourceFailure[];
+  fetchedAt: number;
+}
+
+export interface MarketDetail {
+  entry: MarketEntry;
+  /** plain text only (may contain markdown or HTML source; never rendered as HTML) */
+  documentation: string | null;
+}
+
+export interface DeepLinkStatus {
+  supported: boolean;
+  enabled: boolean;
+  registered: boolean;
 }

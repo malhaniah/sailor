@@ -1,0 +1,48 @@
+{
+  "addons": [
+    {
+      "transportUrl": "https://subs-mirror.example.org/manifest.json",
+      "transportName": "http",
+      "manifest": {
+        "id": "org.example.subs",
+        "name": "Example Subtitles",
+        "types": ["movie", "series"],
+        "resources": ["subtitles"],
+        "catalogs": []
+      }
+    },
+    {
+      "transportUrl": "https://radio.example.org/manifest.json",
+      "transportName": "http",
+      "flags": { "official": true, "protected": true },
+      "manifest": {
+        "id": "org.example.radio",
+        "name": "Example Radio",
+        "description": "Internet radio stations.",
+        "types": ["tv"],
+        "resources": ["catalog", "meta", "stream"],
+        "catalogs": [{ "type": "tv", "id": "stations", "name": "Stations" }]
+      }
+    },
+    {
+      "transportUrl": "ftp://files.example.org/manifest.json",
+      "manifest": { "id": "org.example.ftp", "name": "FTP" }
+    },
+    {
+      "transportUrl": "https://page.example.org/addon",
+      "manifest": { "id": "org.example.page", "name": "Page" }
+    },
+    {
+      "transportUrl": "https://hint.example.org/manifest.json",
+      "manifest": {
+        "id": "org.example.adult-hint",
+        "name": "Late Shows",
+        "types": ["movie"],
+        "resources": ["stream"],
+        "catalogs": [],
+        "behaviorHints": { "adult": true }
+      }
+    },
+    { "transportUrl": "https://broken.example.org/manifest.json" }
+  ]
+}
