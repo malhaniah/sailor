@@ -6,7 +6,42 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The pinned libmpv for the Windows build (libmpv-2.dll + the generated mpv.lib +
+  # NOTICE.txt), fetched before anything is built: if it cannot be had, nothing is
+  # published. A release without its Windows build would leave latest.json with no
+  # Windows entry, and installed Windows copies would stop updating.
+  libmpv:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Cache libmpv
+        uses: actions/cache@v6
+        with:
+          path: src-tauri/libmpv
+          key: libmpv-${{ runner.os }}-${{ hashFiles('scripts/fetch-libmpv.mjs') }}
+      - name: Fetch libmpv
+        shell: pwsh
+        # mpv.lib is generated with MSVC's lib.exe: find it with vswhere
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $libExe = & $vswhere -latest -products '*' `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\lib.exe' | Select-Object -First 1
+          if (-not $libExe) { throw "lib.exe (MSVC build tools) not found" }
+          $env:PATH = "$(Split-Path $libExe);$env:PATH"
+          node scripts/fetch-libmpv.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: libmpv
+          path: src-tauri/libmpv
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
+    needs: libmpv
     permissions:
       contents: write
     strategy:
@@ -43,25 +78,15 @@ jobs:
           targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: swatinem/rust-cache@v2
       - run: npm ci
-      # Windows: the pinned libmpv (libmpv-2.dll + the generated mpv.lib + NOTICE.txt)
-      - name: Cache libmpv
+      # Windows: the libmpv job's libmpv. The embedded overlay's beforeBuildCommand
+      # runs fetch-libmpv.mjs again, which finds it vendored at the pin and only
+      # rewrites NOTICE.txt.
+      - name: Get libmpv
         if: matrix.platform == 'windows-latest'
-        uses: actions/cache@v6
+        uses: actions/download-artifact@v8
         with:
+          name: libmpv
           path: src-tauri/libmpv
-          key: libmpv-${{ runner.os }}-${{ hashFiles('scripts/fetch-libmpv.mjs') }}
-      - name: Fetch libmpv
-        if: matrix.platform == 'windows-latest'
-        shell: pwsh
-        # mpv.lib is generated with MSVC's lib.exe: find it with vswhere
-        run: |
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          $libExe = & $vswhere -latest -products '*' `
-            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-            -find 'VC\Tools\MSVC\**\bin\Hostx64\x64\lib.exe' | Select-Object -First 1
-          if (-not $libExe) { throw "lib.exe (MSVC build tools) not found" }
-          $env:PATH = "$(Split-Path $libExe);$env:PATH"
-          node scripts/fetch-libmpv.mjs
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

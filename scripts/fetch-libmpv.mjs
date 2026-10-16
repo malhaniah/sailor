@@ -20,12 +20,20 @@
 //
 // The archive is an LGPL-flavor libmpv from zhongfly/mpv-winbuild (shinchiro's
 // build scripts; plain x86_64 — deliberately NOT the -v3 AVX2 build, which
-// crashes on older CPUs). The download is pinned by SHA-256 — the hash below
-// is from the release's own sha256.txt manifest; bump TAG/ASSET/SHA256 and the
-// MPV_*/FFMPEG_* versions (as the new DLL reports them) together when updating,
-// and THIRD-PARTY-NOTICES.md and src-tauri/licenses/libmpv-THIRD-PARTY.txt with
-// them (the library list follows shinchiro's packages/*.cmake as zhongfly's
-// compile-lgpl-libmpv.patch leaves them).
+// crashes on older CPUs). zhongfly deletes releases older than about 30 build
+// days, so the script downloads Zeiler's own copy: the pre-release MIRROR_TAG of
+// this repo holds the archive unchanged, zhongfly's sha256.txt, the build inputs
+// and the LGPL sources, recorded in docs/libmpv/<TAG>.md. The download is pinned
+// by SHA-256 — the hash below is from zhongfly's sha256.txt.
+//
+// To update: mirror the new build the same way (a pre-release, never "latest":
+// the updater reads releases/latest), then bump TAG/ASSET/SHA256 and the
+// MPV_*/FFMPEG_* versions (as the new DLL reports them) together, add its
+// docs/libmpv/ record, and update THIRD-PARTY-NOTICES.md and
+// src-tauri/licenses/libmpv-THIRD-PARTY.txt with them (the library list follows
+// shinchiro's packages/*.cmake as zhongfly's compile-lgpl-libmpv.patch leaves
+// them). Keep older mirrors: the source offer runs three years past the last
+// release that shipped them.
 //
 // Usage: node scripts/fetch-libmpv.mjs [--force]
 // Env:   ZEILER_LIBMPV_URL=...  override the archive URL (hash still enforced
@@ -47,19 +55,22 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+const ZEILER_REPO = "https://github.com/malhaniah/zeiler";
+// zhongfly/mpv-winbuild's release, and Zeiler's copy of it
 const TAG = "2026-10-15-5757d69708";
+const MIRROR_TAG = `libmpv-${TAG}`;
+const MIRROR = `${ZEILER_REPO}/releases/tag/${MIRROR_TAG}`;
 const ASSET = "mpv-dev-lgpl-x86_64-20261015-git-5757d69708.7z";
 const SHA256 = process.env.ZEILER_LIBMPV_SHA256 ??
   "5417be2641c31e2c5e676bb7cce90244edb43758936193c6c36dfcf5ea35eabd";
 const URL =
   process.env.ZEILER_LIBMPV_URL ??
-  `https://github.com/zhongfly/mpv-winbuild/releases/download/${TAG}/${ASSET}`;
+  `${ZEILER_REPO}/releases/download/${MIRROR_TAG}/${ASSET}`;
 // the versions the pinned DLL reports, and the commits they name
 const MPV_VERSION = "v0.41.0-1184-g5757d6970";
 const MPV_COMMIT = "5757d6970";
 const FFMPEG_VERSION = "N-127570-gaf25036ac";
 const FFMPEG_COMMIT = "af25036ac";
-const ZEILER_REPO = "https://github.com/malhaniah/zeiler";
 
 /**
  * The text of NOTICE.txt (installed as licenses/libmpv-NOTICE.txt): it travels with
@@ -101,13 +112,17 @@ export function noticeText({ dllSha256, dllSize }) {
       : []),
     "",
     "SOURCE CODE",
-    "The complete corresponding source code of this build:",
+    "The complete corresponding source code of this build, kept by Zeiler:",
+    `  ${MIRROR}`,
+    "It holds the source of mpv, FFmpeg and every other LGPL library inside the DLL,",
+    "at the exact commits built; the build scripts (zhongfly/mpv-winbuild, which",
+    "drives shinchiro/mpv-winbuild-cmake: the source, options and patches of every",
+    "bundled library); and BUILD-INPUTS.md, the commit of every library and the",
+    "toolchain used.",
+    "Upstream:",
     `  mpv:     https://github.com/mpv-player/mpv/tree/${MPV_COMMIT}`,
     `  FFmpeg:  https://github.com/FFmpeg/FFmpeg/tree/${FFMPEG_COMMIT}`,
-    `  build:   https://github.com/zhongfly/mpv-winbuild/tree/${TAG}`,
-    "           (CI and package versions of this release), which drives",
-    "           https://github.com/shinchiro/mpv-winbuild-cmake",
-    "           (the source URL and patches of every bundled library)",
+    `  build:   zhongfly/mpv-winbuild release ${TAG}`,
     "",
     "Written offer: for at least three years after the last Zeiler release that",
     "ships this build, Zeiler's maintainers will give anyone a copy of that complete",
@@ -116,6 +131,9 @@ export function noticeText({ dllSha256, dllSize }) {
     "",
     "PROVENANCE",
     `archive:             ${URL}`,
+    ...(process.env.ZEILER_LIBMPV_URL
+      ? []
+      : [`                     (zhongfly/mpv-winbuild ${TAG}, unchanged)`]),
     `archive sha256:      ${SHA256}`,
     `libmpv-2.dll sha256: ${dllSha256} (${dllSize} bytes)`,
     "Fetched and verified by scripts/fetch-libmpv.mjs. mpv.lib (build-time only, not",
