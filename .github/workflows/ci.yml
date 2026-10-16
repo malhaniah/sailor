@@ -97,6 +97,18 @@ jobs:
           $env:PATH = "$libmpv;$env:PATH"
           cargo test -p zeiler-player --features embedded --locked
 
+  # Dependency licences and sources against deny.toml's allow-lists. --all-features
+  # takes in zeiler/embedded, so the LGPL libmpv2 bindings are checked too.
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features --locked
+          command: check
+          command-arguments: licenses sources
+
   frontend:
     runs-on: ubuntu-24.04
     steps:

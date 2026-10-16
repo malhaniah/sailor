@@ -152,8 +152,29 @@ build. Next to it, in `licenses\`, the installer puts:
   corresponding source, for no more than the cost of providing it — ask by opening an
   issue at <https://github.com/malhaniah/zeiler/issues>.
 
-A complete dependency license inventory can be generated with
-`cargo deny check licenses` / `cargo about generate`.
+## Rust crates and npm packages
+
+Besides the libraries above, Zeiler compiles in several hundred Rust crates (mostly MIT
+or Apache-2.0) and bundles a few npm packages into its interface (React, lucide-react,
+Tauri's JavaScript API and Tailwind CSS's base styles). Every release, on every platform,
+ships their licence texts and copyright notices in `THIRD-PARTY-LICENSES.txt`, in the
+`licenses` folder next to `zeiler.exe` on Windows, in
+`Zeiler.app/Contents/Resources/licenses/` on macOS, and in `/usr/lib/Zeiler/licenses/`
+on Linux.
+
+`scripts/third-party-licenses.mjs` writes that file for each release target, in
+`release.yml`'s `licenses` job. The crates come from `Cargo.lock` through cargo-about
+(`about.toml`), limited to the crates built for that target with its features. The npm
+packages come from Vite's report of what the interface build bundles. To write it
+yourself (with cargo-about 0.9 installed):
+
+```bash
+npm run build && node scripts/third-party-licenses.mjs
+```
+
+CI (the `deny` job in `ci.yml`) runs `cargo deny --all-features check licenses sources`,
+which checks every crate's licence and source against `deny.toml`, with
+`zeiler/embedded` included.
 
 ## Trademarks
 

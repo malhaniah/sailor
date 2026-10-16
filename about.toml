@@ -1,0 +1,45 @@
+# cargo-about configuration: the Rust half of THIRD-PARTY-LICENSES.txt, which
+# scripts/third-party-licenses.mjs generates for each release build (release.yml) and
+# every bundle ships as licenses/THIRD-PARTY-LICENSES.txt.
+#
+# deny.toml's allow-list is the gate; `accepted` holds the same licences, in the order
+# cargo-about prefers them when a crate offers a choice ("MIT OR Apache-2.0" is listed
+# under MIT).
+accepted = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "BSL-1.0",
+  "CC0-1.0",
+  "Unlicense",
+  "Unicode-3.0",
+  "CDLA-Permissive-2.0",
+  "MPL-2.0",
+  "LGPL-2.1-only",
+  "GPL-3.0-or-later",
+]
+# tests and benches are not shipped
+ignore-dev-dependencies = true
+
+# libmpv2 and libmpv2-sys declare the deprecated id "LGPL-2.1"; their LICENSE is the
+# LGPL-2.1 text with no later-version grant (see deny.toml). The checksum is the
+# file's SHA-256: a release that changes it fails the generation until this is checked
+# again. Builds without zeiler/embedded have neither crate, and cargo-about warns that
+# these entries match nothing there.
+[libmpv2.clarify]
+license = "LGPL-2.1-only"
+
+[[libmpv2.clarify.files]]
+path = "LICENSE"
+checksum = "dcf7820ce143583db730de5354a36ade5e076ac9eeb8eadf4d028cba9e425a24"
+
+[libmpv2-sys.clarify]
+license = "LGPL-2.1-only"
+
+[[libmpv2-sys.clarify.files]]
+path = "LICENSE"
+checksum = "dcf7820ce143583db730de5354a36ade5e076ac9eeb8eadf4d028cba9e425a24"
