@@ -332,6 +332,12 @@ fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<LoadStep
             json!(stream_referrer(request).unwrap_or(&defaults.referrer)),
         ));
     }
+    // Zeiler's library is the one source of resume positions: a user's
+    // save-position-on-quit would otherwise make mpv's own watch-later start (applied
+    // at load, over a runtime `start`) win over the picker's "Resume" or "Start from
+    // the beginning". Optional, like the preferences: an odd build cannot fail a load.
+    let resume = commands.len();
+    commands.push(set("resume-playback", json!("no")));
     // `start` rather than loadfile's per-file options: their syntax changed across
     // mpv versions (the playlist index argument), the property did not
     commands.push(set(
@@ -361,7 +367,7 @@ fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<LoadStep
         .enumerate()
         .map(|(i, command)| LoadStep {
             command,
-            required: !options.contains(&i),
+            required: !options.contains(&i) && i != resume,
         })
         .collect()
 }
@@ -1206,8 +1212,11 @@ mod tests {
             .collect();
         assert_eq!(
             optional,
-            [r#"["set_property","alang","en"]"#],
-            "only the preferences may fail"
+            [
+                r#"["set_property","resume-playback","no"]"#,
+                r#"["set_property","alang","en"]"#
+            ],
+            "only the preferences (and the watch-later opt-out) may fail"
         );
         assert_eq!(
             lines,
@@ -1217,6 +1226,7 @@ mod tests {
                 r#"["change-list","http-header-fields","append","Authorization: Bearer a,b"]"#,
                 r#"["change-list","http-header-fields","append","Referer: https://site.example"]"#,
                 r#"["set_property","user-agent","mpv/0.37"]"#,
+                r#"["set_property","resume-playback","no"]"#,
                 r#"["set_property","start","90"]"#,
                 r#"["set_property","force-media-title","Film"]"#,
                 r#"["set_property","alang","en"]"#,

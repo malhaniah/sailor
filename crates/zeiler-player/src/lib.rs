@@ -366,6 +366,8 @@ pub fn build_mpv_args(request: &PlaybackRequest) -> Vec<String> {
     for (name, value) in &request.headers {
         args.push(format!("--http-header-fields-append={name}: {value}"));
     }
+    // the library owns resume positions, not the user's mpv watch-later files
+    args.push("--resume-playback=no".to_string());
     if let Some(start) = request.start_at_sec {
         args.push(format!("--start={start}"));
     }
@@ -529,6 +531,7 @@ mod tests {
             args.contains(&"--http-header-fields-append=Referer: https://site.example".to_string())
         );
         assert!(args.contains(&"--start=42.5".to_string()));
+        assert!(args.contains(&"--resume-playback=no".to_string()));
         // the URL (and its credentials) must never be an argument
         assert!(args.iter().all(|a| !a.contains("secret")));
     }

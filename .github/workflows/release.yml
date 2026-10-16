@@ -80,7 +80,7 @@ jobs:
             ### Windows
             Download the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Playback is built in. Optional: to play in your own mpv window instead (Settings → Player → External mpv), install mpv with `winget install shinchiro.mpv`.
 
-            The built-in player uses libmpv/FFmpeg (LGPL-2.1-or-later), shipped as `libmpv-2.dll` beside `zeiler.exe`; its licence (`licenses\LGPL-2.1.txt`) and its versions, provenance and source offer (`licenses\libmpv-NOTICE.txt`) are installed with it; the source offer is also in [THIRD-PARTY-NOTICES.md](https://github.com/malhaniah/zeiler/blob/main/THIRD-PARTY-NOTICES.md).
+            The built-in player uses libmpv (mpv: LGPL-2.1-or-later) with FFmpeg (built as LGPL-3.0-or-later), shipped as `libmpv-2.dll` beside `zeiler.exe`. Installed with it in `licenses\`: the licence texts, the notices of the libraries inside it (`libmpv-THIRD-PARTY.txt`), and its versions, provenance and source offer (`libmpv-NOTICE.txt`). The source offer is also in [THIRD-PARTY-NOTICES.md](https://github.com/malhaniah/zeiler/blob/main/THIRD-PARTY-NOTICES.md).
 
             ### macOS
             Download the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Zeiler to Applications. Builds are not notarized: the first time, right-click Zeiler → **Open**, or allow it under System Settings → Privacy & Security. Install mpv with `brew install mpv`.

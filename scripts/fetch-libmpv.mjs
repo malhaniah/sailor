@@ -10,8 +10,10 @@
 //   mpv.lib        MSVC import library, generated here via `lib /def:`
 //   NOTICE.txt     licence notice, provenance (URL + hashes) and the written source
 //                  offer for the vendored binaries; shipped in the installer as
-//                  licenses/libmpv-NOTICE.txt, next to licenses/LGPL-2.1.txt (the
-//                  licence text, committed at src-tauri/licenses/LGPL-2.1.txt)
+//                  licenses/libmpv-NOTICE.txt, next to the licence texts committed in
+//                  src-tauri/licenses/: LGPL-2.1.txt (mpv), LGPL-3.0.txt and
+//                  GPL-3.0.txt (FFmpeg, built with --enable-version3) and
+//                  libmpv-THIRD-PARTY.txt (the libraries linked into the DLL)
 //
 // lib.exe comes from the MSVC build tools: the script finds it on PATH or through
 // vswhere, so it works from a plain shell as well as a VS developer prompt.
@@ -21,7 +23,9 @@
 // crashes on older CPUs). The download is pinned by SHA-256 — the hash below
 // is from the release's own sha256.txt manifest; bump TAG/ASSET/SHA256 and the
 // MPV_*/FFMPEG_* versions (as the new DLL reports them) together when updating,
-// and THIRD-PARTY-NOTICES.md with them.
+// and THIRD-PARTY-NOTICES.md and src-tauri/licenses/libmpv-THIRD-PARTY.txt with
+// them (the library list follows shinchiro's packages/*.cmake as zhongfly's
+// compile-lgpl-libmpv.patch leaves them).
 //
 // Usage: node scripts/fetch-libmpv.mjs [--force]
 // Env:   ZEILER_LIBMPV_URL=...  override the archive URL (hash still enforced
@@ -60,7 +64,8 @@ const ZEILER_REPO = "https://github.com/malhaniah/zeiler";
 /**
  * The text of NOTICE.txt (installed as licenses/libmpv-NOTICE.txt): it travels with
  * the DLL, so it must stand on its own — the licence, where the exact sources are,
- * and the written offer. The installer puts the LGPL-2.1 text next to it.
+ * and the written offer. The installer puts the licence texts and
+ * libmpv-THIRD-PARTY.txt next to it.
  */
 export function noticeText({ dllSha256, dllSize }) {
   return [
@@ -68,13 +73,20 @@ export function noticeText({ dllSha256, dllSize }) {
     `(${ZEILER_REPO})`,
     "",
     "LICENCE",
-    "libmpv-2.dll is mpv built in its LGPL configuration (-Dgpl=false) together with",
-    "FFmpeg. Both are free software under the GNU Lesser General Public License,",
-    "version 2.1 or (at your option) any later version. The licence text is in",
-    "LGPL-2.1.txt, in the same folder as this file. The DLL also contains libraries",
-    "these builds link statically (for example libass, libplacebo, FreeType,",
-    "HarfBuzz, FriBidi, libbluray, libarchive, libssh); each keeps its own licence,",
-    "as listed by the build scripts below.",
+    "libmpv-2.dll is mpv, built in its LGPL configuration (-Dgpl=false), together",
+    "with FFmpeg and the libraries both link statically.",
+    "- mpv is free software under the GNU Lesser General Public License, version 2.1",
+    "  or (at your option) any later version: LGPL-2.1.txt.",
+    "- FFmpeg is built with --enable-version3 (and without --enable-gpl), so it is",
+    "  under the GNU Lesser General Public License, version 3 or (at your option) any",
+    "  later version: LGPL-3.0.txt, which builds on the GNU General Public License,",
+    "  version 3: GPL-3.0.txt.",
+    "- libmpv-2.dll as a whole is therefore distributed under the GNU Lesser General",
+    "  Public License, version 3 or any later version.",
+    "The other libraries inside the DLL (FreeType, HarfBuzz, libass, OpenSSL, dav1d,",
+    "libvpx and more) keep their own licences. Their copyright notices and licence",
+    "texts are in libmpv-THIRD-PARTY.txt. All of these files are in the same folder",
+    "as this one.",
     "",
     "Zeiler links libmpv-2.dll dynamically: you may replace it, beside zeiler.exe,",
     "with any compatible libmpv-2.dll, including one you built yourself from",
