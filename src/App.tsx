@@ -2,6 +2,7 @@ import { SearchOverlay } from "./chrome/SearchOverlay";
 import { Sidebar } from "./chrome/Sidebar";
 import { Topbar } from "./chrome/Topbar";
 import { UpdateBanner } from "./chrome/UpdateBanner";
+import { LibraryProvider } from "./lib/library";
 import { StoreProvider } from "./lib/store";
 import { EmptyState } from "./components/ui";
 import {
@@ -25,9 +26,11 @@ import { TypeRoomView } from "./views/TypeRoom";
 export default function App() {
   return (
     <StoreProvider>
-      <ViewProvider>
-        <Shell />
-      </ViewProvider>
+      <LibraryProvider>
+        <ViewProvider>
+          <Shell />
+        </ViewProvider>
+      </LibraryProvider>
     </StoreProvider>
   );
 }

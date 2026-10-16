@@ -1,10 +1,22 @@
-import { CalendarClock, ChevronDown, Info, Play } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Poster, fallbackGradient } from "../components/Poster";
+import { CalendarClock, Check, CheckCheck, ChevronDown, Info, Play, Plus } from "lucide-react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { NO_HOVER_SHOW } from "../components/LibraryCard";
+import { Poster, PosterProgress, fallbackGradient } from "../components/Poster";
 import { ErrorNote, Spinner } from "../components/ui";
 import { errorMessage, metaGet } from "../lib/ipc";
+import { useLibraryItem } from "../lib/library";
+import {
+  type ResumePoint,
+  type VideoRef,
+  libraryMarkWatched,
+  librarySet,
+  metaSummary,
+  videoRefs,
+} from "../lib/library-ipc";
 import { useView } from "../lib/view";
 import type { MetaItem, MetaLookup, MetaPreview, Video } from "../lib/types";
+
+const NO_VIDEOS: VideoRef[] = [];
 
 /** A minimal meta object built from the catalog item that was clicked. */
 function metaFromPreview(preview: MetaPreview): MetaItem {
@@ -48,6 +60,12 @@ export function DetailView({
   const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logoOk, setLogoOk] = useState(true);
+  // the library's view of this title, with the watched marks of its episodes
+  const refs = useMemo(() => (meta ? videoRefs(meta.videos) : NO_VIDEOS), [meta]);
+  const { detail, loaded: libraryLoaded, refresh } = useLibraryItem(meta?.id ?? null, refs);
+  const watchedIds = useMemo(() => new Set(detail?.watchedVideoIds ?? []), [detail]);
+  const [busy, setBusy] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +73,7 @@ export function DetailView({
     setFallbackNote(null);
     setError(null);
     setLogoOk(true);
+    setLibraryError(null);
     metaGet(type, id)
       .then((lookup) => {
         if (cancelled) return;
@@ -97,9 +116,63 @@ export function DetailView({
   const defaultVideo = isSeries
     ? (meta.videos.find((v) => v.id === meta.behaviorHints.defaultVideoId) ?? null)
     : null;
+  const entry = detail?.entry ?? null;
+  // the episode Continue Watching points at: Play goes there
+  const continueVideo =
+    isSeries && entry?.inContinueWatching
+      ? (meta.videos.find((v) => v.id === entry.videoId) ?? null)
+      : null;
+  // the video Play asks streams for, as the picker does (a movie's default video)
+  const playVideoId = continueVideo?.id ?? (isSeries ? null : (meta.behaviorHints.defaultVideoId ?? meta.id));
+  const resumes = !!entry?.resume && entry.resume.videoId === playVideoId;
+
+  /** Runs one library change; buttons wait for it, and the title is read again after. */
+  const change = (run: () => Promise<unknown>) => {
+    setBusy(true);
+    setLibraryError(null);
+    run()
+      .catch((e) => setLibraryError(errorMessage(e)))
+      .finally(() => {
+        setBusy(false);
+        refresh();
+      });
+  };
+  const summary = () => metaSummary(meta);
+  const markVideos = (videoIds: string[], watched: boolean) =>
+    change(() => libraryMarkWatched({ meta: summary(), videos: refs, videoIds, watched }));
+  const markSeason = (season: number, watched: boolean) =>
+    change(() =>
+      libraryMarkWatched({ meta: summary(), videos: refs, videoIds: [], season, watched }),
+    );
+
+  // "Watched" for the whole title. A series is watched episode by episode: the toggle
+  // marks every numbered episode already out (the specials aside; with or without a
+  // season, as anime addons send them) and shows whether they all are. The library's
+  // own title mark (`timesWatched`, which one episode past 70% already sets) is for
+  // everything else, and for series without numbered episodes.
+  const seriesEpisodes = isSeries
+    ? meta.videos.filter(
+        (v) => v.episode != null && (v.season == null || v.season > 0) && !isUpcoming(v),
+      )
+    : [];
+  const byEpisodes = seriesEpisodes.length > 0;
+  const titleWatched = byEpisodes
+    ? seriesEpisodes.every((v) => watchedIds.has(v.id))
+    : !!entry?.watched;
+  const toggleTitleWatched = () =>
+    byEpisodes
+      ? markVideos(
+          seriesEpisodes.map((v) => v.id),
+          !titleWatched,
+        )
+      : change(() =>
+          libraryMarkWatched({ meta: summary(), videos: refs, videoIds: [], watched: !titleWatched }),
+        );
 
   const smartPlay = () => {
-    if (isSeries) {
+    if (continueVideo) {
+      openPicker(meta, continueVideo);
+    } else if (isSeries) {
       const firstEpisode =
         defaultVideo ??
         [...meta.videos]
@@ -162,16 +235,43 @@ export function DetailView({
                 ))}
               </div>
 
-              <div className="mt-9 flex gap-3">
+              <div className="mt-9 flex flex-wrap gap-3">
                 <button
                   onClick={smartPlay}
                   className="flex h-12 items-center gap-2.5 rounded-full bg-ink px-7 text-[15px] font-semibold text-canvas shadow-[0_8px_24px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.65),inset_0_-1px_0_rgba(0,0,0,0.18)] transition-transform duration-200 hover:scale-[1.03] active:scale-[0.98]"
                 >
                   <Play size={18} fill="currentColor" />
-                  {isSeries && defaultVideo
-                    ? `Play S${defaultVideo.season ?? "?"}:E${defaultVideo.episode ?? "?"}`
-                    : "Play"}
+                  {playLabel(
+                    resumes ? "Resume" : continueVideo ? "Continue" : "Play",
+                    continueVideo ?? defaultVideo,
+                  )}
                 </button>
+                <HeroToggle
+                  on={!!entry?.inLibrary}
+                  disabled={busy}
+                  onClick={() => change(() => librarySet(summary(), !entry?.inLibrary))}
+                  icon={entry?.inLibrary ? <Check size={17} strokeWidth={2.4} /> : <Plus size={18} />}
+                  label={entry?.inLibrary ? "In Library" : "Add to Library"}
+                  title={entry?.inLibrary ? "Remove from your library" : "Add to your library"}
+                />
+                {!live && (
+                  <HeroToggle
+                    on={titleWatched}
+                    disabled={busy}
+                    onClick={toggleTitleWatched}
+                    icon={<CheckCheck size={17} strokeWidth={2.2} />}
+                    label={titleWatched ? "Watched" : "Mark as watched"}
+                    title={
+                      byEpisodes
+                        ? titleWatched
+                          ? "Mark every episode unwatched"
+                          : "Mark every episode out so far watched"
+                        : titleWatched
+                          ? "Mark the whole title unwatched"
+                          : "Mark the whole title watched"
+                    }
+                  />
+                )}
                 {live && (
                   <span className="flex h-12 items-center gap-2 rounded-full border border-edge bg-elevated/40 px-6 text-[14px] font-medium text-ink-muted">
                     <CalendarClock size={16} />
@@ -179,6 +279,11 @@ export function DetailView({
                   </span>
                 )}
               </div>
+              {libraryError && (
+                <p role="alert" className="mt-4 text-[13px] font-medium text-[oklch(0.75_0.12_25)]">
+                  {libraryError}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -193,13 +298,67 @@ export function DetailView({
           </div>
         )}
         {meta.description && <Synopsis text={meta.description} />}
-        {isSeries && <EpisodesSection meta={meta} onPick={(video) => openPicker(meta, video)} />}
+        {isSeries && (
+          <EpisodesSection
+            meta={meta}
+            watchedIds={watchedIds}
+            resume={entry?.resume ?? null}
+            focusVideoId={continueVideo?.id ?? null}
+            libraryLoaded={libraryLoaded}
+            busy={busy}
+            onPick={(video) => openPicker(meta, video)}
+            onMarkVideos={markVideos}
+            onMarkSeason={markSeason}
+          />
+        )}
         {needsManualEpisode && (
           <ManualEpisodePicker onPick={(s, e) => openPicker(meta, episodeVideo(meta, s, e))} />
         )}
         <InfoBlock meta={meta} />
       </div>
     </main>
+  );
+}
+
+/** "Resume S1:E3", "Continue S1:E4" (moved on to it), "Play S1:E1"; "Resume" / "Play". */
+function playLabel(verb: "Resume" | "Continue" | "Play", video: Video | null): string {
+  return video ? `${verb} S${video.season ?? "?"}:E${video.episode ?? "?"}` : verb;
+}
+
+/**
+ * A hero action that is on or off (Add to Library, Mark as watched). The label says
+ * which, so there is no `aria-pressed` (a toggle's name must not change); `title`
+ * says what a click does.
+ */
+function HeroToggle({
+  on,
+  disabled,
+  onClick,
+  icon,
+  label,
+  title,
+}: {
+  on: boolean;
+  disabled: boolean;
+  onClick: () => void;
+  icon: ReactNode;
+  label: string;
+  title: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`flex h-12 items-center gap-2 rounded-full border px-6 text-[14px] font-medium backdrop-blur-sm transition-colors disabled:cursor-progress disabled:opacity-70 ${
+        on
+          ? "border-accent/50 bg-accent/15 text-accent hover:bg-accent/25"
+          : "border-edge bg-canvas/60 text-ink hover:bg-elevated"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 
@@ -295,13 +454,48 @@ function Synopsis({ text }: { text: string }) {
 
 // ---- episodes -------------------------------------------------------------------------
 
-function EpisodesSection({ meta, onPick }: { meta: MetaItem; onPick: (video: Video) => void }) {
+function EpisodesSection({
+  meta,
+  watchedIds,
+  resume,
+  focusVideoId,
+  libraryLoaded,
+  busy,
+  onPick,
+  onMarkVideos,
+  onMarkSeason,
+}: {
+  meta: MetaItem;
+  /** the episodes marked watched in the library */
+  watchedIds: ReadonlySet<string>;
+  resume: ResumePoint | null;
+  /** the episode Continue Watching points at: its season opens first */
+  focusVideoId: string | null;
+  /** the library's first read of this title has answered (`focusVideoId` is known) */
+  libraryLoaded: boolean;
+  /** a library change is running */
+  busy: boolean;
+  onPick: (video: Video) => void;
+  onMarkVideos: (videoIds: string[], watched: boolean) => void;
+  onMarkSeason: (season: number, watched: boolean) => void;
+}) {
   const seasons = useMemo(() => {
     const unique = [...new Set(meta.videos.map((v) => v.season ?? -1))];
     const rank = (s: number) => (s === 0 ? Number.MAX_SAFE_INTEGER : s === -1 ? -1 : s);
     return unique.sort((a, b) => rank(a) - rank(b));
   }, [meta.videos]);
   const [season, setSeason] = useState(() => seasons.find((s) => s > 0) ?? seasons[0]);
+
+  // Open on the season of the episode to continue: decided once, when the library's
+  // first read answers (after the first render), so neither a season the user picked
+  // nor a mark that moves Continue Watching on later moves the view.
+  const focused = useRef(false);
+  const focusSeason = meta.videos.find((v) => v.id === focusVideoId)?.season ?? null;
+  useEffect(() => {
+    if (focused.current || !libraryLoaded) return;
+    focused.current = true;
+    if (focusSeason !== null && seasons.includes(focusSeason)) setSeason(focusSeason);
+  }, [libraryLoaded, focusSeason, seasons]);
 
   const episodes = useMemo(
     () =>
@@ -311,25 +505,85 @@ function EpisodesSection({ meta, onPick }: { meta: MetaItem; onPick: (video: Vid
     [meta.videos, season],
   );
 
+  // A season can be marked once an episode of it is out (the library marks numbered
+  // episodes of a season number, never negative). Marking takes in only what is out:
+  // a mark moves the title's "last watched" up to the episode's release date, which
+  // must not lie in the future. Unmarking clears the whole season.
+  const numbered = season < 0 ? [] : episodes.filter((v) => v.episode != null);
+  const released = numbered.filter((v) => !isUpcoming(v));
+  const seasonWatched =
+    released.length > 0 && released.every((v) => watchedIds.has(v.id));
+  const markSeason = () => {
+    if (seasonWatched || released.length === numbered.length) {
+      onMarkSeason(season, !seasonWatched);
+    } else {
+      onMarkVideos(
+        released.map((v) => v.id),
+        true,
+      );
+    }
+  };
+
   return (
     <section className="flex flex-col gap-5">
-      <div className="flex items-end justify-between gap-6">
+      <div className="flex flex-wrap items-end justify-between gap-6">
         <div>
           <h3 className="text-[22px] font-medium tracking-tight text-ink">Episodes</h3>
           <p className="mt-1 text-[13px] text-ink-subtle">{episodes.length} episodes</p>
         </div>
-        {seasons.length > 1 && (
-          <SeasonPicker seasons={seasons} value={season} onChange={setSeason} />
-        )}
+        <div className="flex flex-wrap items-center gap-3">
+          {released.length > 0 && (
+            <button
+              onClick={markSeason}
+              disabled={busy}
+              className={`flex h-10 items-center gap-2 rounded-full border px-4 text-[13px] font-medium transition-colors disabled:cursor-progress disabled:opacity-70 ${
+                seasonWatched
+                  ? "border-accent/50 bg-accent/15 text-accent hover:bg-accent/25"
+                  : "border-edge-soft bg-canvas/90 text-ink-muted hover:border-edge hover:text-ink"
+              }`}
+            >
+              <CheckCheck size={15} strokeWidth={2.2} />
+              {seasonWatched ? `${seasonLabel(season)} watched` : `Mark ${seasonLabel(season).toLowerCase()} watched`}
+            </button>
+          )}
+          {seasons.length > 1 && (
+            <SeasonPicker
+              seasons={seasons}
+              value={season}
+              onChange={(s) => {
+                focused.current = true;
+                setSeason(s);
+              }}
+            />
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col gap-1">
         {episodes.map((video) => (
-          <EpisodeRow key={video.id} video={video} onClick={() => onPick(video)} />
+          <EpisodeRow
+            key={video.id}
+            video={video}
+            watched={watchedIds.has(video.id)}
+            progress={
+              resume?.videoId === video.id && resume.duration > 0
+                ? resume.timeOffset / resume.duration
+                : null
+            }
+            busy={busy}
+            onClick={() => onPick(video)}
+            onMark={(watched) => onMarkVideos([video.id], watched)}
+          />
         ))}
       </div>
     </section>
   );
+}
+
+/** Not out yet: released after now. */
+function isUpcoming(video: Video): boolean {
+  const released = video.released ? new Date(video.released).getTime() : Number.NaN;
+  return Number.isFinite(released) && released > Date.now();
 }
 
 function seasonLabel(season: number): string {
@@ -392,7 +646,22 @@ function SeasonPicker({
   );
 }
 
-function EpisodeRow({ video, onClick }: { video: Video; onClick: () => void }) {
+function EpisodeRow({
+  video,
+  watched,
+  progress,
+  busy,
+  onClick,
+  onMark,
+}: {
+  video: Video;
+  watched: boolean;
+  /** how far into it the resume point is (0..1), when it is the one to resume */
+  progress: number | null;
+  busy: boolean;
+  onClick: () => void;
+  onMark: (watched: boolean) => void;
+}) {
   const parsed = video.released ? new Date(video.released) : null;
   const released = parsed && Number.isFinite(parsed.getTime()) ? parsed : null;
   const upcoming = released !== null && released.getTime() > Date.now();
@@ -404,44 +673,68 @@ function EpisodeRow({ video, onClick }: { video: Video; onClick: () => void }) {
     .join("  ·  ");
 
   return (
-    <button
-      onClick={onClick}
-      className={`group flex gap-6 rounded-2xl px-4 py-5 text-left transition-colors hover:bg-elevated/30 ${
-        upcoming ? "opacity-55" : ""
-      }`}
-    >
-      <div className="relative w-[200px] shrink-0 overflow-hidden rounded-lg">
-        <Poster src={video.thumbnail} seed={video.id} ratio="landscape" className="rounded-lg" />
-        <div className="absolute inset-0 flex items-center justify-center bg-canvas/40 opacity-0 transition-opacity group-hover:opacity-100">
-          <span className="flex h-12 w-12 items-center justify-center rounded-full bg-ink text-canvas">
-            <Play size={18} fill="currentColor" className="ml-0.5" />
-          </span>
-        </div>
-        {video.episode != null && (
-          <span className="absolute left-1.5 top-1.5 rounded-md bg-canvas/95 px-1.5 py-0.5 text-[11px] font-semibold text-ink">
-            {video.episode}
-          </span>
-        )}
-      </div>
-      <div className="flex min-w-0 flex-col gap-1.5 py-1">
-        <div className="flex items-center gap-2.5">
-          <span className="truncate text-[16px] font-semibold text-ink">
-            {video.title ?? video.id}
-          </span>
-          {upcoming && (
-            <span className="rounded-[5px] border border-edge-soft bg-elevated/40 px-1.5 text-[9px] font-bold uppercase tracking-[0.14em] text-ink-subtle">
-              Upcoming
+    <div className="group/episode flex items-center gap-2 rounded-2xl pr-4 transition-colors hover:bg-elevated/30">
+      <button
+        onClick={onClick}
+        className={`group flex min-w-0 flex-1 gap-6 rounded-2xl px-4 py-5 text-left ${
+          upcoming ? "opacity-55" : ""
+        }`}
+      >
+        <div className="relative w-[200px] shrink-0 overflow-hidden rounded-lg">
+          <Poster src={video.thumbnail} seed={video.id} ratio="landscape" className="rounded-lg">
+            {progress !== null && <PosterProgress value={progress} />}
+          </Poster>
+          <div className="absolute inset-0 flex items-center justify-center bg-canvas/40 opacity-0 transition-opacity group-hover:opacity-100">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-ink text-canvas">
+              <Play size={18} fill="currentColor" className="ml-0.5" />
+            </span>
+          </div>
+          {video.episode != null && (
+            <span className="absolute left-1.5 top-1.5 rounded-md bg-canvas/95 px-1.5 py-0.5 text-[11px] font-semibold text-ink">
+              {video.episode}
             </span>
           )}
         </div>
-        {metaLine && <span className="text-[12px] text-ink-subtle">{metaLine}</span>}
-        {video.overview && (
-          <p className="line-clamp-2 text-[13.5px] leading-relaxed text-ink-muted">
-            {video.overview}
-          </p>
-        )}
-      </div>
-    </button>
+        <div className="flex min-w-0 flex-col gap-1.5 py-1">
+          <div className="flex items-center gap-2.5">
+            <span className="truncate text-[16px] font-semibold text-ink">
+              {video.title ?? video.id}
+            </span>
+            {upcoming && (
+              <span className="rounded-[5px] border border-edge-soft bg-elevated/40 px-1.5 text-[9px] font-bold uppercase tracking-[0.14em] text-ink-subtle">
+                Upcoming
+              </span>
+            )}
+          </div>
+          {metaLine && <span className="text-[12px] text-ink-subtle">{metaLine}</span>}
+          {video.overview && (
+            <p className="line-clamp-2 text-[13.5px] leading-relaxed text-ink-muted">
+              {video.overview}
+            </p>
+          )}
+        </div>
+      </button>
+      {/* The watched mark: always shown once set, on hover (or focus) before. An
+          episode not out yet can't be marked (its release date would become the
+          title's "last watched"), only unmarked. */}
+      {upcoming && !watched ? (
+        <span aria-hidden className="w-10 shrink-0" />
+      ) : (
+        <button
+          onClick={() => onMark(!watched)}
+          disabled={busy}
+          aria-label={`${watched ? "Mark unwatched" : "Mark watched"}: ${video.title ?? video.id}`}
+          title={watched ? "Watched — mark unwatched" : "Mark watched"}
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-[opacity,background-color,color] disabled:cursor-progress ${
+            watched
+              ? "border-accent/50 bg-accent/15 text-accent hover:bg-accent/25"
+              : `border-edge-soft text-ink-muted opacity-0 hover:border-edge hover:text-ink focus-visible:opacity-100 group-hover/episode:opacity-100 ${NO_HOVER_SHOW}`
+          }`}
+        >
+          <Check size={17} strokeWidth={2.6} />
+        </button>
+      )}
+    </div>
   );
 }
 

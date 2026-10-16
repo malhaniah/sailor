@@ -63,7 +63,7 @@ Adapted files:
 - `src/pages/player/surface-sync.ts` — re-asserting the video surface on a kick
   schedule after fullscreen and window changes
 - `src/index.css`, `src/lib/theme.ts` — design tokens and theme presets
-- `src/lib/view.tsx`, `src/components/{ui,cards,Row,Hero,Poster,GenreTiles}.tsx`,
+- `src/lib/view.tsx`, `src/components/{ui,cards,Row,Hero,Poster,GenreTiles,LibraryCard}.tsx`,
   `src/views/{Discover,Filter}.tsx` — navigation model and UI recipes
 
 ```text

@@ -1,19 +1,34 @@
-import { ChevronDown, ChevronLeft, ExternalLink, Play } from "lucide-react";
+import { ChevronDown, ChevronLeft, ExternalLink, Play, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AddonLogo } from "../components/cards";
 import { fallbackGradient } from "../components/Poster";
 import { Badge, EmptyState, Modal } from "../components/ui";
 import { errorMessage, streamsGet } from "../lib/ipc";
-import { launchForStream, openPlayer, subscribeLaunchFailures } from "../lib/playback-handoff";
+import { formatClock, useLibraryItem } from "../lib/library";
+import type { ResumePoint, VideoRef } from "../lib/library-ipc";
+import {
+  type PlayerLaunch,
+  launchForStream,
+  openPlayer,
+  playerActive,
+  subscribeLaunchFailures,
+} from "../lib/playback-handoff";
+import { useSearch } from "../lib/store";
 import { useView } from "../lib/view";
 import type { AddonStreams, MetaItem, Stream, Video } from "../lib/types";
 
 type Row = { stream: Stream; addonName: string; transportUrl: string; key: string };
 
 /** Only streams that leave the app (YouTube, external links) can fail here; everything
- * else plays on the Player screen, which reports failures back (`subscribeLaunchFailures`). */
-type Phase = { kind: "idle" } | { kind: "error"; message: string };
+ * else plays on the Player screen, which reports failures back (`subscribeLaunchFailures`).
+ * `resume` asks where to start a launch whose video has a resume point. */
+type Phase =
+  | { kind: "idle" }
+  | { kind: "error"; message: string }
+  | { kind: "resume"; launch: PlayerLaunch; rowKey: string; resume: ResumePoint };
+
+const NO_VIDEOS: VideoRef[] = [];
 
 export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video | null }) {
   const { goBack } = useView();
@@ -26,6 +41,10 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
   const [filter, setFilter] = useState<string | null>(null); // transportUrl or null = all
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [failed, setFailed] = useState<Set<string>>(new Set());
+  // where the library says this video stopped (live TV is never tracked)
+  const { detail } = useLibraryItem(live ? null : meta.id, NO_VIDEOS);
+  const resume =
+    detail?.entry.resume && detail.entry.resume.videoId === videoId ? detail.entry.resume : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -106,7 +125,11 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
     const { stream } = row;
     const launch = launchFor(row);
     if (launch) {
-      opened.current.set(openPlayer({ ...launch, backend }), row.key);
+      if (resume) {
+        setPhase({ kind: "resume", launch: { ...launch, backend }, rowKey: row.key, resume });
+      } else {
+        start({ ...launch, backend }, row.key);
+      }
       return;
     }
     try {
@@ -121,6 +144,12 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
       setFailed((prev) => new Set(prev).add(row.key));
       setPhase({ kind: "error", message: errorMessage(e) });
     }
+  }
+
+  /** Opens the Player for `launch` (remembering which row it came from). */
+  function start(launch: PlayerLaunch, rowKey: string) {
+    setPhase({ kind: "idle" });
+    opened.current.set(openPlayer(launch), rowKey);
   }
 
   const backdrop = video?.thumbnail ?? meta.background ?? meta.poster;
@@ -230,7 +259,71 @@ export function PlayPickerView({ meta, video }: { meta: MetaItem; video: Video |
           <p className="text-[13.5px] leading-relaxed text-ink">{phase.message}</p>
         </Modal>
       )}
+      {phase.kind === "resume" && (
+        <ResumePrompt
+          resume={phase.resume}
+          onResume={() =>
+            start({ ...phase.launch, startAtSec: phase.resume.timeOffset / 1000 }, phase.rowKey)
+          }
+          onStartOver={() => start({ ...phase.launch, startAtSec: null }, phase.rowKey)}
+          onClose={() => setPhase({ kind: "idle" })}
+        />
+      )}
     </main>
+  );
+}
+
+/** "Resume from 12:34" or start over, before a video with a resume point plays. */
+function ResumePrompt({
+  resume,
+  onResume,
+  onStartOver,
+  onClose,
+}: {
+  resume: ResumePoint;
+  onResume: () => void;
+  onStartOver: () => void;
+  onClose: () => void;
+}) {
+  const at = formatClock(resume.timeOffset);
+  const { open: searchOpen } = useSearch();
+  // Escape closes the prompt only, not the picker under it (the view stack listens on
+  // the window too, after this capture-phase listener). Not while the search sits on
+  // top, nor while the Player screen is up (this shell is hidden under it then).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || searchOpen || playerActive()) return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose, searchOpen]);
+
+  return (
+    <Modal title="Pick up where you left off?" onClose={onClose}>
+      <p className="text-[13.5px] leading-relaxed text-ink-muted">
+        You stopped at {at}
+        {resume.duration > resume.timeOffset ? ` of ${formatClock(resume.duration)}` : ""}.
+      </p>
+      <div className="mt-6 flex flex-col gap-2.5">
+        <button
+          autoFocus
+          onClick={onResume}
+          className="flex h-12 items-center justify-center gap-2 rounded-xl bg-ink px-6 text-[13.5px] font-semibold text-canvas transition-transform hover:scale-[1.02] active:scale-[0.97]"
+        >
+          <Play size={16} fill="currentColor" />
+          Resume from {at}
+        </button>
+        <button
+          onClick={onStartOver}
+          className="flex h-11 items-center justify-center gap-2 rounded-xl border border-edge-soft px-4 text-[13px] font-medium text-ink-muted transition-colors hover:border-edge hover:text-ink"
+        >
+          <RotateCcw size={15} />
+          Start from the beginning
+        </button>
+      </div>
+    </Modal>
   );
 }
 

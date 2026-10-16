@@ -313,6 +313,14 @@ exchange items with Stremio's own apps without loss or surprises.
   context arrives as plain JSON and is read inside the command, so a malformed one
   costs only the library entry, never the playback. A failed write is retried once,
   and a session's batches count as its first until one is saved.
+- **In the UI** (`src/lib/library.tsx`). The UI never computes library state: it reads
+  views from Rust and re-reads them on `library://changed`. `LibraryProvider` keeps
+  Continue Watching (the Home row and the progress bars on posters); hooks read one
+  view (the Library page's Continue Watching / Library / History tabs, the library
+  tab in stremio-core's sorts) or one title with its episodes' watched marks (Detail,
+  the stream picker). A Continue Watching card resumes: the stream picker for the
+  video it stopped at. When the picked video has a resume point, the picker asks
+  "Resume from 12:34" or start over before it opens the Player (`startAtSec`).
 
 ## Player backends
 
