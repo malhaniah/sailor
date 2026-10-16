@@ -95,17 +95,46 @@ pub(crate) struct Flush {
     pub finish: bool,
 }
 
+/// Tells a playback's own file from another one opened in the same player
+/// (drag-and-drop, the user's own bindings in external mpv): a `start-file` after the
+/// file this playback loaded started is another file, unless the file before it ended
+/// in a redirect (a playlist URL resolving to its entry is still this playback).
+/// The tracker ends there, and the shell treats it as a new file (`commands::mpv`).
+#[derive(Debug, Default)]
+pub(crate) struct OwnFile {
+    /// This playback's file started.
+    started: bool,
+    /// Why the last file ended (`end-file`'s reason).
+    last_end: Option<&'static str>,
+}
+
+impl OwnFile {
+    /// Take one player event; true when it is the `start-file` of another file.
+    pub(crate) fn another_file(&mut self, event: &PlayerEvent) -> bool {
+        match event {
+            PlayerEvent::StartFile => {
+                if self.started && self.last_end != Some("redirect") {
+                    return true;
+                }
+                self.started = true;
+            }
+            // (a missed start-file)
+            PlayerEvent::FileLoaded => self.started = true,
+            PlayerEvent::EndFile { reason, .. } => self.last_end = Some(*reason),
+            _ => {}
+        }
+        false
+    }
+}
+
 /// Turns one session's player events into [`Flush`]es. Pure: the caller passes the
 /// time in.
 #[derive(Debug)]
 pub(crate) struct Tracker {
     /// A file has started: positions from now on are this file's.
     armed: bool,
-    /// This playback's file started (a later `start-file` is another file, unless the
-    /// file before it ended in a redirect).
-    file_started: bool,
-    /// Why the last file ended (`end-file`'s reason).
-    last_end: Option<&'static str>,
+    /// Which `start-file` is another file.
+    own: OwnFile,
     closed: bool,
     /// A batch with reports went out (later batches are not `first`).
     started: bool,
@@ -124,8 +153,7 @@ impl Default for Tracker {
     fn default() -> Self {
         Self {
             armed: false,
-            file_started: false,
-            last_end: None,
+            own: OwnFile::default(),
             closed: false,
             started: false,
             seek_pending: false,
@@ -153,14 +181,13 @@ impl Tracker {
         if self.closed {
             return None;
         }
+        if self.own.another_file(event) {
+            // another file in the same player (drag-and-drop, the user's own
+            // bindings in external mpv): this playback is over
+            return self.close();
+        }
         match event {
             PlayerEvent::StartFile => {
-                if self.file_started && self.last_end != Some("redirect") {
-                    // another file in the same player (drag-and-drop, the user's own
-                    // bindings in external mpv): this playback is over
-                    return self.close();
-                }
-                self.file_started = true;
                 self.armed = true;
                 self.last = None;
                 self.duration = 0;
@@ -170,10 +197,7 @@ impl Tracker {
             }
             PlayerEvent::FileLoaded => {
                 // (a missed start-file)
-                if !self.file_started {
-                    self.file_started = true;
-                    self.armed = true;
-                }
+                self.armed = true;
                 self.last_flush.get_or_insert(now);
                 None
             }
@@ -181,10 +205,7 @@ impl Tracker {
                 self.seek_pending = true;
                 None
             }
-            PlayerEvent::EndFile { reason, .. } => {
-                self.last_end = Some(*reason);
-                self.flush(now)
-            }
+            PlayerEvent::EndFile { .. } => self.flush(now),
             PlayerEvent::Shutdown => self.close(),
             PlayerEvent::Property { name, value } => match name.as_str() {
                 "time-pos" => self.position(value, now),
@@ -1065,6 +1086,77 @@ mod tests {
             last.ops[..],
             [Op::Seek { .. }, Op::Progress { time: 2_000, .. }]
         ));
+    }
+
+    /// The rule the tracker and the shell's subtitle adds share: which `start-file` is
+    /// another file than the one the playback loaded.
+    #[test]
+    fn only_a_start_file_after_the_own_file_started_is_another_file() {
+        let end = |reason| PlayerEvent::EndFile {
+            reason,
+            file_error: None,
+        };
+        let run = |events: Vec<PlayerEvent>| {
+            let mut own = OwnFile::default();
+            events
+                .iter()
+                .map(|e| own.another_file(e))
+                .collect::<Vec<_>>()
+        };
+
+        // the launched file's own start-file, and its own events after it
+        assert_eq!(
+            run(vec![
+                PlayerEvent::StartFile,
+                PlayerEvent::FileLoaded,
+                pos(1.0),
+                PlayerEvent::Seek,
+            ]),
+            [false; 4]
+        );
+        // an end-file before the first start-file (the file before a player_load) is
+        // not this playback's
+        assert_eq!(
+            run(vec![end("stop"), PlayerEvent::StartFile]),
+            [false, false]
+        );
+        // after the own file ended, however it ended, a start-file is another file; and
+        // so is each one after that
+        for reason in ["eof", "stop", "quit", "error", "unknown"] {
+            assert_eq!(
+                run(vec![
+                    PlayerEvent::StartFile,
+                    end(reason),
+                    PlayerEvent::StartFile,
+                    end("eof"),
+                    PlayerEvent::StartFile,
+                ]),
+                [false, false, true, false, true],
+                "{reason}"
+            );
+        }
+        // a redirect is still this playback, and so is a redirect of another file
+        assert_eq!(
+            run(vec![
+                PlayerEvent::StartFile,
+                end("redirect"),
+                PlayerEvent::StartFile,
+                end("stop"),
+                PlayerEvent::StartFile,
+                end("redirect"),
+                PlayerEvent::StartFile,
+            ]),
+            [false, false, false, false, true, false, false]
+        );
+        // a missed start-file: file-loaded says the own file started
+        assert_eq!(
+            run(vec![
+                PlayerEvent::FileLoaded,
+                end("stop"),
+                PlayerEvent::StartFile
+            ]),
+            [false, false, true]
+        );
     }
 
     /// External mpv plays on after Back, so the user can dismiss the title from Continue
