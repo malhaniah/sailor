@@ -18,6 +18,8 @@ allow = [
   "CDLA-Permissive-2.0",
   "OpenSSL",
   "Unlicense",
+  # libmpv2 / libmpv2-sys (the embedded player's libmpv bindings, `embedded` feature)
+  "LGPL-2.1",
 ]
 
 [[licenses.clarify]]

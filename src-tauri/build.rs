@@ -3,7 +3,7 @@ fn main() {
     // `scripts/fetch-libmpv.mjs` populates src-tauri/libmpv/ (hash-pinned DLL +
     // mpv.lib generated from mpv.def). libmpv-2.dll is linked DELAYLOAD so the
     // app still starts when the DLL is missing — the runtime probes for it and
-    // falls back to the external mpv backend (see commands/mpv.rs).
+    // falls back to the external mpv backend (see commands/mpv/windows.rs).
     #[cfg(windows)]
     if std::env::var_os("CARGO_FEATURE_EMBEDDED").is_some() {
         let libmpv = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("libmpv");
@@ -37,21 +37,23 @@ fn main() {
     }
 
     // tauri.embedded.conf.json (passed via --config for embedded builds) maps
-    // libmpv/libmpv-2.dll into the bundle, and tauri_build refuses to compile
-    // when a mapped resource is missing. Drop in a placeholder so such builds
-    // compile before `node scripts/fetch-libmpv.mjs` has run (the script
-    // replaces it; the runtime probe rejects it via LoadLibrary).
+    // libmpv/libmpv-2.dll and libmpv/NOTICE.txt into the bundle, and tauri_build
+    // refuses to compile when a mapped resource is missing. Drop in placeholders
+    // so such builds compile before `node scripts/fetch-libmpv.mjs` has run (the
+    // script replaces both — a NOTICE.txt without the pinned hash does not count
+    // as vendored; the runtime probe rejects the DLL via LoadLibrary).
     #[cfg(windows)]
     {
-        let dll = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("libmpv")
-            .join("libmpv-2.dll");
-        if !dll.exists() {
-            let _ = std::fs::create_dir_all(dll.parent().unwrap());
-            let _ = std::fs::write(
-                &dll,
-                "placeholder - run `node scripts/fetch-libmpv.mjs` to vendor the real libmpv\n",
-            );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("libmpv");
+        for file in ["libmpv-2.dll", "NOTICE.txt"] {
+            let path = dir.join(file);
+            if !path.exists() {
+                let _ = std::fs::create_dir_all(&dir);
+                let _ = std::fs::write(
+                    &path,
+                    "placeholder - run `node scripts/fetch-libmpv.mjs` to vendor the real libmpv\n",
+                );
+            }
         }
     }
 

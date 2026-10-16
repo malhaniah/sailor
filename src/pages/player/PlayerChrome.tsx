@@ -1,8 +1,13 @@
 /**
  * The embedded player's screen — everything drawn above the video: status overlays, the
  * top bar and the control bar, plus the keyboard shortcuts (usePlayerControls.ts). The
- * page is transparent and `videoRef` marks the region the native mpv window is glued
- * to. Also drawn while the backend is still unknown (the first moments of loading).
+ * page is transparent while the built-in video runs (`videoBehind`) and `videoRef`
+ * marks the region the native mpv window is glued to. Also drawn while the backend is
+ * still unknown (the first moments of loading), then on an opaque background.
+ *
+ * Fullscreen here is the Zeiler window's own (OS) fullscreen, so nothing else ends
+ * it: Escape leaves fullscreen first and only then the player, and leaving the
+ * screen any other way (Back, history) ends fullscreen too.
  * External mpv has its own screen, ExternalRemote.tsx, built from the same parts.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -18,6 +23,7 @@ import { usePlayerControls, usePlayerKeys } from "./usePlayerControls";
 export function PlayerChrome({
   phase,
   backend,
+  videoBehind,
   mpv,
   clock,
   notice,
@@ -25,11 +31,14 @@ export function PlayerChrome({
   title,
   infoHash,
   videoRef,
+  onWindowChanged,
   onLeave,
   onPlayAgain,
 }: {
   phase: Phase;
   backend: Backend;
+  /** the built-in video is running behind the page (see usePlaybackSession) */
+  videoBehind: boolean;
   mpv: MpvState;
   clock: PlaybackClock;
   notice: string | null;
@@ -37,6 +46,8 @@ export function PlayerChrome({
   title: string;
   infoHash: string | null;
   videoRef: React.RefObject<HTMLDivElement | null>;
+  /** the page changed the window itself (fullscreen): re-assert the video surface */
+  onWindowChanged: () => void;
   onLeave: () => void;
   onPlayAgain: () => void;
 }) {
@@ -69,21 +80,47 @@ export function PlayerChrome({
   const toggleFullscreen = useCallback(async () => {
     const w = getCurrentWindow();
     await w.setFullscreen(!(await w.isFullscreen())).catch(() => undefined);
-  }, []);
+    onWindowChanged();
+  }, [onWindowChanged]);
   const onFullscreen = useCallback(() => void toggleFullscreen(), [toggleFullscreen]);
+
+  // Escape is also how people leave fullscreen: do that first, and leave the player
+  // only when the window is not fullscreen
+  const onEscape = useCallback(async () => {
+    const w = getCurrentWindow();
+    if (await w.isFullscreen().catch(() => false)) {
+      await w.setFullscreen(false).catch(() => undefined);
+      onWindowChanged();
+    } else {
+      onLeave();
+    }
+  }, [onWindowChanged, onLeave]);
+  const onEscapeKey = useCallback(() => void onEscape(), [onEscape]);
+
+  // the rest of the app has no way out of fullscreen: never leave it fullscreen
+  useEffect(
+    () => () => {
+      const w = getCurrentWindow();
+      void w
+        .isFullscreen()
+        .then((fullscreen) => (fullscreen ? w.setFullscreen(false) : undefined))
+        .catch(() => undefined);
+    },
+    [],
+  );
 
   usePlayerKeys({
     controls: embedded && controllable ? controls : null,
     onFullscreen,
-    onBack: onLeave,
+    onBack: onEscapeKey,
   });
 
   return (
     <div
       className="fixed inset-0 overflow-hidden"
       style={{
-        // only the embedded backend has a native video behind the page
-        background: embedded ? "transparent" : "var(--color-canvas)",
+        // only a running built-in video is behind the page (not the early guess)
+        background: videoBehind ? "transparent" : "var(--color-canvas)",
         cursor: controlsShown ? "default" : "none",
       }}
       onMouseMove={poke}

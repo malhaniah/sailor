@@ -66,12 +66,17 @@ export const playerStart = (request: PlaybackRequest, backend: PlayerBackend = "
   invoke<StartResult>("player_start", { request, backend });
 /** Load another file into the running player (same window, same backend). */
 export const playerLoad = (request: PlaybackRequest) => invoke<void>("player_load", { request });
-/** Stop whatever is playing, on any backend. */
 /** Stop the player; with `only`, just a session on that backend (none = any backend). */
 export const playerStop = (only?: ActiveBackend) =>
   invoke<void>("player_stop", only ? { only } : {});
 export const playerSetGeometry = (geometry: Geometry) =>
   invoke<void>("player_set_geometry", { geometry });
+/**
+ * Re-assert the built-in video surface after a window change (Windows: transparent
+ * webview, video window pinned under it, keyboard focus). A no-op when no built-in
+ * video plays.
+ */
+export const playerSurfaceRefresh = () => invoke<void>("player_surface_refresh");
 /** Set an allow-listed property (Rust validates name and value). */
 export const playerSetProperty = (name: string, value: boolean | number | string) =>
   invoke<void>("player_set_property", { name, value });

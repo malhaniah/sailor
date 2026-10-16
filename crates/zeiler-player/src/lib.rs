@@ -301,6 +301,35 @@ fn embedded_error(error: embedded::EmbeddedError) -> SessionError {
     }
 }
 
+/// The per-stream HTTP header lines of a request, as both backends append them to
+/// mpv's `http-header-fields` (cleared before every load): the request's headers, then
+/// its referrer as a `Referer` header unless the headers already carry one.
+///
+/// The referrer travels as a header rather than mpv's `referrer` option because that
+/// option, once set, can only be set to an empty string again — and mpv then sends an
+/// empty `Referer:` with every later stream. A header in the list is gone with the
+/// next `clr`. This is right only while the `referrer` option is unset: mpv sends the
+/// option as its own `Referer` line ahead of the list, so the external backend, which
+/// keeps the user's mpv config, sets the option per load instead when that config has
+/// a referrer (`external_ipc::load_commands`). The embedded core never reads a config.
+pub(crate) fn header_lines(request: &PlaybackRequest) -> Vec<String> {
+    let mut lines: Vec<String> = request
+        .headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}"))
+        .collect();
+    let has_referer = request
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("referer"));
+    if let Some(referrer) = request.referrer.as_deref().filter(|r| !r.is_empty())
+        && !has_referer
+    {
+        lines.push(format!("Referer: {referrer}"));
+    }
+    lines
+}
+
 /// Build the mpv CLI arguments for a request. The URL itself is NOT part of the argv —
 /// it is fed through stdin (`--playlist=-`) so loopback stream URLs carrying per-run
 /// credentials never show up in the process list. Each header goes through
@@ -491,6 +520,27 @@ mod tests {
         assert!(args.contains(&"--start=42.5".to_string()));
         // the URL (and its credentials) must never be an argument
         assert!(args.iter().all(|a| !a.contains("secret")));
+    }
+
+    #[test]
+    fn the_referrer_travels_as_a_header() {
+        let mut request = PlaybackRequest {
+            headers: vec![("X-A".into(), "1, 2".into())],
+            referrer: Some("https://site.example/".into()),
+            ..PlaybackRequest::default()
+        };
+        assert_eq!(
+            header_lines(&request),
+            vec!["X-A: 1, 2", "Referer: https://site.example/"]
+        );
+        // an explicit Referer header wins; an empty referrer adds nothing
+        request
+            .headers
+            .push(("referer".into(), "https://other.example/".into()));
+        assert_eq!(header_lines(&request).len(), 2);
+        request.headers.clear();
+        request.referrer = Some(String::new());
+        assert!(header_lines(&request).is_empty());
     }
 
     #[test]

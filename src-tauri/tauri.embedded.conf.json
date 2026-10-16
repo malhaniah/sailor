@@ -5,7 +5,9 @@
   },
   "bundle": {
     "resources": {
-      "libmpv/libmpv-2.dll": "libmpv-2.dll"
+      "libmpv/libmpv-2.dll": "libmpv-2.dll",
+      "libmpv/NOTICE.txt": "licenses/libmpv-NOTICE.txt",
+      "licenses/LGPL-2.1.txt": "licenses/LGPL-2.1.txt"
     }
   }
 }

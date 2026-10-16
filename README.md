@@ -9,7 +9,7 @@ Zeiler is a self-contained media client that speaks the open [Stremio addon prot
 
 ## What it is
 
-- **Self-contained** — a built-in torrent streaming engine and mpv playback; no external streaming server, no browser, no Node runtime required.
+- **Self-contained** — a built-in torrent streaming engine and mpv-based playback (built into the window on Windows); no external streaming server, no browser, no Node runtime required.
 - **Bring your own addons** — paste any addon manifest URL. Zeiler ships no stream or content addon and endorses none. For browsing out of the box, the Cinemeta *metadata* addon (catalogs, details, episode lists; no streams) is built in and can be turned off in Settings.
 - **Updates itself** — signed updates install automatically the next time you open Zeiler.
 - **Rust core** — the addon protocol client, streaming engine, and playback orchestration are Rust crates; the UI is a thin TypeScript layer in a Tauri 2 shell.
@@ -17,19 +17,22 @@ Zeiler is a self-contained media client that speaks the open [Stremio addon prot
 
 ## Status
 
-Early development (v0.1 milestone): addon install/manage, catalog browsing, search,
-metadata/episodes, stream fan-out, built-in torrent engine, and playback through an
-external mpv. Embedded libmpv playback (video inside the app window) is the next milestone.
+Early development: addon install/manage, catalog browsing, search, metadata/episodes,
+stream fan-out, a built-in torrent engine, and Zeiler's own player screen. On Windows,
+videos play inside the Zeiler window (built-in libmpv). On macOS and Linux they play in an
+mpv window that Zeiler controls with the same full set of controls; built-in playback for
+macOS comes next.
 
 ## Install
 
 Grab the latest build from the [Releases page](https://github.com/malhaniah/zeiler/releases).
-Playback needs [mpv](https://mpv.io) installed (Zeiler finds it automatically in the usual
-places, or you can set its path in Settings).
+On Windows, playback is built in. On macOS and Linux, playback needs
+[mpv](https://mpv.io) installed (Zeiler finds it automatically in the usual places, or you
+can set its path in Settings).
 
 | Platform | Download | mpv |
 | --- | --- | --- |
-| Windows 10/11 | `Zeiler_*_x64-setup.exe` (per-user, no admin) | `winget install shinchiro.mpv` |
+| Windows 10/11 | `Zeiler_*_x64-setup.exe` (per-user, no admin) | not needed — optional, for playing in your own mpv window: `winget install shinchiro.mpv` |
 | macOS 12+ (Apple Silicon) | `Zeiler_*_aarch64.dmg` | `brew install mpv` |
 | macOS 12+ (Intel) | `Zeiler_*_x64.dmg` | `brew install mpv` |
 | Debian / Ubuntu | `Zeiler_*_amd64.deb` | pulled in automatically |
@@ -51,7 +54,7 @@ removes Sailor. On macOS the updated app keeps its old name in Applications: ren
 | --- | --- |
 | `crates/zeiler-addon` | Stremio addon-protocol client (manifests, catalogs, meta, streams, subtitles) |
 | `crates/zeiler-engine` | Built-in BitTorrent streaming engine (librqbit) exposing local HTTP streams |
-| `crates/zeiler-player` | Playback: external mpv now, embedded libmpv in progress |
+| `crates/zeiler-player` | Playback: embedded libmpv (Windows), or the user's mpv remote-controlled over JSON IPC |
 | `src-tauri` | Tauri 2 shell wiring the core to the UI |
 | `src/` | TypeScript/React frontend |
 
@@ -66,7 +69,9 @@ npm install
 npm run tauri dev
 ```
 
-Release bundles: `npm run tauri build`. Architecture notes live in
+Built-in playback on Windows is the `embedded` cargo feature and needs the pinned libmpv
+first — see [CONTRIBUTING.md](CONTRIBUTING.md#built-in-playback-windows). Release bundles:
+`npm run tauri build`. Architecture notes live in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); third-party attribution in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 

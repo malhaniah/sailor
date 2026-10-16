@@ -39,7 +39,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     OBSERVED, PlaybackRequest, PlayerEvent, SessionError, TIME_POS_THROTTLE, end_file_reason_name,
-    normalize, property_kind, redact_url,
+    header_lines, normalize, property_kind, redact_url,
 };
 
 /// Where the events go (the shell forwards them as `player://event`). Called from
@@ -102,6 +102,7 @@ pub struct ExternalIpcPlayer {
 #[derive(Debug, Default)]
 struct Defaults {
     user_agent: String,
+    /// The `referrer` option from the user's config ("" when unset).
     referrer: String,
     headers: Vec<String>,
 }
@@ -250,6 +251,21 @@ impl Drop for ExternalIpcPlayer {
     }
 }
 
+/// The request's own referrer: its `referrer`, else a `Referer` among its headers.
+fn stream_referrer(request: &PlaybackRequest) -> Option<&str> {
+    request
+        .referrer
+        .as_deref()
+        .filter(|r| !r.is_empty())
+        .or_else(|| {
+            request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("referer"))
+                .map(|(_, value)| value.as_str())
+        })
+}
+
 /// The commands that load `request`, in order.
 fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<Vec<Value>> {
     let mut commands = vec![vec![
@@ -258,12 +274,25 @@ fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<Vec<Valu
         json!("clr"),
         json!(""),
     ]];
+    // mpv sends its `referrer` option as a `Referer` header ahead of every
+    // http-header-fields line. With no referrer in the user's config the option stays
+    // unset and the stream's referrer is one of the lines (see `header_lines`). When
+    // the user's config sets one, a second Referer line would follow theirs, so the
+    // stream's referrer replaces the option for this load instead (and the user's
+    // value comes back with the next load that has none).
+    let user_referrer = !defaults.referrer.is_empty();
+    let lines = if user_referrer {
+        request
+            .headers
+            .iter()
+            .filter(|(name, _)| !name.eq_ignore_ascii_case("referer"))
+            .map(|(name, value)| format!("{name}: {value}"))
+            .collect()
+    } else {
+        header_lines(request)
+    };
     // change-list append (not set): commas in values cannot split the list
-    let headers = request
-        .headers
-        .iter()
-        .map(|(name, value)| format!("{name}: {value}"));
-    for header in defaults.headers.iter().cloned().chain(headers) {
+    for header in defaults.headers.iter().cloned().chain(lines) {
         commands.push(vec![
             json!("change-list"),
             json!("http-header-fields"),
@@ -281,10 +310,12 @@ fn load_commands(request: &PlaybackRequest, defaults: &Defaults) -> Vec<Vec<Valu
                 .unwrap_or(&defaults.user_agent)
         ),
     ));
-    commands.push(set(
-        "referrer",
-        json!(request.referrer.as_deref().unwrap_or(&defaults.referrer)),
-    ));
+    if user_referrer {
+        commands.push(set(
+            "referrer",
+            json!(stream_referrer(request).unwrap_or(&defaults.referrer)),
+        ));
+    }
     // `start` rather than loadfile's per-file options: their syntax changed across
     // mpv versions (the playlist index argument), the property did not
     commands.push(set(
@@ -1150,8 +1181,8 @@ mod tests {
                 r#"["change-list","http-header-fields","clr",""]"#,
                 r#"["change-list","http-header-fields","append","X-User: 1"]"#,
                 r#"["change-list","http-header-fields","append","Authorization: Bearer a,b"]"#,
+                r#"["change-list","http-header-fields","append","Referer: https://site.example"]"#,
                 r#"["set_property","user-agent","mpv/0.37"]"#,
-                r#"["set_property","referrer","https://site.example"]"#,
                 r#"["set_property","start","90"]"#,
                 r#"["set_property","force-media-title","Film"]"#,
                 r#"["set_property","alang","en"]"#,
@@ -1168,5 +1199,63 @@ mod tests {
             &Defaults::default(),
         );
         assert!(plain.contains(&vec![json!("set_property"), json!("start"), json!("none")]));
+        assert!(
+            !plain.iter().any(|c| c.get(1) == Some(&json!("referrer"))),
+            "no referrer in the user's config: the option is never touched"
+        );
+    }
+
+    #[test]
+    fn user_referrer_is_replaced_not_doubled() {
+        // mpv.conf has referrer=…: mpv sends it as a Referer header before the
+        // http-header-fields lines, so a stream's referrer must replace the option
+        let defaults = Defaults {
+            user_agent: "mpv/0.37".into(),
+            referrer: "https://user.example/".into(),
+            headers: Vec::new(),
+        };
+        let lines = |request: &PlaybackRequest| -> Vec<String> {
+            load_commands(request, &defaults)
+                .iter()
+                .map(|c| Value::Array(c.clone()).to_string())
+                .collect()
+        };
+        let referrer_set = |value: &str| format!(r#"["set_property","referrer","{value}"]"#);
+
+        let with_own = lines(&PlaybackRequest {
+            url: "https://cdn.example/v.mkv".into(),
+            referrer: Some("https://cdn-site.example/".into()),
+            ..PlaybackRequest::default()
+        });
+        assert!(with_own.contains(&referrer_set("https://cdn-site.example/")));
+        assert!(
+            !with_own.iter().any(|l| l.contains("Referer:")),
+            "{with_own:?}"
+        );
+
+        // a Referer among the request's headers counts as its referrer too
+        let in_headers = lines(&PlaybackRequest {
+            url: "https://cdn.example/v.mkv".into(),
+            headers: vec![
+                ("referer".into(), "https://hdr.example/".into()),
+                ("X-A".into(), "1".into()),
+            ],
+            ..PlaybackRequest::default()
+        });
+        assert!(in_headers.contains(&referrer_set("https://hdr.example/")));
+        assert!(
+            !in_headers
+                .iter()
+                .any(|l| l.to_ascii_lowercase().contains("referer:"))
+        );
+        assert!(in_headers.iter().any(|l| l.contains("X-A: 1")));
+
+        // the next load without one gets the user's value back
+        let without = lines(&PlaybackRequest {
+            url: "https://host/v.mkv".into(),
+            ..PlaybackRequest::default()
+        });
+        assert!(without.contains(&referrer_set("https://user.example/")));
+        assert!(!without.iter().any(|l| l.contains("Referer:")));
     }
 }

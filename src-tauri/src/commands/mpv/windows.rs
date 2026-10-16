@@ -2,15 +2,36 @@
 //! window of the main Tauri window, pinned to the bottom of the z-order, while the
 //! WebView2 on top gets a fully transparent default background — so the React UI
 //! draws over the video wherever it paints, and the video shows through wherever it
-//! doesn't. Windows wiring adapted from Harbor (github.com/harborstremio/harbor,
-//! MIT); see THIRD-PARTY-NOTICES.md.
+//! doesn't.
+//!
+//! Adapted from Harbor (github.com/harborstremio/harbor), Copyright (c) 2026
+//! Harbor, MIT License — the child-window pinning (`mpv_force_below`), the WebView2
+//! transparency re-apply (`webview_reapply_transparency`) and the refresh-after-
+//! fullscreen idea; the MIT notice is in THIRD-PARTY-NOTICES.md.
+//!
+//! **Transparency policy.** The webview is transparent only while built-in video
+//! plays: [`spawn_embedded`] (and every [`refresh_surface`]) makes the WebView2
+//! default background transparent, and [`on_stop`] restores WebView2's opaque
+//! default (white, as at startup). That white never shows: the page always paints its
+//! own background except while a built-in session runs — the player screen turns
+//! transparent only once `player_start` has answered "embedded" (`videoBehind` in
+//! `usePlaybackSession.ts`), and paints the app's canvas again when the session ends.
+//! Harbor instead makes the main webview transparent once at setup; Zeiler keeps the
+//! rest of the app on the plain, well-trodden opaque path and confines the
+//! composition trick to playback.
+//!
+//! **Keeping the surface right.** WebView2 can lose the transparency and the child
+//! can lose its place at the bottom of the z-order after fullscreen, DPI or monitor
+//! changes and minimize/restore. The UI calls `player_surface_refresh` on a short
+//! kick schedule after those ([`refresh_surface`]: transparency again, child re-pinned
+//! with the last geometry, keyboard focus back on the webview). mpv's child window
+//! can also take the keyboard focus when it appears, so the first successful pin
+//! hands the focus back once ([`after_start`]). The hand-back focuses the WebView2
+//! itself (`MoveFocus`), and only while Zeiler is the foreground window ([`refocus`]).
 //!
 //! libmpv-2.dll is linked DELAYLOAD (see build.rs): when the DLL is absent at
 //! runtime, [`embedded_status`] reports it unavailable and `player_start` falls back
 //! to external mpv. Every libmpv call stays behind [`win32::ensure_libmpv`].
-//!
-//! Behaviour is unchanged from the single-file `commands/mpv.rs` it was split from;
-//! the hardening (VO fallback list, surface refresh) is a later milestone.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -18,7 +39,7 @@ use std::time::Duration;
 
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
-use zeiler_player::embedded::EmbeddedPlayer;
+use zeiler_player::embedded::{EmbeddedOptions, EmbeddedPlayer, Surface as VideoSurface};
 use zeiler_player::{PlayerEvent, Session};
 
 use super::{EmbeddedStatus, Geometry};
@@ -69,19 +90,52 @@ pub(super) fn spawn_embedded(
 ) -> Result<Session, String> {
     win32::ensure_libmpv()?;
     let (window, parent) = main_window_handle(app)?;
-    win32::set_webview_transparent(&window);
+    win32::set_webview_background(&window, Background::Transparent);
     // the previous core's child window dies with it
     *surface.inner.pinned.lock().unwrap() = None;
-    let player = EmbeddedPlayer::spawn(Some(parent as i64), events).map_err(|e| e.to_string())?;
-    Ok(Session::Embedded(player))
+    let options = EmbeddedOptions::new(VideoSurface::Wid(parent as i64));
+    match EmbeddedPlayer::spawn(options, events) {
+        Ok(player) => Ok(Session::Embedded(player)),
+        Err(e) => {
+            // nothing plays here after all (the caller falls back or fails)
+            win32::set_webview_background(&window, Background::Opaque);
+            Err(e.to_string())
+        }
+    }
+}
+
+/// The WebView2 default background (see the transparency policy in the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Background {
+    Transparent,
+    /// WebView2's own default, as at startup: opaque white.
+    Opaque,
+}
+
+/// Give the keyboard focus back to the webview — mpv's child window (or a
+/// fullscreen transition) may have taken it, which silences the player's shortcuts.
+/// This focuses the WebView2 itself (`Webview::set_focus` → `MoveFocus`); the
+/// window-level `set_focus` would only activate the top-level window, which is a
+/// no-op for the foreground window and never moves focus off a child. Only while
+/// Zeiler is the foreground window: a late pin or refresh must never pull focus from
+/// another app the user has moved to.
+fn refocus(window: &tauri::WebviewWindow, parent: isize) {
+    if !win32::is_foreground(parent) {
+        return;
+    }
+    let webview: &tauri::Webview = window.as_ref();
+    if let Err(e) = webview.set_focus() {
+        warn!("cannot focus the webview: {e}");
+    }
 }
 
 /// After the first load: mpv creates its child window asynchronously
 /// (force-window=immediate); poll briefly so it gets pinned below the webview before
-/// first paint.
+/// first paint, then hand the keyboard focus back to the webview once (the new
+/// child window may have taken it, which would silence the player's shortcuts).
 pub(super) fn after_start(app: &AppHandle, surface: &Surface) {
-    let parent = match main_window_handle(app) {
-        Ok((_, parent)) => parent,
+    let (window, parent) = match main_window_handle(app) {
+        Ok(found) => found,
         Err(e) => {
             warn!("cannot pin the mpv window: {e}");
             return;
@@ -96,6 +150,7 @@ pub(super) fn after_start(app: &AppHandle, surface: &Surface) {
             }
             if win32::sync_child(parent, &inner) {
                 info!("mpv child window pinned under the webview");
+                refocus(&window, parent);
                 return;
             }
             std::thread::sleep(Duration::from_millis(50));
@@ -104,11 +159,36 @@ pub(super) fn after_start(app: &AppHandle, surface: &Surface) {
     });
 }
 
-/// The embedded session was stopped: forget the window and the geometry.
-pub(super) fn on_stop(surface: &Surface) {
+/// No embedded session is left: forget the window and the geometry, and give the
+/// webview its opaque default background back.
+pub(super) fn on_stop(app: &AppHandle, surface: &Surface) {
     surface.inner.epoch.fetch_add(1, Ordering::SeqCst);
     *surface.inner.pinned.lock().unwrap() = None;
     *surface.inner.geometry.lock().unwrap() = None;
+    match main_window_handle(app) {
+        Ok((window, _)) => win32::set_webview_background(&window, Background::Opaque),
+        Err(e) => warn!("cannot restore the webview background: {e}"),
+    }
+}
+
+/// Re-assert the surface after a window change (fullscreen, resize, move, DPI):
+/// the transparent background, the child pinned at the bottom with the last
+/// geometry, and the keyboard focus on the webview. `active`: an embedded session
+/// is running (otherwise there is nothing to refresh, and the opaque background
+/// restored at stop must stay).
+pub(super) fn refresh_surface(
+    app: &AppHandle,
+    surface: &Surface,
+    active: bool,
+) -> Result<(), IpcError> {
+    if !active {
+        return Ok(());
+    }
+    let (window, parent) = main_window_handle(app).map_err(IpcError::Player)?;
+    win32::set_webview_background(&window, Background::Transparent);
+    win32::sync_child(parent, &surface.inner);
+    refocus(&window, parent);
+    Ok(())
 }
 
 /// Position the video child window. `active`: an embedded session is running
@@ -144,14 +224,14 @@ mod win32 {
     use ::windows::Win32::System::LibraryLoader::LoadLibraryW;
     use ::windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, GWL_EXSTYLE, GetClassNameW, GetClientRect, GetWindowLongW, HTTRANSPARENT,
-        HWND_BOTTOM, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-        SetWindowLongW, SetWindowPos, WM_NCHITTEST, WS_EX_TRANSPARENT,
+        EnumChildWindows, GWL_EXSTYLE, GetClassNameW, GetClientRect, GetForegroundWindow,
+        GetWindowLongW, HTTRANSPARENT, HWND_BOTTOM, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos, WM_NCHITTEST, WS_EX_TRANSPARENT,
     };
     use ::windows::core::{BOOL, HSTRING};
     use tracing::{debug, warn};
 
-    use super::Inner;
+    use super::{Background, Inner};
 
     /// Load libmpv-2.dll once (exe dir → dev vendor dir → default search
     /// order). The DLL import is DELAYLOAD, so pre-loading it here is what
@@ -183,32 +263,50 @@ mod win32 {
                 unsafe { LoadLibraryW(&HSTRING::from("libmpv-2.dll")) }
                     .map(|_| ())
                     .map_err(|e| {
-                        format!(
-                            "libmpv-2.dll could not be loaded ({e}); embedded playback is \
-                             unavailable. Run `node scripts/fetch-libmpv.mjs` and restart."
-                        )
+                        if cfg!(debug_assertions) {
+                            // development builds: point at the fix
+                            format!(
+                                "Built-in playback needs libmpv-2.dll, which could not be \
+                                 loaded ({e}). Run `node scripts/fetch-libmpv.mjs` and \
+                                 restart."
+                            )
+                        } else {
+                            "Built-in playback can't start because one of its files is \
+                             missing. Reinstalling Zeiler should fix it; until then videos \
+                             play in an mpv window."
+                                .to_string()
+                        }
                     })
             })
             .clone()
     }
 
-    /// Make the WebView2 compositor background fully transparent so the
-    /// video child window shows through wherever the page doesn't paint.
-    pub fn set_webview_transparent(window: &tauri::WebviewWindow) {
-        let result = window.with_webview(|webview| unsafe {
+    /// Set the WebView2 compositor's default background: fully transparent so the
+    /// video child window shows through wherever the page doesn't paint, or back to
+    /// WebView2's opaque white default.
+    pub fn set_webview_background(window: &tauri::WebviewWindow, background: Background) {
+        let result = window.with_webview(move |webview| unsafe {
             use ::windows::core::Interface;
             use webview2_com::Microsoft::Web::WebView2::Win32::{
                 COREWEBVIEW2_COLOR, ICoreWebView2Controller2,
             };
             match webview.controller().cast::<ICoreWebView2Controller2>() {
                 Ok(controller2) => {
-                    let transparent = COREWEBVIEW2_COLOR {
-                        A: 0,
-                        R: 0,
-                        G: 0,
-                        B: 0,
+                    let color = match background {
+                        Background::Transparent => COREWEBVIEW2_COLOR {
+                            A: 0,
+                            R: 0,
+                            G: 0,
+                            B: 0,
+                        },
+                        Background::Opaque => COREWEBVIEW2_COLOR {
+                            A: 255,
+                            R: 255,
+                            G: 255,
+                            B: 255,
+                        },
                     };
-                    if let Err(e) = controller2.SetDefaultBackgroundColor(transparent) {
+                    if let Err(e) = controller2.SetDefaultBackgroundColor(color) {
                         warn!("SetDefaultBackgroundColor failed: {e:?}");
                     }
                 }
@@ -218,6 +316,12 @@ mod win32 {
         if let Err(e) = result {
             warn!("with_webview failed: {e}");
         }
+    }
+
+    /// `hwnd` (the main window) is the foreground window, i.e. Zeiler is the app
+    /// the user is in.
+    pub fn is_foreground(hwnd: isize) -> bool {
+        unsafe { GetForegroundWindow() }.0 as isize == hwnd
     }
 
     const SUBCLASS_ID: usize = 0x5A1_10B; // arbitrary, stable

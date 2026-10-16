@@ -100,6 +100,7 @@ export function usePlayerControls({
 /**
  * Window-level shortcuts. `controls` is null while there is nothing to control (loading,
  * an error, mpv closed): then only `f` (when `onFullscreen` is given) and Escape work.
+ * Escape calls `onBack` (the embedded screen's leaves fullscreen first, PlayerChrome).
  */
 export function usePlayerKeys({
   controls,

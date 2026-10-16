@@ -58,10 +58,14 @@ pub async fn player_embedded_start(
 
 /// Deprecated: stops only an embedded session (see the module docs).
 #[tauri::command]
-pub async fn player_embedded_stop(player: State<'_, PlayerState>) -> Result<(), IpcError> {
+pub async fn player_embedded_stop(
+    app: AppHandle,
+    player: State<'_, PlayerState>,
+) -> Result<(), IpcError> {
     let _op = player.op.lock().await;
-    player.stop_session(Some(Backend::Embedded));
-    imp::on_stop(&player.surface);
+    if player.stop_session(Some(Backend::Embedded)).is_some() {
+        imp::on_stop(&app, &player.surface);
+    }
     Ok(())
 }
 

@@ -76,6 +76,7 @@ pub fn run() {
             commands::mpv::player_command,
             commands::mpv::player_get_property,
             commands::mpv::player_set_geometry,
+            commands::mpv::player_surface_refresh,
             // deprecated aliases, kept for one release (commands/mpv/aliases.rs)
             commands::mpv::aliases::player_status,
             commands::mpv::aliases::player_play,

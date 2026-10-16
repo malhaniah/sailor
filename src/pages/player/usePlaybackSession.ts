@@ -65,11 +65,10 @@ export function backKeepsPlaying(kind: Phase["kind"]): boolean {
 }
 
 /** The message for a failed start: an explicit Built-in choice that this build or OS
- * cannot honour gets a pointer to the setting instead of the bare reason. */
+ * cannot honour points to the setting (which shows why, in Settings → Player). */
 export function startErrorMessage(e: unknown): string {
   if (errorKind(e) === "unsupported") {
-    const reason = errorMessage(e).trim();
-    return `${/[.!?]$/.test(reason) ? reason : `${reason}.`} Choose Auto or External mpv in Settings → Player.`;
+    return "Built-in playback is chosen in Settings → Player, but it isn't available on this computer. Choose Auto or External mpv there.";
   }
   return errorMessage(e);
 }
@@ -84,6 +83,12 @@ type PlayerSlot =
 export interface PlaybackSession {
   phase: Phase;
   backend: Backend;
+  /**
+   * A built-in (embedded) session is running, so the native video sits behind the
+   * page. Until then — and once it has stopped — the page paints its own background:
+   * `backend` can already be "embedded" (the early guess) while nothing is behind it.
+   */
+  videoBehind: boolean;
   mpv: MpvState;
   /** a non-fatal player error, dismissible */
   notice: string | null;
@@ -104,6 +109,7 @@ export function usePlaybackSession(
 ): PlaybackSession {
   const [phase, setPhase] = useState<Phase>({ kind: "loading", label: "Preparing player…" });
   const [backend, setBackend] = useState<Backend>("unknown");
+  const [videoBehind, setVideoBehind] = useState(false);
   const [mpv, dispatch] = useReducer(mpvReducer, INITIAL_MPV);
   const [notice, setNotice] = useState<string | null>(null);
   const [fallbackReason, setFallbackReason] = useState<string | null>(null);
@@ -173,6 +179,7 @@ export function usePlaybackSession(
           break;
         case "shutdown":
           player = { state: "gone" };
+          setVideoBehind(false);
           if (!stopping && phaseRef.current.kind !== "error") setPhase({ kind: "closed" });
           break;
       }
@@ -183,6 +190,7 @@ export function usePlaybackSession(
       if (!request) return;
       setPhase({ kind: "loading", label: "Starting playback…" });
       player = { state: "starting" };
+      setVideoBehind(false);
       let result;
       try {
         result = await playerStart(request, launch.backend);
@@ -204,6 +212,7 @@ export function usePlaybackSession(
       }
       player = { state: "running", backend: result.backend };
       setBackend(result.backend);
+      setVideoBehind(result.backend === "embedded");
       setFallbackReason(result.fallbackReason ?? null);
       if (!result.remoteControl) {
         setPhase({ kind: "uncontrolled" });
@@ -230,6 +239,7 @@ export function usePlaybackSession(
         stopping = true;
         await playerStop().catch(() => undefined);
         player = { state: "gone" };
+        setVideoBehind(false);
         dropTorrent();
         leavePlayer();
       },
@@ -311,6 +321,7 @@ export function usePlaybackSession(
   return {
     phase,
     backend,
+    videoBehind,
     mpv,
     notice,
     dismissNotice: useCallback(() => setNotice(null), []),

@@ -31,6 +31,40 @@ npm install
 npm run tauri dev
 ```
 
+### Built-in playback (Windows)
+
+Built-in playback (libmpv in-process, video under the webview) is the `embedded` cargo
+feature. Windows release builds have it on; plain `npm run tauri dev` builds leave it off
+and play through external mpv. To work on it on Windows:
+
+```powershell
+node scripts/fetch-libmpv.mjs      # once: pinned libmpv-2.dll + mpv.lib into src-tauri/libmpv
+npm run tauri dev -- --features embedded
+npm run tauri build -- --features embedded --config src-tauri/tauri.embedded.conf.json
+```
+
+The fetch script downloads the hash-pinned LGPL libmpv build (see THIRD-PARTY-NOTICES.md),
+writes `mpv.def` from the DLL's exports and generates the `mpv.lib` import library with
+MSVC's `lib.exe` (found on PATH or through vswhere). It does nothing on other systems.
+`src-tauri/tauri.embedded.conf.json` bundles the DLL and its NOTICE into the installer.
+
+`cargo check`/`clippy` with the feature never link, so `ZEILER_SKIP_LIBMPV_CHECK=1` lets
+them run before the fetch. Tests of the player crate do link libmpv:
+
+```bash
+# Linux: needs libmpv-dev (mpv ≥ 0.35, client API 2.x)
+cargo test -p zeiler-player --features embedded
+```
+
+```powershell
+# Windows: put the vendored libmpv on the linker path (LIB) and the DLL on PATH
+$env:LIB = "$PWD\src-tauri\libmpv;$env:LIB"; $env:PATH = "$PWD\src-tauri\libmpv;$env:PATH"
+cargo test -p zeiler-player --features embedded
+```
+
+These run headless (no window, no audio device). macOS and Linux keep external mpv for
+now (`commands/mpv/{macos,linux}.rs`).
+
 On Linux you also need the Tauri system packages (webkit2gtk 4.1, libayatana-appindicator,
 librsvg, patchelf — see `.github/workflows/ci.yml` for the exact list).
 
@@ -56,6 +90,10 @@ cargo test --workspace
 npm run typecheck
 npm run build
 ```
+
+CI also lints and tests the `embedded` feature (Linux with the distro libmpv; Windows
+with the vendored one, including the shell's Windows code) and builds a Windows installer
+with built-in playback for every pull request (a downloadable workflow artifact).
 
 Network integration tests against live public addons are opt-in:
 

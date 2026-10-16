@@ -13,7 +13,7 @@ addon URLs. This document records the load-bearing decisions and the shape of th
 | UI | Vite 8 + React 19 + TypeScript ~6.0 + Tailwind 4 | Current stable stack; matches the create-tauri-app template. |
 | Protocol client | Hand-rolled `zeiler-addon` crate | `stremio-core` is git-only (frozen 0.1.0), framework-shaped (Elm runtime + static `Env`), hardwired to api.strem.io (incl. unauthenticated SeekLog telemetry), and assumes Stremio's `server.js` for torrents. The protocol surface is small; we mirror stremio-core's lenient serde semantics (MIT, referenced with attribution). |
 | Torrent engine | librqbit, in-process | Pure Rust, Apache-2.0, first-class streaming (sequential priority + HTTP Range endpoint). Pinned to a git rev of `main` until 9.0.2 ships (crates.io 9.0.1 lacks three Windows fixes: NTFS sparse marking #681, DHT death on UDP 10054 #690, stream-during-init #689). |
-| Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM now, macOS render-API NSOpenGLView next) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is behind the `embedded` cargo feature until `libmpv-2.dll` + `mpv.lib` are vendored via a hash-pinned fetch script. See "Player backends". |
+| Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM, the default on Windows releases; macOS render-API NSOpenGLView next) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, macOS for now, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is the `embedded` cargo feature: Windows release builds turn it on and ship a hash-pinned LGPL `libmpv-2.dll` (`scripts/fetch-libmpv.mjs`); plain dev builds leave it off. See "Player backends". |
 | Content neutrality | No seeded stream addons; one built-in metadata addon | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only Cinemeta — metadata only, from a manifest snapshot compiled into the app (`src-tauri/builtin/`), switchable in Settings → Content. Stream addons are installed by user-pasted URL only, behind a confirmation dialog showing the manifest (name, version, resources, p2p/adult hints). |
 | Updates | tauri-plugin-updater, install on next launch | Signed (minisign) packages from `releases/latest/download/latest.json`; releases are therefore regular, not pre-releases. Checked at launch (installed immediately, before the user starts anything) and every 6 h (downloaded to the cache, installed on the next launch). Signing key: `TAURI_SIGNING_PRIVATE_KEY` secret; release builds pass `--config src-tauri/tauri.release.conf.json` to emit updater artifacts. Dev builds never self-update. |
 
@@ -111,11 +111,16 @@ backend setting says.
   backends"; `auto` follows the `playerBackend` setting, chosen in Settings → Player:
   Auto / Built-in / External mpv). Before the reply it shows the loading state of the
   backend it expects (from `player_backends` and the setting).
-  - *Embedded* (Windows `embedded` feature + libmpv present): mpv renders under the
-    transparent webview, with the controls drawn as auto-hiding overlays
-    (`PlayerChrome.tsx`); `f` makes the Zeiler window fullscreen.
-  - *External mpv* (Linux and macOS, Windows builds without the feature, a fallback,
-    or a forced launch): mpv plays in its own window and the page is its full remote
+  - *Embedded* (Windows releases: `embedded` feature + libmpv present): mpv renders
+    under the transparent webview, with the controls drawn as auto-hiding overlays
+    (`PlayerChrome.tsx`); `f` makes the Zeiler window fullscreen, Escape leaves
+    fullscreen first (and the player only when not fullscreen), and leaving the
+    player screen any other way ends fullscreen too. After a fullscreen
+    toggle and on every window resize, move and scale change the page re-sends the
+    video rect and calls `player_surface_refresh` on a kick schedule (0, 60, 200,
+    500, 1000, 2000 ms; `surface-sync.ts`).
+  - *External mpv* (Linux and macOS, Windows dev builds without the feature, a
+    fallback, or a forced launch): mpv plays in its own window and the page is its full remote
     control (`ExternalRemote.tsx`): the title's art fills the window, dimmed; title,
     episode and source at the top; the same `ControlsBar` as embedded docked at the
     bottom — play/pause, seek bar with elapsed/total time and the buffered range
@@ -146,8 +151,9 @@ backend setting says.
   (actions and keyboard shortcuts shared by both screens), `playback-clock.ts`
   (time-pos, duration, pause, buffering, buffered range in a small subscribable store so
   a position tick re-renders only the seek bar and readouts), `mpv-state.ts`,
-  `PlayerChrome.tsx` (embedded), `ExternalRemote.tsx` (external), `ControlsBar.tsx`
-  (both), `states.tsx`, `TorrentStats.tsx`. Later player features add files here.
+  `PlayerChrome.tsx` (embedded), `surface-sync.ts` (embedded surface after window
+  changes), `ExternalRemote.tsx` (external), `ControlsBar.tsx` (both), `states.tsx`,
+  `TorrentStats.tsx`. Later player features add files here.
 
 ## Tauri IPC surface
 
@@ -173,7 +179,9 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   `only: "embedded" | "external"` stops just a session on that backend) ·
   `player_set_property { name, value }` · `player_command { args }` ·
   `player_get_property { name }` → JSON value · `player_set_geometry { geometry: { x, y,
-  width, height } }` (embedded video rect, physical px)
+  width, height } }` (embedded video rect, physical px) · `player_surface_refresh()`
+  (re-assert the embedded surface after a window change; no-op unless built-in video
+  plays)
 - Deprecated player aliases (one release; `commands/mpv/aliases.rs`; the UI no longer
   calls any of them): `player_status()` →
   `{ available, path? }` (= `player_backends().external`) ·
@@ -261,11 +269,44 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
   carries `fallbackReason`. An explicit `embedded` never falls back (`unsupported` when
   this build/OS has none, `player` when it fails). External needs mpv
   (`mpvPath` or PATH/known locations).
-- **Embedded** (`embedded` feature): libmpv actor + event thread
-  (`crates/zeiler-player/src/embedded.rs`), `config=no`, no scripts/ytdl/OSC/input.
+- **Embedded** (`embedded` feature; on by default in Windows releases): libmpv actor +
+  event thread (`crates/zeiler-player/src/embedded.rs`), `config=no`, no
+  scripts/ytdl/OSC/input, `vo=gpu-next,` (the trailing comma falls back through mpv's
+  default VO list instead of failing on RDP, VMs or old GPUs), `hwdec=auto-safe`. On
+  Unix it resets `LC_NUMERIC` to `"C"` before creating a core (GTK sets the user's
+  locale, and libmpv refuses to start otherwise). `EmbeddedOptions { surface }` says
+  where the video goes, fixed at spawn:
+  - `Surface::Wid(hwnd)` — a child window of the main window (Windows; with
+    `force-window=immediate`);
+  - `Surface::RenderApi` — reserved for macOS (`vo=libmpv`, drawn by the host into an
+    NSOpenGLView, M13); not implemented yet, spawning with it fails;
+  - `Surface::Detached` — mpv's own top-level window;
+  - `Surface::Headless` — `vo=null`, `ao=null`, for tests.
+
   Per-OS surface code: `commands/mpv/windows.rs` (child HWND pinned under the
   transparent WebView2), `macos.rs` / `linux.rs` (not available yet: macOS is next,
-  Linux keeps mpv in its own window), `stub.rs` (feature off).
+  Linux keeps mpv in its own window), `stub.rs` (feature off). `player_backends`
+  reports why built-in playback is unavailable in a sentence Settings → Player shows
+  as-is (per OS: coming soon on macOS, mpv window on Linux, a Windows build without
+  the feature, or a missing `libmpv-2.dll`).
+- **Windows surface and transparency policy** (`commands/mpv/windows.rs`). The mpv
+  child window is pinned at `HWND_BOTTOM` with the UI's rect and made transparent to
+  hit-testing; the WebView2 above it gets a transparent default background **only
+  while built-in video plays**: `spawn_embedded` sets it, and `player_stop` (or a start
+  that ends on external mpv or fails) restores WebView2's opaque default, as at
+  startup; a built-in session replaced by another keeps it, so nothing flashes (Harbor instead makes the webview transparent once at setup;
+  Zeiler keeps the rest of the app on the ordinary opaque path). The page paints its
+  own background whenever no built-in session runs, so that white default never
+  shows: the player screen turns transparent (and clears the document background)
+  only once `player_start` has answered "embedded" (`videoBehind`), not on the
+  loading screen's early guess, and paints the canvas again when the session ends.
+  After the first successful pin the keyboard focus goes back to the webview once
+  (mpv's new child window may take it); `player_surface_refresh` re-applies the
+  transparency, re-pins the child with the last geometry and re-focuses. Focusing
+  means the WebView2's own `MoveFocus` (`Webview::set_focus`), and only while the main
+  window is the foreground window — it never pulls focus from another app.
+  An init or VO failure of the embedded core falls back to external mpv under `auto`
+  (see "Choosing a backend").
 - **External, JSON IPC** (`crates/zeiler-player/src/external_ipc.rs`): spawns the
   user's mpv with `--input-ipc-server=<endpoint> --idle=yes --keep-open=yes
   --force-window=immediate --title=Zeiler --ytdl=no`, keeping the user's own config,
@@ -291,6 +332,14 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
   `client-message { args }` · `shutdown`. One cache property is observed,
   `demuxer-cache-time` (buffered-until timestamp; `demuxer-cache-state` is a large,
   chatty node no UI needs).
+- **Per-stream HTTP.** Both backends clear `http-header-fields` before every load and
+  append the request's headers plus its referrer as a `Referer` header (mpv's
+  `referrer` option, once set, can only be emptied, and mpv would then send an empty
+  `Referer:` with later streams). mpv sends that option as its own `Referer` line ahead
+  of the list, so when the user's mpv config sets `referrer`, external mpv sets the
+  option per load instead (the stream's referrer, else the user's) and appends no
+  second `Referer`. A request without a user agent gets the backend's
+  default back (libmpv's `libmpv`; the user's own for external mpv), never an empty one.
 - **Requests.** `PlaybackRequest` is an IPC payload: http(s) only; header names must be
   HTTP tokens and no header value, user agent or referrer may contain CR, LF or NUL
   (refused with an error naming the field). The title is display text — addon stream
@@ -346,19 +395,51 @@ is up; leaving the player pops the history entry it pushed.
 
 - `license = "GPL-3.0-or-later"` on every crate; LICENSE at root; THIRD-PARTY notices for
   Apache-2.0 (librqbit) and any MIT-attributed code adapted from stremio-core/Harbor.
-- libmpv is **not** statically linked. Windows ships `libmpv-2.dll` (hash-pinned fetch,
-  LGPL build preferred) beside the exe via `bundle.resources`; Linux declares the distro
-  `libmpv2` package; macOS bundles a prebuilt dylib under Frameworks. If a GPL libmpv/FFmpeg
+- libmpv is **not** statically linked. Windows releases ship `libmpv-2.dll` beside the
+  exe via `bundle.resources` (`src-tauri/tauri.embedded.conf.json`, which also installs
+  the LGPL-2.1 text from `src-tauri/licenses/` as `licenses/LGPL-2.1.txt` and the fetch
+  script's notice — versions, provenance, source links and the written source offer —
+  as `licenses/libmpv-NOTICE.txt`). It is the LGPL
+  flavour of zhongfly/mpv-winbuild, pinned by tag and archive SHA-256 in
+  `scripts/fetch-libmpv.mjs`; THIRD-PARTY-NOTICES.md names the exact mpv and FFmpeg
+  commits and carries the source offer. The archive has no `.def`, so the script writes
+  one from the DLL's export table (`LIBRARY libmpv-2.dll`) and generates `mpv.lib` with
+  MSVC `lib /def:`. The app links it DELAYLOAD (`src-tauri/build.rs`) so it starts —
+  and falls back to external mpv — when the DLL is missing. macOS (M13) will bundle a
+  vendored dylib under Frameworks; Linux keeps the distro mpv. If a GPL libmpv/FFmpeg
   build is ever shipped, the corresponding source offer goes in the release notes.
+- `deny.toml` allows `LGPL-2.1` for the `libmpv2`/`libmpv2-sys` bindings.
 - Windows installer: NSIS per-user only (no MSI/WiX). Unsigned builds will trip
   SmartScreen/Smart App Control — SignPath Foundation (free for GPL) is the plan.
+
+## CI coverage of the player
+
+- **Linux** (`ci.yml`, ubuntu-24.04): installs `libmpv-dev` and runs clippy and the tests
+  of `zeiler-player --features embedded` — the actor's headless tests
+  (`crates/zeiler-player/tests/embedded.rs`: lavfi tone and test pattern, track list as
+  JSON, pause/seek events, per-stream headers/user agent/referrer against a loopback
+  HTTP server and their absence on the next load, quit → shutdown).
+- **Windows** (`ci.yml`, windows-latest): restores `src-tauri/libmpv` from a cache keyed
+  on the fetch script (else runs it, with MSVC `lib.exe` found through vswhere), lints
+  `-p zeiler -p zeiler-player --features zeiler/embedded` (`ZEILER_SKIP_LIBMPV_CHECK`,
+  check mode never links) and runs the player tests with `src-tauri/libmpv` on `LIB`
+  (libmpv2-sys only emits `link-lib=mpv`) and on `PATH` (test executables load
+  `libmpv-2.dll` directly; only the app is DELAYLOAD).
+- **Pull requests** build the Windows NSIS installer with built-in playback (no updater
+  artifacts, no signing secrets) and attach it to the run as an artifact, so it can be
+  tried before a release. `release.yml` builds the Windows entry with
+  `--features embedded --config src-tauri/tauri.embedded.conf.json --config
+  src-tauri/tauri.release.conf.json` (the CLI merges repeated `--config` in order).
+- Tests that need the `mpv` program (`tests/external_mpv.rs`) stay `#[ignore]`d: CI
+  runners have no mpv binary.
 
 ## Milestones
 
 1. **v0.1 (current)** — workspace + addon client + catalogs/meta/streams UI + torrent engine
    + external-mpv playback; CI (fmt, clippy, test, build).
-2. **v0.2** — embedded libmpv (Windows `wid` first), subtitles (addon + local file),
-   library/continue-watching persistence, updater + release pipeline.
+2. **v0.2** — embedded libmpv (Windows `wid`, on by default in Windows releases),
+   subtitles (addon + local file), library/continue-watching persistence, updater +
+   release pipeline.
 3. **v0.3** — macOS/Linux embedded playback, stream ranking (Harbor-core-inspired
    parse→trust→score→rank), deep links, binge/next-episode (bingeGroup).
 4. **Later** — casting, Live TV/EPG, PiP, theme system, optional Stremio account sync

@@ -7,7 +7,8 @@
  * "Open in external mpv" forces "external") — and the page renders whichever it got:
  * - embedded libmpv (Windows `embedded` builds): the video is NOT an element on this
  *   page — mpv renders into a native child window pinned underneath the transparent
- *   webview. The page makes the document background transparent while mounted, keeps
+ *   webview. The page makes the document background transparent while that video
+ *   runs (before player_start answers it paints its own, see `videoBehind`), keeps
  *   the native video rect in sync with the layout (`player_set_geometry`, physical px)
  *   and draws the controls as overlays (PlayerChrome.tsx);
  * - external mpv in its own window, remote-controlled over its JSON IPC: the title's
@@ -25,7 +26,8 @@
  * events, cleanup), usePlayerControls.ts (actions + keyboard), playback-clock.ts
  * (position/duration/pause/buffering store), mpv-state.ts (slower mpv state + phase),
  * PlayerChrome.tsx (embedded), ExternalRemote.tsx (external), ControlsBar.tsx (both),
- * states.tsx (status cards, title labels), TorrentStats.tsx.
+ * states.tsx (status cards, title labels), surface-sync.ts (embedded surface after
+ * window changes), TorrentStats.tsx.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { leavePlayer, type PlayerLaunch, reportLaunchFailed } from "../../lib/playback-handoff";
@@ -35,6 +37,7 @@ import { launchForRoute, launchIdForRoute, releaseRoute } from "./launch";
 import { createPlaybackClock } from "./playback-clock";
 import { PlayerChrome } from "./PlayerChrome";
 import { NothingToPlay, UncontrolledPlayback } from "./states";
+import { useSurfaceSync } from "./surface-sync";
 import { usePlaybackSession } from "./usePlaybackSession";
 
 /** `hash` is the player route this page was mounted for (the page is keyed by it). */
@@ -58,16 +61,6 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
   const videoRef = useRef<HTMLDivElement>(null);
   const infoHash = launch.source.kind === "torrent" ? launch.source.infoHash : null;
 
-  // While this page is up, the document must not paint a background —
-  // the native video window (embedded backend) sits directly behind the webview.
-  useEffect(() => {
-    const targets = [document.documentElement, document.body, document.getElementById("root")]
-      .filter((t): t is HTMLElement => t !== null);
-    const previous = targets.map((t) => t.style.background);
-    for (const t of targets) t.style.background = "transparent";
-    return () => targets.forEach((t, i) => (t.style.background = previous[i]));
-  }, []);
-
   const sendGeometry = useCallback(() => {
     const el = videoRef.current;
     if (!el) return;
@@ -82,7 +75,20 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
   }, []);
 
   const session = usePlaybackSession(launch, clock, sendGeometry);
-  const { phase, backend, mpv } = session;
+  const { phase, backend, mpv, videoBehind } = session;
+
+  // While a built-in video runs, the document must not paint a background — the
+  // native video window sits directly behind the webview. Not before player_start has
+  // answered: until then nothing is behind the page, and a transparent page would show
+  // the webview's own default (opaque white outside playback, see windows.rs).
+  useEffect(() => {
+    if (!videoBehind) return;
+    const targets = [document.documentElement, document.body, document.getElementById("root")]
+      .filter((t): t is HTMLElement => t !== null);
+    const previous = targets.map((t) => t.style.background);
+    for (const t of targets) t.style.background = "transparent";
+    return () => targets.forEach((t, i) => (t.style.background = previous[i]));
+  }, [videoBehind]);
 
   // Keep the native video rect glued to the layout (embedded only; the region exists
   // only while PlayerChrome is drawn).
@@ -98,6 +104,10 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
       window.removeEventListener("resize", sendGeometry);
     };
   }, [sendGeometry, backend]);
+
+  // Window changes (fullscreen, resize, move, DPI) can unsettle the native surface
+  // for a moment: re-assert it on a short schedule after each (surface-sync.ts).
+  const kickSurface = useSurfaceSync(backend === "embedded", sendGeometry);
 
   // Tell the screen that opened this launch (the stream picker) that it failed, once.
   const reported = useRef(false);
@@ -149,6 +159,7 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
     <PlayerChrome
       phase={phase}
       backend={backend}
+      videoBehind={videoBehind}
       mpv={mpv}
       clock={clock}
       notice={session.notice}
@@ -156,6 +167,7 @@ function PlayerSession({ launch, launchId }: { launch: PlayerLaunch; launchId: s
       title={mpv.mediaTitle ?? launch.title ?? filename ?? "Now playing"}
       infoHash={infoHash}
       videoRef={videoRef}
+      onWindowChanged={kickSurface}
       onLeave={leave}
       onPlayAgain={session.playAgain}
     />

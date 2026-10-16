@@ -13,8 +13,9 @@
 //!   checked against the tables in [`validate`]; requests are scheme- and
 //!   header-checked here before anything reaches mpv.
 //! - **Per-OS surfaces.** The embedded video surface is OS code: `windows.rs`
-//!   (libmpv child window under the transparent WebView2), `macos.rs`/`linux.rs`
-//!   (not available yet) and `stub.rs` (feature off).
+//!   (libmpv child window under the transparent WebView2; its module docs hold the
+//!   transparency policy), `macos.rs`/`linux.rs` (not available yet) and `stub.rs`
+//!   (feature off). `player_set_geometry` and `player_surface_refresh` act on it.
 //!
 //! The pre-M2 command names stay as thin aliases for one release (`aliases.rs`).
 
@@ -118,6 +119,12 @@ impl PlayerState {
             }
         };
         drop(gone);
+    }
+
+    /// Whether the running session (if any) is embedded.
+    fn embedded_active(&self) -> bool {
+        self.active()
+            .is_some_and(|a| a.session.backend() == Backend::Embedded)
     }
 
     fn session(&self) -> Result<Arc<Session>, IpcError> {
@@ -248,13 +255,17 @@ pub async fn player_load(
 /// closing an external mpv the user left playing.
 #[tauri::command]
 pub async fn player_stop(
+    app: AppHandle,
     state: State<'_, AppState>,
     player: State<'_, PlayerState>,
     only: Option<Backend>,
 ) -> Result<(), IpcError> {
     let _op = player.op.lock().await;
     player.stop_session(only);
-    imp::on_stop(&player.surface);
+    // `only: "external"` leaves a built-in video playing: keep its surface
+    if !player.embedded_active() {
+        imp::on_stop(&app, &player.surface);
+    }
     if stop_matches(Backend::External, only) {
         state.player.stop();
     }
@@ -307,10 +318,19 @@ pub async fn player_set_geometry(
     player: State<'_, PlayerState>,
     geometry: Geometry,
 ) -> Result<(), IpcError> {
-    let active = player
-        .active()
-        .is_some_and(|a| a.session.backend() == Backend::Embedded);
-    imp::set_geometry(&app, &player.surface, geometry, active)
+    imp::set_geometry(&app, &player.surface, geometry, player.embedded_active())
+}
+
+/// Re-assert the embedded video surface after a window change (fullscreen, resize,
+/// move, DPI): on Windows the transparent webview background, the video window pinned
+/// under the webview with the last geometry, and the keyboard focus. A no-op when no
+/// built-in video plays, and on builds and systems without one.
+#[tauri::command]
+pub async fn player_surface_refresh(
+    app: AppHandle,
+    player: State<'_, PlayerState>,
+) -> Result<(), IpcError> {
+    imp::refresh_surface(&app, &player.surface, player.embedded_active())
 }
 
 // --- start ---------------------------------------------------------------------------------
@@ -326,6 +346,9 @@ async fn start(
     let id = player.next_id.fetch_add(1, Ordering::SeqCst) + 1;
     // from here on, events of the session being replaced are dropped
     player.current.store(id, Ordering::SeqCst);
+    // A built-in session that is replaced leaves its surface set up: a new built-in
+    // session takes it over (no flash of the opaque background in between); every
+    // other outcome below gives the plain window back (`on_stop`, idempotent).
     player.stop_session(None);
     state.player.stop();
 
@@ -335,7 +358,11 @@ async fn start(
         if status.available {
             match imp::spawn_embedded(app, &player.surface, event_sink(app, id)) {
                 Ok(session) => {
-                    session.load(request).await.map_err(session_error)?;
+                    if let Err(e) = session.load(request).await {
+                        session.quit();
+                        imp::on_stop(app, &player.surface);
+                        return Err(session_error(e));
+                    }
                     player.put(id, session);
                     imp::after_start(app, &player.surface);
                     return Ok(StartResult {
@@ -348,14 +375,19 @@ async fn start(
                     warn!(%reason, "embedded player failed to start; using external mpv");
                     fallback_reason = Some(reason);
                 }
-                Err(reason) => return Err(IpcError::Player(reason)),
+                Err(reason) => {
+                    imp::on_stop(app, &player.surface);
+                    return Err(IpcError::Player(reason));
+                }
             }
         } else if preference == PlayerBackend::Embedded {
+            imp::on_stop(app, &player.surface);
             return Err(IpcError::Unsupported(status.reason.unwrap_or_else(|| {
                 "Built-in playback is not available.".to_string()
             })));
         }
     }
+    imp::on_stop(app, &player.surface);
 
     let binary = state.player.binary().ok_or(PlayerError::NoPlayer)?;
     let events = Arc::new(event_sink(app, id));

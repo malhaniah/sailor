@@ -164,6 +164,13 @@ export function SettingsView() {
 // ---- sections -------------------------------------------------------------------------
 
 const IS_LINUX = /linux/i.test(navigator.userAgent) && !/android/i.test(navigator.userAgent);
+const IS_MAC = /mac os x|macintosh/i.test(navigator.userAgent);
+/** An example mpv location for this system (the path field's placeholder). */
+const MPV_PLACEHOLDER = IS_LINUX
+  ? "/usr/bin/mpv"
+  : IS_MAC
+    ? "/opt/homebrew/bin/mpv"
+    : "C:\\Program Files\\mpv\\mpv.exe";
 
 /** Arrow keys in a radio group: next (+1) or previous (-1) option. */
 const RADIO_STEPS: Record<string, number | undefined> = {
@@ -195,24 +202,30 @@ function PlayerSection() {
   const external = backends?.external;
   const builtInAvailable = embedded?.available ?? false;
   const choice = settings.playerBackend;
+  // mpv matters when it is chosen, or when nothing else can play
+  const mpvNeeded = choice === "external" || (backends !== null && !builtInAvailable);
   const options: { id: PlayerBackend; label: string; sub: string; unavailable?: string }[] = [
     {
       id: "auto",
       label: "Auto (recommended)",
-      sub: builtInAvailable
-        ? "Plays inside Zeiler's window. If built-in playback ever fails to start, Zeiler opens mpv instead and tells you why."
-        : "Built-in playback isn't available here, so Auto plays in an mpv window — with full controls on Zeiler's player screen.",
+      // neutral until the check answers, so it never states the wrong player first
+      sub: !backends
+        ? "Plays videos the best way this computer allows."
+        : builtInAvailable
+          ? "Plays inside Zeiler, and switches to mpv if it ever has to."
+          : "Uses the best option on this computer — for now, mpv.",
     },
     {
       id: "embedded",
       label: "Built-in",
-      sub: "Plays inside Zeiler's window, with the controls drawn over the video. Never falls back to mpv: if it can't start, playback fails with the reason.",
-      unavailable: backends && !builtInAvailable ? (embedded?.reason ?? "Not available.") : undefined,
+      sub: "Plays inside the Zeiler window.",
+      // the one place the reason is shown
+      unavailable: backends && !builtInAvailable ? (embedded?.reason ?? "Not available here.") : undefined,
     },
     {
       id: "external",
       label: "External mpv",
-      sub: "Plays in its own mpv window, with your mpv config, scripts and key bindings. Zeiler's player screen is its remote: play/pause, seeking, volume, audio and subtitle tracks, speed and fullscreen.",
+      sub: "Plays in its own mpv window, with your mpv settings. Zeiler's player screen controls it.",
     },
   ];
 
@@ -220,11 +233,11 @@ function PlayerSection() {
     <>
       <SectionCard
         title="Where videos play"
-        description="Zeiler plays everything through mpv — either built into its own window, or as a separate mpv window that Zeiler controls. Either way playback starts on Zeiler's player screen."
+        description="Videos always start on Zeiler's player screen. Choose whether they play inside Zeiler or in a separate mpv window."
       >
         <div
           role="radiogroup"
-          aria-label="Player"
+          aria-label="Where videos play"
           className="flex flex-col gap-2"
           onKeyDown={(e) => {
             // the ARIA radio pattern: arrows move to the previous/next enabled option
@@ -256,65 +269,46 @@ function PlayerSection() {
         </div>
         {choice === "embedded" && backends && !builtInAvailable && (
           <p className="text-[12.5px] text-[oklch(0.75_0.12_25)]">
-            Built-in playback isn't available, so playing will fail. Choose Auto or External mpv.
+            Videos can't play with this choice on this computer. Choose Auto or External mpv.
           </p>
         )}
-        {IS_LINUX && (
-          <p className="text-[12.5px] leading-relaxed text-ink-muted">
-            On Linux, built-in playback isn't available yet: mpv opens in its own window, and
-            Zeiler's player screen gives you full controls for it.
-          </p>
-        )}
-        <dl className="flex flex-col gap-2 text-[13.5px]">
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <dt className="text-ink-muted">Built-in:</dt>
-            <dd>
-              {!backends ? (
-                <span className="text-ink-subtle">checking…</span>
-              ) : builtInAvailable ? (
-                <StatusOk>
-                  available
-                  {embedded?.libmpvVersion && (
-                    <span className="font-mono text-[11.5px]"> — {embedded.libmpvVersion}</span>
-                  )}
-                </StatusOk>
-              ) : (
-                <span className="text-ink-muted">not available — {embedded?.reason}</span>
-              )}
-            </dd>
-          </div>
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <dt className="text-ink-muted">External mpv:</dt>
-            <dd>
-              {!backends ? (
-                <span className="text-ink-subtle">checking…</span>
-              ) : external?.available ? (
-                <StatusOk>
-                  found — <span className="font-mono text-[11.5px]">{external.path}</span>
-                </StatusOk>
-              ) : (
-                <span className="font-medium text-[oklch(0.75_0.12_25)]">
-                  not found — install mpv (https://mpv.io) or set its path below
-                </span>
-              )}
-            </dd>
-          </div>
-        </dl>
       </SectionCard>
 
       <SectionCard
         title="mpv"
-        description="The mpv program used for External mpv (and by Auto when built-in playback is unavailable). Leave the path empty to find mpv on your PATH."
+        description={
+          !backends
+            ? undefined
+            : builtInAvailable
+              ? "Only needed if you choose External mpv."
+              : "Zeiler plays videos with mpv on this computer."
+        }
       >
+        <div className="text-[13.5px]">
+          {!backends ? (
+            <span className="text-ink-subtle">Looking for mpv…</span>
+          ) : external?.available ? (
+            <StatusOk>
+              Found <span className="font-mono text-[11.5px] font-normal">{external.path}</span>
+            </StatusOk>
+          ) : mpvNeeded ? (
+            <span className="font-medium text-[oklch(0.75_0.12_25)]">
+              Not found. Install mpv from mpv.io, or set where it is below.
+            </span>
+          ) : (
+            <span className="text-ink-muted">Not installed.</span>
+          )}
+        </div>
         <div className="flex flex-col gap-1.5">
           <span className="text-[12px] font-medium uppercase tracking-[0.14em] text-ink-subtle">
-            mpv binary path (empty = search PATH)
+            mpv location — optional
           </span>
           <div className="flex gap-2">
             <input
               value={path}
               onChange={(e) => setPath(e.target.value)}
-              placeholder={IS_LINUX ? "/usr/bin/mpv" : "C:\\tools\\mpv\\mpv.exe"}
+              aria-label="mpv location"
+              placeholder={MPV_PLACEHOLDER}
               className="h-12 w-full rounded-xl border border-edge bg-canvas px-4 font-mono text-[12.5px] text-ink outline-none placeholder:text-ink-subtle focus:border-ink"
             />
             <button
@@ -327,6 +321,9 @@ function PlayerSection() {
               Save
             </button>
           </div>
+          <span className="text-[12px] text-ink-subtle">
+            Leave empty and Zeiler finds mpv on its own.
+          </span>
         </div>
       </SectionCard>
 
@@ -393,7 +390,7 @@ function BackendOption({
         <span className="text-[14px] font-medium text-ink">{label}</span>
         <span className="text-[12.5px] leading-snug text-ink-muted">{sub}</span>
         {unavailable && (
-          <span className="text-[12.5px] leading-snug text-accent">Not available: {unavailable}</span>
+          <span className="text-[12.5px] leading-snug text-ink-muted">{unavailable}</span>
         )}
       </span>
     </button>
