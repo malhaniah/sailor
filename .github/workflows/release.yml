@@ -17,7 +17,7 @@ env:
   RELEASE_BODY: |-
     Zeiler — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Zeiler hosts no media, indexes no media, and ships no content addon: add your own stream addons on the Addons page.
 
-    **Playback:** on Windows, videos play right inside Zeiler — nothing else to install (mpv stays optional, for anyone who prefers their own mpv window). On macOS and Linux, Zeiler plays videos in an mpv window and gives you full controls on its player screen, so install mpv there; built-in playback for macOS is coming. Installed copies update themselves automatically.
+    **Playback:** on Windows and macOS, videos play right inside Zeiler — nothing else to install (mpv stays optional, for anyone who prefers their own mpv window). On Linux, Zeiler plays videos in an mpv window and gives you full controls on its player screen, so install mpv there. Installed copies update themselves automatically.
 
     **Sailor is now Zeiler.** Sailor installs update to Zeiler on their own and keep your addons and settings. On Windows the update also removes Sailor. On macOS the app keeps the name `Sailor.app` in Applications: rename it to `Zeiler.app`, or replace it with the new `.dmg`.
 
@@ -27,7 +27,9 @@ env:
     The built-in player uses libmpv (mpv: LGPL-2.1-or-later) with FFmpeg (built as LGPL-3.0-or-later), shipped as `libmpv-2.dll` beside `zeiler.exe`. Installed with it in `licenses\`: the licence texts, the notices of the libraries inside it (`libmpv-THIRD-PARTY.txt`), and its versions, provenance and source offer (`libmpv-NOTICE.txt`). The source offer is also in [THIRD-PARTY-NOTICES.md](https://github.com/malhaniah/zeiler/blob/main/THIRD-PARTY-NOTICES.md).
 
     ### macOS
-    Download the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Zeiler to Applications. Builds are not notarized: the first time, right-click Zeiler → **Open**, or allow it under System Settings → Privacy & Security. Install mpv with `brew install mpv`.
+    Download the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Zeiler to Applications. Builds are not notarized: the first time, right-click Zeiler → **Open**, or allow it under System Settings → Privacy & Security. Playback is built in. Optional: to play in your own mpv window instead (Settings → Player → External mpv), install mpv with `brew install mpv`.
+
+    The built-in player uses libmpv (mpv: LGPL-2.1-or-later) with FFmpeg (LGPL-2.1-or-later) and the libraries they load, shipped in `Zeiler.app/Contents/Frameworks`. In `Contents/Resources/licenses/`: the licence text, the notices of those libraries (`libmpv-THIRD-PARTY.txt`), and their versions, provenance and source offer (`libmpv-NOTICE.txt`).
 
     ### Linux
     - Debian/Ubuntu: `sudo apt install ./Zeiler_*_amd64.deb` (pulls in mpv automatically)
@@ -94,9 +96,9 @@ jobs:
       - name: Generate THIRD-PARTY-LICENSES.txt for each target
         run: |
           node scripts/third-party-licenses.mjs --target aarch64-apple-darwin \
-            --out third-party-licenses/aarch64-apple-darwin.txt
+            --features embedded --out third-party-licenses/aarch64-apple-darwin.txt
           node scripts/third-party-licenses.mjs --target x86_64-apple-darwin \
-            --out third-party-licenses/x86_64-apple-darwin.txt
+            --features embedded --out third-party-licenses/x86_64-apple-darwin.txt
           node scripts/third-party-licenses.mjs --target x86_64-unknown-linux-gnu \
             --out third-party-licenses/x86_64-unknown-linux-gnu.txt
           node scripts/third-party-licenses.mjs --target x86_64-pc-windows-msvc \
@@ -171,12 +173,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # built-in playback: libmpv and its libraries in Contents/Frameworks, from
+          # the overlay fetch-libmpv.mjs writes beside them (step "Fetch libmpv
+          # (macOS)")
           - platform: macos-latest # arm64 (Apple Silicon)
             target: aarch64-apple-darwin
-            args: "--target aarch64-apple-darwin"
+            arch: arm64
+            args: "--target aarch64-apple-darwin --features embedded --config src-tauri/libmpv-macos/arm64/tauri.conf.json"
           - platform: macos-15-intel
             target: x86_64-apple-darwin
-            args: "--target x86_64-apple-darwin"
+            arch: x86_64
+            args: "--target x86_64-apple-darwin --features embedded --config src-tauri/libmpv-macos/x86_64/tauri.conf.json"
           - platform: ubuntu-22.04 # oldest glibc for AppImage portability
             target: x86_64-unknown-linux-gnu
             args: ""
@@ -224,6 +231,11 @@ jobs:
         with:
           name: libmpv
           path: src-tauri/libmpv
+      # macOS: the pinned libmpv bundle for this architecture, and the bundle overlay
+      # the build's --config names (it is read before any beforeBuildCommand runs)
+      - name: Fetch libmpv (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: node scripts/fetch-libmpv.mjs --arch ${{ matrix.arch }}
       - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -236,6 +248,11 @@ jobs:
           releaseId: ${{ needs.draft.outputs.id }}
           releaseBody: ${{ env.RELEASE_BODY }}
           args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json
+      # The app must load only its own libraries and the system's, and its signature
+      # must hold. A failure here keeps the release a draft (`publish` needs every build).
+      - name: Check the app's libraries and signature (macOS)
+        if: startsWith(matrix.platform, 'macos')
+        run: scripts/check-macos-app.sh "target/${{ matrix.target }}/release/bundle/macos/Zeiler.app"
 
   # Publishes the draft only once every build has succeeded and latest.json has all
   # four platforms, each pointing at an asset of this release. A failed build skips

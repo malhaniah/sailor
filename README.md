@@ -21,23 +21,22 @@ Early development: addon install/manage, catalog browsing, search, metadata/epis
 stream fan-out, a built-in torrent engine, Zeiler's own player screen, a local library
 that remembers where you stopped (Continue Watching, resume, watched marks), and
 subtitles in your languages from the video, your subtitle addons or a file — picked
-automatically, with delay, encoding and style controls and per-show memory. On Windows,
-videos play inside the Zeiler window (built-in libmpv). On macOS and Linux they play in an
-mpv window that Zeiler controls with the same full set of controls; built-in playback for
-macOS comes next.
+automatically, with delay, encoding and style controls and per-show memory. On Windows
+and macOS, videos play inside the Zeiler window (built-in libmpv). On Linux they play in
+an mpv window that Zeiler controls with the same full set of controls.
 
 ## Install
 
 Grab the latest build from the [Releases page](https://github.com/malhaniah/zeiler/releases).
-On Windows, playback is built in. On macOS and Linux, playback needs
+On Windows and macOS, playback is built in. On Linux, playback needs
 [mpv](https://mpv.io) installed (Zeiler finds it automatically in the usual places, or you
 can set its path in Settings).
 
 | Platform | Download | mpv |
 | --- | --- | --- |
 | Windows 10/11 | `Zeiler_*_x64-setup.exe` (per-user, no admin) | not needed — optional, for playing in your own mpv window: `winget install shinchiro.mpv` |
-| macOS 12+ (Apple Silicon) | `Zeiler_*_aarch64.dmg` | `brew install mpv` |
-| macOS 12+ (Intel) | `Zeiler_*_x64.dmg` | `brew install mpv` |
+| macOS 12+ (Apple Silicon) | `Zeiler_*_aarch64.dmg` | not needed — optional, for playing in your own mpv window: `brew install mpv` |
+| macOS 12+ (Intel) | `Zeiler_*_x64.dmg` | not needed — optional: `brew install mpv` |
 | Debian / Ubuntu | `Zeiler_*_amd64.deb` | pulled in automatically |
 | Fedora / openSUSE | `Zeiler-*.x86_64.rpm` | from your distro (Fedora: RPM Fusion) |
 | Other Linux | `Zeiler_*_amd64.AppImage` | from your distro |

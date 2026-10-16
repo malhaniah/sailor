@@ -14,6 +14,8 @@
 pub mod embedded;
 pub mod external_ipc;
 pub mod mpv_error;
+#[cfg(feature = "embedded")]
+pub mod render;
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

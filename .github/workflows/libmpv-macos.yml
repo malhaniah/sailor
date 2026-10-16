@@ -1,0 +1,89 @@
+name: libmpv-macos
+
+# Builds the libmpv bundle the macOS app ships, from pinned sources
+# (scripts/build-libmpv-macos.sh), once per architecture, and checks an app built with
+# it. The output is uploaded as artifacts only: to ship a build, mirror an `out-*`
+# artifact unchanged to a pre-release named libmpv-macos-<mpv version> (never
+# "latest", which the updater reads) and pin its archives in scripts/fetch-libmpv.mjs.
+# The pre-release's assets are the complete corresponding source of that build.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/build-libmpv-macos.sh
+      - scripts/check-macos-app.sh
+      - scripts/fetch-libmpv.mjs
+      - .github/workflows/libmpv-macos.yml
+
+# it runs a pull request's build scripts: nothing but reading the repository
+permissions:
+  contents: read
+
+concurrency:
+  group: libmpv-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15 # arm64 (Apple Silicon)
+            arch: arm64
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build tools
+        run: brew install meson ninja pkgconf nasm
+      - name: Build libmpv
+        run: scripts/build-libmpv-macos.sh out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: out-${{ matrix.arch }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+      # The app with it: the release's macOS build (minus the updater artifacts, which
+      # need the signing key), from this archive instead of the mirror
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      # must match rust-toolchain.toml exactly
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: libmpv-macos-app
+      - run: npm ci
+      # tauri::generate_context! needs ../dist before the tests compile
+      - run: npm run build
+      - name: Vendor the new archive
+        run: |
+          archive=$(ls out/libmpv-macos-*-${{ matrix.arch }}.tar.gz)
+          ZEILER_LIBMPV_ARCHIVE="$archive" \
+          ZEILER_LIBMPV_SHA256=$(shasum -a 256 "$archive" | awk '{print $1}') \
+            node scripts/fetch-libmpv.mjs --arch ${{ matrix.arch }}
+      - name: Test the shell with built-in playback
+        run: cargo test -p zeiler --features embedded --locked
+      - name: Build the app
+        run: >-
+          npm run tauri -- build --target ${{ matrix.target }} --features embedded
+          --config src-tauri/libmpv-macos/${{ matrix.arch }}/tauri.conf.json
+      - name: Check the app's libraries and signature
+        run: scripts/check-macos-app.sh "target/${{ matrix.target }}/release/bundle/macos/Zeiler.app"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zeiler-macos-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 14

@@ -6,11 +6,12 @@
 //! provides (Zeiler wires it to a `player://event` Tauri event).
 //!
 //! Where the video goes is the caller's [`Surface`] choice, fixed at spawn: a
-//! native parent window (`wid`, Windows), mpv's own window, no output at all
-//! (tests), or — reserved for macOS — the render API. The Windows window wiring
-//! (mpv child HWND pinned under a transparent WebView2) is NOT here: this crate
-//! never touches the OS surface beyond passing the parent `wid` to mpv pre-init.
-//! See `src-tauri/src/commands/mpv/windows.rs`.
+//! native parent window (`wid`, Windows), the render API drawn by the host into its
+//! own GL view (macOS), mpv's own window, or no output at all (tests). The OS
+//! wiring (mpv child HWND pinned under a transparent WebView2, the NSOpenGLView
+//! under the WKWebView) is NOT here: this crate never touches the OS surface beyond
+//! passing the parent `wid` to mpv pre-init, or handing the core to the host's
+//! [`RenderHost`] (see [`crate::render`]). See `src-tauri/src/commands/mpv/`.
 //!
 //! The event type ([`PlayerEvent`]) and the observed property set
 //! ([`crate::OBSERVED`]) are shared with the external JSON-IPC backend.
@@ -28,6 +29,7 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tracing::{debug, info, warn};
 
+use crate::render::{RenderCore, RenderHost};
 use crate::{
     OBSERVED, PlaybackRequest, PlayerEvent, PropKind, SessionError, TIME_POS_THROTTLE,
     header_lines, mpv_error, property_kind, redact_url,
@@ -58,16 +60,16 @@ const VO_WITH_FALLBACK: &str = "gpu-next,";
 
 /// Where an embedded core renders its video. Fixed for the life of the core: mpv
 /// takes these options before initialization only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone)]
 pub enum Surface {
     /// Embed into a native parent window (an HWND on Windows): mpv creates a child
     /// window there right away (`force-window=immediate`), which the shell pins
     /// under the webview.
     Wid(i64),
-    /// libmpv's render API (`vo=libmpv`), drawn by the host into its own GL view.
-    /// Reserved for macOS (M13) and not implemented yet: spawning with it fails
-    /// with [`EmbeddedError::Init`].
-    RenderApi,
+    /// libmpv's render API (`vo=libmpv`): the host draws the video into its own GL
+    /// view (macOS). The host creates the render context once the core is up and
+    /// frees it before the core quits (see [`crate::render`]).
+    RenderApi(Arc<dyn RenderHost>),
     /// mpv opens its own top-level window once a video plays.
     Detached,
     /// No video and no audio output (`vo=null`, `ao=null`): for tests, which must
@@ -75,8 +77,19 @@ pub enum Surface {
     Headless,
 }
 
+impl std::fmt::Debug for Surface {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Surface::Wid(wid) => f.debug_tuple("Wid").field(wid).finish(),
+            Surface::RenderApi(_) => f.write_str("RenderApi"),
+            Surface::Detached => f.write_str("Detached"),
+            Surface::Headless => f.write_str("Headless"),
+        }
+    }
+}
+
 /// How to create an embedded core.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct EmbeddedOptions {
     pub surface: Surface,
 }
@@ -196,11 +209,6 @@ impl EmbeddedPlayer {
         options: EmbeddedOptions,
         events: impl Fn(PlayerEvent) + Send + Sync + 'static,
     ) -> Result<Self, EmbeddedError> {
-        if options.surface == Surface::RenderApi {
-            return Err(EmbeddedError::Init(
-                "the render-API video surface is not implemented yet".into(),
-            ));
-        }
         let (tx, rx) = mpsc::channel::<Cmd>();
         let (init_tx, init_rx) = mpsc::sync_channel::<Result<(), EmbeddedError>>(1);
 
@@ -267,7 +275,7 @@ impl Drop for EmbeddedPlayer {
 }
 
 /// Pre-init options for a surface: `(name, value)` pairs, in order.
-fn surface_options(surface: Surface) -> Vec<(&'static str, String)> {
+fn surface_options(surface: &Surface) -> Vec<(&'static str, String)> {
     match surface {
         Surface::Wid(wid) => vec![
             ("vo", VO_WITH_FALLBACK.into()),
@@ -276,7 +284,13 @@ fn surface_options(surface: Surface) -> Vec<(&'static str, String)> {
             ("wid", wid.to_string()),
             ("force-window", "immediate".into()),
         ],
-        Surface::RenderApi => vec![("vo", "libmpv".into()), ("force-window", "no".into())],
+        Surface::RenderApi(_) => vec![
+            ("vo", "libmpv".into()),
+            ("force-window", "no".into()),
+            // The host draws on its UI thread: let mpv hand over each frame at its
+            // display time instead of blocking that thread inside render until then.
+            ("video-timing-offset", "0".into()),
+        ],
         Surface::Detached => vec![("vo", VO_WITH_FALLBACK.into())],
         Surface::Headless => vec![
             ("vo", "null".into()),
@@ -299,9 +313,15 @@ fn actor_thread(
         // pull in ytdl or user scripts.
         init.set_option("config", "no")?;
         init.set_option("load-scripts", "no")?;
-        init.set_option("ytdl", "no")?;
+        // `ytdl` and `osc` are options of mpv's built-in Lua scripts: a libmpv built
+        // without Lua (the macOS bundle) has neither the options nor the scripts
+        for (name, value) in [("ytdl", "no"), ("osc", "no")] {
+            match init.set_option(name, value) {
+                Err(libmpv2::Error::Raw(libmpv2::mpv_error::OptionNotFound)) => {}
+                other => other?,
+            }
+        }
         init.set_option("terminal", "no")?;
-        init.set_option("osc", "no")?;
         init.set_option("osd-level", "0")?;
         init.set_option("input-default-bindings", "no")?;
         init.set_option("input-vo-keyboard", "no")?;
@@ -324,7 +344,7 @@ fn actor_thread(
             "reconnect=1,reconnect_streamed=1,reconnect_delay_max=10,reconnect_on_network_error=1",
         )?;
         init.set_option("hwdec", "auto-safe")?;
-        for (name, value) in surface_options(surface) {
+        for (name, value) in surface_options(&surface) {
             init.set_option(name, value.as_str())?;
         }
         Ok(())
@@ -335,6 +355,21 @@ fn actor_thread(
             return;
         }
     };
+
+    // The render-API host: its render context must exist before the first load
+    // and be gone before the core quits (see crate::render).
+    let host = match &surface {
+        Surface::RenderApi(host) => Some(Arc::clone(host)),
+        _ => None,
+    };
+    if let Some(host) = &host
+        && let Err(e) = host.attach(RenderCore::new(Arc::clone(&mpv)))
+    {
+        host.detach();
+        let _ = mpv.command("quit", &[]);
+        let _ = init_tx.send(Err(EmbeddedError::Init(e)));
+        return;
+    }
 
     if let Ok(version) = mpv.get_property::<String>("mpv-version") {
         let _ = MPV_VERSION.set(version);
@@ -352,12 +387,16 @@ fn actor_thread(
 
     let events = Arc::new(events);
     {
-        let mpv = Arc::clone(&mpv);
+        let core = Arc::clone(&mpv);
         let events = Arc::clone(&events);
         if let Err(e) = std::thread::Builder::new()
             .name("mpv-events".into())
-            .spawn(move || event_thread(mpv, &*events))
+            .spawn(move || event_thread(core, &*events))
         {
+            if let Some(host) = &host {
+                host.detach();
+            }
+            let _ = mpv.command("quit", &[]);
             let _ = init_tx.send(Err(EmbeddedError::Init(format!(
                 "failed to spawn event thread: {e}"
             ))));
@@ -414,8 +453,12 @@ fn actor_thread(
         }
     }
 
-    // Quit the core; the event thread sees Shutdown, forwards it, and exits.
-    // Whichever thread drops the last Arc destroys the handle.
+    // The render context goes first, while the core still runs (mpv tears the video
+    // output down through it). Then quit the core; the event thread sees Shutdown,
+    // forwards it, and exits. Whichever thread drops the last Arc destroys the handle.
+    if let Some(host) = &host {
+        host.detach();
+    }
     let _ = mpv.command("quit", &[]);
     debug!("mpv actor thread exiting");
 }
@@ -692,7 +735,7 @@ mod tests {
 
     #[test]
     fn surfaces_map_to_pre_init_options() {
-        let opts = |surface| surface_options(surface);
+        let opts = |surface: Surface| surface_options(&surface);
         let wid = opts(Surface::Wid(42));
         assert!(
             wid.contains(&("vo", "gpu-next,".into())),
@@ -706,18 +749,41 @@ mod tests {
         assert!(headless.contains(&("vo", "null".into())));
         assert!(headless.contains(&("ao", "null".into())));
         assert!(headless.iter().all(|(name, _)| *name != "wid"));
-        let render = opts(Surface::RenderApi);
+        let render = opts(Surface::RenderApi(Arc::new(RefusingHost::default())));
         assert!(render.contains(&("vo", "libmpv".into())));
+        assert!(render.contains(&("force-window", "no".into())));
+        assert!(render.iter().all(|(name, _)| *name != "wid"));
     }
 
+    /// A render host that refuses to attach, and counts its calls.
+    #[derive(Default)]
+    struct RefusingHost {
+        calls: std::sync::Mutex<Vec<&'static str>>,
+    }
+
+    impl RenderHost for RefusingHost {
+        fn attach(&self, _core: RenderCore) -> Result<(), String> {
+            self.calls.lock().unwrap().push("attach");
+            Err("no GL here".into())
+        }
+        fn detach(&self) {
+            self.calls.lock().unwrap().push("detach");
+        }
+    }
+
+    /// A render host that cannot attach fails the spawn with its reason, and is told
+    /// to detach (the core quits without a render context left behind).
     #[test]
-    fn the_render_api_surface_is_reserved() {
-        let spawned = EmbeddedPlayer::spawn(EmbeddedOptions::new(Surface::RenderApi), |_| {});
+    fn a_render_host_that_cannot_attach_fails_the_spawn() {
+        let host = Arc::new(RefusingHost::default());
+        let surface = Surface::RenderApi(host.clone());
+        let spawned = EmbeddedPlayer::spawn(EmbeddedOptions::new(surface), |_| {});
         assert!(
-            matches!(&spawned, Err(EmbeddedError::Init(m)) if m.contains("not implemented")),
+            matches!(&spawned, Err(EmbeddedError::Init(m)) if m == "no GL here"),
             "{:?}",
             spawned.as_ref().err()
         );
+        assert_eq!(*host.calls.lock().unwrap(), ["attach", "detach"]);
     }
 
     /// A headless core (no window, nothing loaded, so no window or audio device is

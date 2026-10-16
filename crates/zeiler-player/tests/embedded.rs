@@ -312,6 +312,48 @@ fn quit_reports_shutdown() {
     });
 }
 
+/// A render-API host (macOS) is attached before the core reports ready and detached
+/// before the core quits: mpv requires the render context to be freed while the core
+/// still runs. Nothing is loaded, so no window or audio device is opened.
+#[test]
+fn a_render_host_is_detached_before_the_core_quits() {
+    use zeiler_player::render::{RenderCore, RenderHost};
+
+    struct Host(Arc<Mutex<Vec<&'static str>>>);
+    impl RenderHost for Host {
+        fn attach(&self, core: RenderCore) -> Result<(), String> {
+            drop(core); // no GL here: a context is never created
+            self.0.lock().unwrap().push("attach");
+            Ok(())
+        }
+        fn detach(&self) {
+            self.0.lock().unwrap().push("detach");
+        }
+    }
+
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let (tx, rx) = mpsc::channel();
+    let events = Arc::clone(&log);
+    let surface = Surface::RenderApi(Arc::new(Host(Arc::clone(&log))));
+    let player = EmbeddedPlayer::spawn(EmbeddedOptions::new(surface), move |event| {
+        if event == PlayerEvent::Shutdown {
+            events.lock().unwrap().push("shutdown");
+        }
+        let _ = tx.send(event);
+    })
+    .expect("a render-API core initializes");
+    assert_eq!(
+        *log.lock().unwrap(),
+        ["attach"],
+        "attached before spawn returns"
+    );
+    player.quit();
+    wait_for(&rx, "shutdown", |e| {
+        (*e == PlayerEvent::Shutdown).then_some(())
+    });
+    assert_eq!(*log.lock().unwrap(), ["attach", "detach", "shutdown"]);
+}
+
 /// Records the event trace that the shell's library progress tests replay
 /// (`src-tauri/src/library/fixtures/libmpv-trace.json`): a 30 s test pattern played in
 /// real time, with what a viewer does — play 4 s, skip ahead to 0:15, play 2 s, pause,

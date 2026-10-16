@@ -29,12 +29,13 @@ v0.2.0 the same day.
 | `d085e4c` | M4b | The library on screen (`src/lib/library.tsx` provider and hooks, re-read on `library://changed`): My Library tabs (Continue Watching / Library / History, the six sorts), a Continue Watching row on Home with dismiss, Detail's Add to Library and watched marks (title, season, episode; only released episodes), Resume / Continue on Play, a "Resume from 12:34" prompt in the stream picker, progress bars on posters; two reviews plus a check of their fixes |
 | `02ffc1b` | M5 | Built-ins: Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) snapshots next to Cinemeta, `scripts/refresh-builtin-manifests.mjs`, each built-in trimmed to its role (Kitsu's own `subtitles`, which redirect to OSv3, are dropped) and streams embedded in a built-in's meta stripped; dedupe by URL or snapshot manifest id; `builtinKitsu`/`builtinOpensubtitles` (an older settings file inherits `builtinCinemeta`, Kitsu also off with `hideAnime`) with Settings → Content switches and disclosures; `find_meta` retries `kitsu:`/`mal:`/`anilist:`/`anidb:` ids as series/movie/anime without re-asking an unreachable addon; policy text now "metadata or subtitles only, switchable, never streams"; two reviews with adversarial verification |
 | `1d1fd8f` | M6 | Subtitles and audio. `subtitles_get` fan-out with the stream's hash, size and file name. `zeiler-addon/src/subfile.rs`: http(s) only, 10 MiB cap also after gunzip, archives and web pages refused, BOM / UTF-8 / `chardetng` decoding, and only text that *starts* as SRT, WebVTT, ASS or MicroDVD (a saved file is local to mpv, which would follow an EDL's or CUE sheet's paths). Files go to `<cache_dir>/subs/` and are added with `player_subtitle_add`/`_reencode`/`_pick_local` (dialog plugin from Rust only) or a window drop, on both backends, never for a file that changed meanwhile. `sid`/`slang`/`alang` are set before load from the settings and the title's remembered choices (`player-prefs.json`, LRU 200). The UI ranks candidates and makes a language-first automatic pick (`src/lib/subtitles.ts`, `useTracks.ts`). Subtitle menu (sources, language rail, Off/On, inline errors, file, encoding, delay, quick style) and audio menu (tracks, delay); keys s, z/x, [/]. Settings → Subtitles & audio with nested `subtitles{}`/`audio{}` groups read per field, merge-patched and strict at any depth (`settings_groups.rs`). The OpenSubtitles disclosure now describes when it is asked. Two reviews with adversarial refuters; ten findings confirmed and fixed |
+| PR #21 | M13 | Built-in playback on macOS. libmpv's render API draws into an `NSOpenGLView` under the WKWebView (`commands/mpv/macos.rs`, a port of Harbor's `mpv_render_mac.rs`; the page's physical px become points, a new core takes the surface over from the one it replaces, the webview's `drawsBackground` goes back on when it is removed). `zeiler-player`'s `Surface::RenderApi(host)` with a `RenderHost` (`render.rs`): the render context is created before the first load and freed before `quit`, and holds the core so it can never be destroyed under it. libmpv, FFmpeg (LGPL, Secure Transport, VideoToolbox, dav1d), libplacebo and the libass stack are built from pinned sources (`scripts/build-libmpv-macos.sh`, macOS 12.0, `@rpath`, ad-hoc signed) in the `libmpv-macos` workflow, mirrored with their sources on the `libmpv-macos-0.41.0` pre-release, fetched by `fetch-libmpv.mjs`, bundled under `Contents/Frameworks`, and checked by `scripts/check-macos-app.sh` (release.yml and the workflow). macOS CI: clippy with `ZEILER_SKIP_LIBMPV_CHECK`, tests against Homebrew's libmpv. Two reviews with adversarial refuters; eleven findings confirmed and fixed (among them Swift objects built for the build machine's macOS); the rest are follow-ups below |
 
 ## Decisions already made by the owner
 
 - **Player work:** this plan owns all of it (embedded, skip, subtitles). Embedded runs on
-  Windows now and comes to macOS later (M13). Linux keeps mpv in its own window, with full
-  controls in Zeiler.
+  Windows and, since M13, macOS. Linux keeps mpv in its own window, with full controls in
+  Zeiler (M14 was prototyped and stopped, see below).
 - **Marketplace:** lists all community addons, labelled "not reviewed by Zeiler". Adult
   addons are hidden by default. Every install still goes through the confirmation dialog.
 - **Built-in addons:** metadata and subtitles only (Cinemeta, OpenSubtitles v3, an anime
@@ -64,8 +65,8 @@ v0.2.0 the same day.
 | M10 | Marketplace | URL normalization, replace and reorder, update detection, an opt-in community directory with a detail page and labels; stremio:// handler on Windows and Linux (macOS needs an owner decision) (marketplace.json) |
 | M11 | Local profiles | `profiles.json`, migration by copy (not move), Argon2 PIN, avatars, a picker, per-profile addons, library and preferences |
 | M12 | Stremio account | Link-code sign-in first, then password; keychain storage; library sync; addon sync with Add/Remove/Reorder; never push built-ins (account-profile.json) |
-| M13 | macOS built-in playback | Render-API NSOpenGLView port of Harbor's `mpv_render_mac.rs` (geometry in points), bundled `@rpath` dylibs |
-| M14 | Optional | Linux embedded, only if a GtkGLArea prototype works first |
+| M13 | macOS built-in playback | Done in PR #21 (see the table above) |
+| M14 | Optional | Linux embedded: prototyped, not implemented. See "M14 prototype" below |
 
 Left from M6 for later (the player-ui.json and critique.md items M6 did not take on):
 - step 12 and critique §4: volume normalize (a labelled `af`), volume above 100%
@@ -135,7 +136,58 @@ ZEILER_SKIP_LIBMPV_CHECK=1 cargo clippy --target x86_64-pc-windows-gnu -p zeiler
 Never run `cargo update` in a feature commit. The lockfile pins `rust-ini` 0.21.1 on
 purpose; see the comment in `Cargo.toml`.
 
+## M14 prototype (Linux embedded): stopped
+
+The plan allowed M14 only if a GtkGLArea prototype worked first. It half works, so M14 was
+not implemented. The prototype is on the branch `claude/m14-gtkglarea-prototype`
+(`prototypes/linux-gl-overlay/`, with its workflow `m14-prototype.yml`; not for merging):
+a GTK window with a `GtkOverlay`, a `GtkGLArea` under a `WebKitWebView` with a transparent
+background, libmpv's render API into the GL area, a page that paints a red box and leaves
+the rest transparent, and a solid green lavfi video. It runs in CI on ubuntu-24.04 (WebKitGTK
+4.1, mpv 0.37, Xvfb, Mesa llvmpipe) and checks two pixels of a screenshot.
+
+- **The composition works.** GL content in the `GtkGLArea` shows through the transparent
+  page, and the page draws on top, in every run with WebKitGTK's default (accelerated)
+  compositing: a plain GL clear came out blue under the red box each time.
+- **mpv's frames do not, reliably.** With mpv rendering, about a quarter of identical runs
+  showed the green video under the red box; the rest showed black from the very first
+  frame to the last. mpv's log (VO configured, textures, FBO format, frame drops) and the
+  GL state at the first render (context, framebuffer, scissor, blend, colour mask) are the
+  same in green and black runs, and creating the render context at the first render
+  instead of at realize did not help (0 of 8). With `WEBKIT_DISABLE_COMPOSITING_MODE=1` the
+  page itself stopped painting.
+- Found on the way: the GL loader must match GDK's context (GLX on X11, EGL on Wayland).
+  WebKitGTK initializes EGL in the process, and asking EGL for a GLX context's functions
+  gives entry points that draw nothing.
+- **What could not be checked here** (macOS machine, Linux only in CI): a real GPU and
+  driver (Mesa, NVIDIA), Wayland, a desktop compositor, vaapi interop. The black frames may
+  be an llvmpipe/Xvfb artefact; Celluloid drives mpv the same way on real desktops.
+- **Before implementing M14:** run the prototype on a real Linux desktop (X11 and Wayland,
+  Mesa and NVIDIA) and find the black-frame race; and decide how Linux gets libmpv: the
+  release builds on ubuntu-22.04, whose libmpv1 (client API 1.x) libmpv2 6.0 refuses, so
+  M14 needs a newer build host (raising the glibc floor) or a `dlopen`-based binding that
+  falls back to external mpv. Then the shell side: Tauri's webview moved into a
+  `GtkOverlay` above a `GtkGLArea`, geometry in logical px, `LC_NUMERIC` after GTK init.
+
+## Follow-ups from M13
+
+- libmpv is a load-time dependency on macOS (Windows links it DELAYLOAD): if a bundled
+  library ever failed to load, the app would not start, instead of falling back to external
+  mpv. Weak-linking `libmpv` with a runtime probe would mirror Windows.
+- mpv's `tls-verify` is off by default on every OS (it predates M13); with Secure Transport
+  on macOS it could be turned on and use the system trust store.
+- Secure Transport (FFmpeg's TLS on macOS) stops at TLS 1.2; a server that requires 1.3
+  would need OpenSSL or mbedTLS in the bundle (FFmpeg would then become LGPL-3.0).
+
 ## Not yet verified on a real machine
+
+- macOS built-in playback was watched through on an Apple Silicon Mac (macOS 27, dev
+  build with the bundle built from source): Big Buck Bunny, 9:56, under the controls;
+  fullscreen in and out, an error, Back, and a new video replacing a playing one. The
+  release `.app` was built locally and passed `check-macos-app.sh`. Not run: the Intel
+  build (CI built it, linked it and ran the tests on macos-15-intel), macOS 12 to 26 (the
+  bundle targets 12.0, and the build fails on objects built for anything newer), a window
+  resize by hand, and an external display with another scale factor.
 
 - Library progress with a real stream in the app. It is unit-tested against a real
   libmpv event trace (recorded headless by `record_a_progress_trace` in

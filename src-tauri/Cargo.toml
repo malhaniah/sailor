@@ -50,9 +50,22 @@ tauri-plugin-dialog = { workspace = true }
 webview2-com = { workspace = true, optional = true }
 windows = { workspace = true, optional = true }
 
+# the macOS embedded surface (NSOpenGLView under the WKWebView); the versions wry uses
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true }
+objc2-app-kit = { workspace = true, optional = true }
+
 [features]
-# Embedded libmpv playback (video under the transparent webview). On Windows,
-# vendor libmpv first: `node scripts/fetch-libmpv.mjs`. Without this feature
+# Embedded libmpv playback (video under the transparent webview). On Windows and
+# macOS, vendor libmpv first: `node scripts/fetch-libmpv.mjs`. Without this feature
 # (or when libmpv-2.dll is missing at runtime) playback falls back to the
 # external mpv backend.
-embedded = ["zeiler-player/embedded", "dep:webview2-com", "dep:windows"]
+embedded = [
+    "zeiler-player/embedded",
+    "dep:webview2-com",
+    "dep:windows",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+]

@@ -36,6 +36,40 @@ fn main() {
         }
     }
 
+    // macOS embedded player: link the vendored libmpv bundle for the target's
+    // architecture (`node scripts/fetch-libmpv.mjs` puts it in src-tauri/libmpv-macos/
+    // <arch>/). Its libraries are @rpath-named; the app bundle carries them in
+    // Contents/Frameworks (the generated tauri.conf.json beside them), and tauri_build
+    // adds the rpath @executable_path/../Frameworks for bundle.macOS.frameworks. Debug
+    // builds (`tauri dev`, tests) also look in the vendor dir.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos")
+        && std::env::var_os("CARGO_FEATURE_EMBEDDED").is_some()
+    {
+        let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+            Ok("aarch64") => "arm64",
+            _ => "x86_64",
+        };
+        let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("libmpv-macos")
+            .join(arch)
+            .join("lib");
+        println!("cargo:rerun-if-changed={}", lib.display());
+        println!("cargo:rerun-if-env-changed=ZEILER_SKIP_LIBMPV_CHECK");
+        let skip_check = std::env::var_os("ZEILER_SKIP_LIBMPV_CHECK").is_some();
+        if !skip_check && !lib.join("libmpv.2.dylib").exists() {
+            panic!(
+                "building with `embedded` but {} is missing.\n\
+                 Run `node scripts/fetch-libmpv.mjs` first (downloads the pinned macOS \
+                 libmpv bundle for {arch}).",
+                lib.join("libmpv.2.dylib").display()
+            );
+        }
+        println!("cargo:rustc-link-search=native={}", lib.display());
+        if std::env::var("PROFILE").as_deref() == Ok("debug") {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
+        }
+    }
+
     // tauri.embedded.conf.json (passed via --config for embedded builds) maps
     // libmpv/libmpv-2.dll and libmpv/NOTICE.txt into the bundle, and tauri_build
     // refuses to compile when a mapped resource is missing. Drop in placeholders
