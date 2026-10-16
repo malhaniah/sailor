@@ -1,0 +1,1018 @@
+[
+  [
+    0,
+    {
+      "name": "pause",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    0,
+    {
+      "name": "volume",
+      "type": "property",
+      "value": 100.0
+    }
+  ],
+  [
+    0,
+    {
+      "name": "mute",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    0,
+    {
+      "name": "track-list",
+      "type": "property",
+      "value": []
+    }
+  ],
+  [
+    0,
+    {
+      "name": "chapter-list",
+      "type": "property",
+      "value": []
+    }
+  ],
+  [
+    0,
+    {
+      "name": "aid",
+      "type": "property",
+      "value": "auto"
+    }
+  ],
+  [
+    0,
+    {
+      "name": "sid",
+      "type": "property",
+      "value": "auto"
+    }
+  ],
+  [
+    0,
+    {
+      "name": "vid",
+      "type": "property",
+      "value": "auto"
+    }
+  ],
+  [
+    0,
+    {
+      "name": "secondary-sid",
+      "type": "property",
+      "value": "no"
+    }
+  ],
+  [
+    0,
+    {
+      "name": "sub-delay",
+      "type": "property",
+      "value": 0.0
+    }
+  ],
+  [
+    0,
+    {
+      "name": "audio-delay",
+      "type": "property",
+      "value": 0.0
+    }
+  ],
+  [
+    0,
+    {
+      "name": "speed",
+      "type": "property",
+      "value": 1.0
+    }
+  ],
+  [
+    2,
+    {
+      "type": "start-file"
+    }
+  ],
+  [
+    2,
+    {
+      "name": "media-title",
+      "type": "property",
+      "value": "lavfi:testsrc=duration=30:size=160x120:rate=10"
+    }
+  ],
+  [
+    6,
+    {
+      "name": "track-list",
+      "type": "property",
+      "value": [
+        {
+          "albumart": false,
+          "codec": "wrapped_avframe",
+          "codec-desc": "AVFrame to AVPacket passthrough",
+          "commentary": false,
+          "decoder": "wrapped_avframe",
+          "decoder-desc": "AVPacket to AVFrame passthrough",
+          "default": false,
+          "demux-fps": 10.0,
+          "demux-h": 120,
+          "demux-par": 1.0,
+          "demux-w": 160,
+          "dependent": false,
+          "external": false,
+          "ff-index": 0,
+          "forced": false,
+          "format-name": "rgb24",
+          "hearing-impaired": false,
+          "id": 1,
+          "image": false,
+          "original": false,
+          "selected": false,
+          "type": "video",
+          "visual-impaired": false
+        }
+      ]
+    }
+  ],
+  [
+    7,
+    {
+      "type": "file-loaded"
+    }
+  ],
+  [
+    7,
+    {
+      "type": "playback-restart"
+    }
+  ],
+  [
+    7,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 0.0
+    }
+  ],
+  [
+    7,
+    {
+      "name": "duration",
+      "type": "property",
+      "value": 0.8
+    }
+  ],
+  [
+    7,
+    {
+      "name": "paused-for-cache",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    7,
+    {
+      "name": "cache-buffering-state",
+      "type": "property",
+      "value": 100
+    }
+  ],
+  [
+    7,
+    {
+      "name": "eof-reached",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    7,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    7,
+    {
+      "name": "track-list",
+      "type": "property",
+      "value": [
+        {
+          "albumart": false,
+          "codec": "wrapped_avframe",
+          "codec-desc": "AVFrame to AVPacket passthrough",
+          "commentary": false,
+          "decoder": "wrapped_avframe",
+          "decoder-desc": "AVPacket to AVFrame passthrough",
+          "default": false,
+          "demux-fps": 10.0,
+          "demux-h": 120,
+          "demux-par": 1.0,
+          "demux-w": 160,
+          "dependent": false,
+          "external": false,
+          "ff-index": 0,
+          "forced": false,
+          "format-name": "rgb24",
+          "hearing-impaired": false,
+          "id": 1,
+          "image": false,
+          "main-selection": 0,
+          "original": false,
+          "selected": true,
+          "type": "video",
+          "visual-impaired": false
+        }
+      ]
+    }
+  ],
+  [
+    7,
+    {
+      "name": "aid",
+      "type": "property",
+      "value": "no"
+    }
+  ],
+  [
+    7,
+    {
+      "name": "sid",
+      "type": "property",
+      "value": "no"
+    }
+  ],
+  [
+    7,
+    {
+      "name": "vid",
+      "type": "property",
+      "value": "1"
+    }
+  ],
+  [
+    7,
+    {
+      "name": "dwidth",
+      "type": "property",
+      "value": 160
+    }
+  ],
+  [
+    7,
+    {
+      "name": "dheight",
+      "type": "property",
+      "value": 120
+    }
+  ],
+  [
+    7,
+    {
+      "name": "demuxer-cache-time",
+      "type": "property",
+      "value": 0.4
+    }
+  ],
+  [
+    20,
+    {
+      "name": "duration",
+      "type": "property",
+      "value": 29.900000000000002
+    }
+  ],
+  [
+    207,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 0.2
+    }
+  ],
+  [
+    257,
+    {
+      "name": "demuxer-cache-time",
+      "type": "property",
+      "value": 29.900000000000002
+    }
+  ],
+  [
+    407,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 0.4
+    }
+  ],
+  [
+    607,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 0.6
+    }
+  ],
+  [
+    808,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 0.8
+    }
+  ],
+  [
+    1007,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 1.0
+    }
+  ],
+  [
+    1207,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 1.2
+    }
+  ],
+  [
+    1407,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 1.4000000000000001
+    }
+  ],
+  [
+    1609,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 1.6
+    }
+  ],
+  [
+    1808,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 1.8
+    }
+  ],
+  [
+    2008,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 2.0
+    }
+  ],
+  [
+    2208,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 2.2
+    }
+  ],
+  [
+    2408,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 2.4
+    }
+  ],
+  [
+    2607,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 2.6
+    }
+  ],
+  [
+    2806,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 2.8000000000000003
+    }
+  ],
+  [
+    3006,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 3.0
+    }
+  ],
+  [
+    3205,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 3.2
+    }
+  ],
+  [
+    3406,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 3.4
+    }
+  ],
+  [
+    3607,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 3.6
+    }
+  ],
+  [
+    3807,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 3.8000000000000003
+    }
+  ],
+  [
+    4000,
+    {
+      "type": "seek"
+    }
+  ],
+  [
+    4000,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": true
+    }
+  ],
+  [
+    4008,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 15.0
+    }
+  ],
+  [
+    4008,
+    {
+      "type": "playback-restart"
+    }
+  ],
+  [
+    4008,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    4207,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 15.200000000000001
+    }
+  ],
+  [
+    4407,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 15.4
+    }
+  ],
+  [
+    4608,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 15.6
+    }
+  ],
+  [
+    4808,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 15.8
+    }
+  ],
+  [
+    5008,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 16.0
+    }
+  ],
+  [
+    5208,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 16.2
+    }
+  ],
+  [
+    5408,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 16.4
+    }
+  ],
+  [
+    5607,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 16.6
+    }
+  ],
+  [
+    5808,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 16.8
+    }
+  ],
+  [
+    6001,
+    {
+      "name": "pause",
+      "type": "property",
+      "value": true
+    }
+  ],
+  [
+    6008,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 17.0
+    }
+  ],
+  [
+    7002,
+    {
+      "type": "seek"
+    }
+  ],
+  [
+    7003,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 8.0
+    }
+  ],
+  [
+    7003,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": true
+    }
+  ],
+  [
+    7003,
+    {
+      "type": "playback-restart"
+    }
+  ],
+  [
+    7003,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    7504,
+    {
+      "name": "pause",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    7554,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 8.1
+    }
+  ],
+  [
+    7754,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 8.2
+    }
+  ],
+  [
+    7954,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 8.4
+    }
+  ],
+  [
+    8154,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 8.6
+    }
+  ],
+  [
+    8354,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 8.8
+    }
+  ],
+  [
+    8554,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 9.0
+    }
+  ],
+  [
+    8754,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 9.200000000000001
+    }
+  ],
+  [
+    8954,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 9.4
+    }
+  ],
+  [
+    9154,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 9.6
+    }
+  ],
+  [
+    9354,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 9.8
+    }
+  ],
+  [
+    9505,
+    {
+      "name": "speed",
+      "type": "property",
+      "value": 2.0
+    }
+  ],
+  [
+    9554,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 10.0
+    }
+  ],
+  [
+    9753,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 10.4
+    }
+  ],
+  [
+    9952,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 10.8
+    }
+  ],
+  [
+    10152,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 11.200000000000001
+    }
+  ],
+  [
+    10351,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 11.6
+    }
+  ],
+  [
+    10551,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 12.0
+    }
+  ],
+  [
+    10751,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 12.4
+    }
+  ],
+  [
+    10951,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 12.8
+    }
+  ],
+  [
+    11151,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 13.200000000000001
+    }
+  ],
+  [
+    11351,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 13.6
+    }
+  ],
+  [
+    11506,
+    {
+      "name": "speed",
+      "type": "property",
+      "value": 1.0
+    }
+  ],
+  [
+    11506,
+    {
+      "type": "seek"
+    }
+  ],
+  [
+    11506,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": true
+    }
+  ],
+  [
+    11551,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 28.0
+    }
+  ],
+  [
+    11554,
+    {
+      "type": "playback-restart"
+    }
+  ],
+  [
+    11554,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": false
+    }
+  ],
+  [
+    11751,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 28.2
+    }
+  ],
+  [
+    11951,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 28.400000000000002
+    }
+  ],
+  [
+    12151,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 28.6
+    }
+  ],
+  [
+    12351,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 28.8
+    }
+  ],
+  [
+    12551,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 29.0
+    }
+  ],
+  [
+    12751,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 29.2
+    }
+  ],
+  [
+    12951,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 29.400000000000002
+    }
+  ],
+  [
+    13151,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 29.6
+    }
+  ],
+  [
+    13351,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 29.8
+    }
+  ],
+  [
+    13551,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": 29.900000000000002
+    }
+  ],
+  [
+    13554,
+    {
+      "name": "pause",
+      "type": "property",
+      "value": true
+    }
+  ],
+  [
+    13554,
+    {
+      "name": "eof-reached",
+      "type": "property",
+      "value": true
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "time-pos",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "duration",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "paused-for-cache",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "cache-buffering-state",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "eof-reached",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "seeking",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "demuxer-cache-time",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15007,
+    {
+      "name": "track-list",
+      "type": "property",
+      "value": []
+    }
+  ],
+  [
+    15007,
+    {
+      "reason": "quit",
+      "type": "end-file"
+    }
+  ],
+  [
+    15008,
+    {
+      "name": "media-title",
+      "type": "property",
+      "value": null
+    }
+  ],
+  [
+    15008,
+    {
+      "type": "shutdown"
+    }
+  ]
+]

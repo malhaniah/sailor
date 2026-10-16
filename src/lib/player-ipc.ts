@@ -13,6 +13,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { PlaybackContext } from "./library-ipc";
 import type { PlayerBackend } from "./types";
 
 export type { PlayerBackend };
@@ -60,12 +61,18 @@ export interface PlayerBackends {
 export const playerBackends = () => invoke<PlayerBackends>("player_backends");
 /**
  * Start (or replace) playback. `backend` defaults to "auto", which follows the
- * `playerBackend` setting; Rust falls back from embedded to external mpv itself.
+ * `playerBackend` setting; Rust falls back from embedded to external mpv itself. With a
+ * `context` (the title and video), Rust saves the playback's progress to the library.
  */
-export const playerStart = (request: PlaybackRequest, backend: PlayerBackend = "auto") =>
-  invoke<StartResult>("player_start", { request, backend });
-/** Load another file into the running player (same window, same backend). */
-export const playerLoad = (request: PlaybackRequest) => invoke<void>("player_load", { request });
+export const playerStart = (
+  request: PlaybackRequest,
+  backend: PlayerBackend = "auto",
+  context: PlaybackContext | null = null,
+) => invoke<StartResult>("player_start", { request, backend, context });
+/** Load another file into the running player (same window, same backend); `context`
+ * tracks the new file's progress (the replaced file's is saved first). */
+export const playerLoad = (request: PlaybackRequest, context: PlaybackContext | null = null) =>
+  invoke<void>("player_load", { request, context });
 /** Stop the player; with `only`, just a session on that backend (none = any backend). */
 export const playerStop = (only?: ActiveBackend) =>
   invoke<void>("player_stop", only ? { only } : {});

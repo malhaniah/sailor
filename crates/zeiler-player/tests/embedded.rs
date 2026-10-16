@@ -237,6 +237,67 @@ fn quit_reports_shutdown() {
     });
 }
 
+/// Records the event trace that the shell's library progress tests replay
+/// (`src-tauri/src/library/fixtures/libmpv-trace.json`): a 30 s test pattern played in
+/// real time, with what a viewer does — play 4 s, skip ahead to 0:15, play 2 s, pause,
+/// skip back to 0:08 while paused, resume for 2 s, 2 s at double speed, skip to 0:28,
+/// play to the end (keep-open: `eof-reached`), quit. Each entry is
+/// `[ms since the load, event]`.
+///
+/// ```text
+/// ZEILER_TRACE_OUT=src-tauri/src/library/fixtures/libmpv-trace.json \
+///   cargo test -p zeiler-player --features embedded --test embedded -- --ignored record
+/// ```
+#[test]
+#[ignore = "records a fixture: set ZEILER_TRACE_OUT"]
+fn record_a_progress_trace() {
+    let out = std::env::var("ZEILER_TRACE_OUT").expect("ZEILER_TRACE_OUT names the output file");
+    let (player, rx) = spawn();
+    let start = Instant::now();
+    let mut trace: Vec<Value> = Vec::new();
+    let pump = |trace: &mut Vec<Value>, wait: Duration| {
+        let until = Instant::now() + wait;
+        while let Ok(event) = rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+            let shutdown = event == PlayerEvent::Shutdown;
+            trace.push(json!([start.elapsed().as_millis() as u64, event]));
+            if shutdown {
+                break;
+            }
+        }
+    };
+    let set = |name: &str, value: Value| player.set_property(name.into(), value).unwrap();
+    let seek = |to: &str| {
+        player
+            .command(vec!["seek".into(), to.into(), "absolute".into()])
+            .unwrap()
+    };
+
+    player
+        .load(request(
+            "av://lavfi:testsrc=duration=30:size=160x120:rate=10",
+        ))
+        .unwrap();
+    pump(&mut trace, Duration::from_millis(4_000));
+    seek("15");
+    pump(&mut trace, Duration::from_millis(2_000));
+    set("pause", json!(true));
+    pump(&mut trace, Duration::from_millis(1_000));
+    seek("8");
+    pump(&mut trace, Duration::from_millis(500));
+    set("pause", json!(false));
+    pump(&mut trace, Duration::from_millis(2_000));
+    set("speed", json!(2.0));
+    pump(&mut trace, Duration::from_millis(2_000));
+    set("speed", json!(1.0));
+    seek("28");
+    pump(&mut trace, Duration::from_millis(3_500));
+    player.quit();
+    pump(&mut trace, TIMEOUT);
+
+    let text = serde_json::to_string_pretty(&trace).unwrap();
+    std::fs::write(&out, text + "\n").unwrap();
+}
+
 // --- a tiny loopback HTTP server --------------------------------------------------------
 
 /// Serves the same short silent WAV at every path and records each request head.

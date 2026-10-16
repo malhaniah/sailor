@@ -1,0 +1,19 @@
+[package]
+name = "zeiler-account"
+description = "Stremio-compatible library items, watch progress and the watched-episodes bitfield"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+# std only (no "serde"/"clock" features): timestamps are (de)serialized by hand in
+# types.rs and "now" is always passed in, so the logic stays deterministic in tests
+chrono = { workspace = true }
+flate2 = { workspace = true }
+base64 = { workspace = true }

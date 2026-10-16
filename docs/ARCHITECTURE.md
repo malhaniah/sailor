@@ -24,6 +24,7 @@ zeiler/
   Cargo.toml              # virtual workspace: ["src-tauri", "crates/*"], resolver 3
   package.json  vite.config.ts  index.html  src/   # React UI at repo root
   crates/
+    zeiler-account/       # library items, progress rules, watched bitfield (stremio-core compatible)
     zeiler-addon/         # Stremio addon protocol: types, URL builder, HTTP client, fan-out
     zeiler-engine/        # librqbit session + local stream endpoint for the player
     zeiler-player/        # player session: external mpv over JSON IPC; embedded libmpv (feature)
@@ -174,8 +175,10 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
 - Player (backend-neutral; see "Player backends"): `player_backends()` →
   `{ embedded: { available, reason?, libmpvVersion? }, external: { available, path? } }` ·
   `player_start { request: { url, title?, headers, userAgent?, referrer?, startAtSec? },
-  backend?: "auto" | "embedded" | "external" }` → `{ backend, fallbackReason?,
-  remoteControl }` · `player_load { request }` · `player_stop { only? }` (any backend;
+  backend?: "auto" | "embedded" | "external", context?: { meta, videoId, videos } }` →
+  `{ backend, fallbackReason?, remoteControl }` (with `context`, the playback's progress
+  is saved to the library; see "Library and progress") · `player_load { request,
+  context? }` · `player_stop { only? }` (any backend;
   `only: "embedded" | "external"` stops just a session on that backend) ·
   `player_set_property { name, value }` · `player_command { args }` ·
   `player_get_property { name }` → JSON value · `player_set_geometry { geometry: { x, y,
@@ -189,6 +192,14 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   `player_embedded_start { request }` (start embedded, no fallback) ·
   `player_embedded_stop()` (stops only an embedded session) ·
   `player_embedded_set_property { name, value }` · `player_embedded_command { args }`
+- Library (see "Library and progress"): `library_list { query: { filter:
+  "continueWatching" | "library" | "history", sort?, type?, limit? } }` → LibraryEntry[] ·
+  `library_get { id, videos? }` → `{ entry, watchedVideoIds }` or null ·
+  `library_set { request: { meta, inLibrary } }` → LibraryEntry or null ·
+  `library_mark_watched { request: { meta, videos, videoIds, season?, watched } }` →
+  `{ entry, watchedVideoIds }` or null (a season, some videos, or with neither the
+  whole title) ·
+  `library_clear_progress { id }` → LibraryEntry or null
 - Settings: `settings_get()` → Settings · `settings_patch { patch }` → Settings (merges
   the given top-level keys server-side; unknown keys and wrongly typed values are
   rejected) · `settings_set { settings }` → Settings (**deprecated**, replaces every
@@ -212,6 +223,8 @@ Events (named `<domain>://<event>`, rare notifications only):
 - `update://ready` / `update://installing` (version) · `update://failed` (message)
 - `player://event` — player events from either backend (`PlayerEvent`, kebab-case
   tagged; see "Player backends")
+- `library://changed` — `{ ids }`, the library items that changed, after every committed
+  change (the user's, or saved playback progress)
 
 High-frequency data (engine stats, player position) will move to `tauri::ipc::Channel`
 subscriptions when the embedded player lands.
@@ -221,12 +234,14 @@ subscriptions when the embedded player lands.
 All durable state is Rust-owned JSON under the app data dir; there is no localStorage.
 `src-tauri/src/persist.rs` holds the rules: a missing file reads as defaults; an
 unparseable one is moved to `*.json.corrupt.bak` and replaced by defaults; any other IO
-error fails startup; writes are atomic (`*.json.tmp` + rename). `AppState` keeps
+error fails startup; writes are atomic and durable (`*.json.tmp`, flushed to disk, then
+renamed over the target). `AppState` keeps
 `settings.json` and `addons.json`. Every later feature owns a `JsonStore<T>` (load / get /
 update-and-persist under its own lock), registered with `app.manage` — it does not grow
 `AppState`. New files carry a `{"version": N, ...}` envelope. Per-user files take their
 path from `AppState::profile_dir()` (the data dir until profiles exist, then the active
-profile's folder); re-creatable caches go under the cache dir.
+profile's folder); re-creatable caches go under the cache dir. The first such store is
+the library, `library.json` (`{ version, uid, items }`, see "Library and progress").
 
 Built-in addons are a table in `src-tauri/src/builtin.rs` (transport URL, compiled-in
 manifest snapshot from `src-tauri/builtin/`, an enabled-by-settings predicate). A test
@@ -252,6 +267,52 @@ Reserved key map — names are fixed now; each key is added only when its featur
 
 Per-profile keys live in `settings.json` until local profiles exist, then move into the
 profile store. There is no `profile{}` group in Settings.
+
+## Library and progress
+
+The library is local-first and Stremio-compatible, so a later, opt-in account sync can
+exchange items with Stremio's own apps without loss or surprises.
+
+- **Data** (`crates/zeiler-account`, pure: no I/O, no clock). `LibraryItem` mirrors
+  stremio-core's `libraryItem` field for field — lenient in (floats, nulls, strings in
+  integer fields; unknown fields kept at every level), strict out (stremio-core's field
+  names and order, integers, `video_id`, RFC 3339 `Z` times). The watched-episodes
+  bitfield is a port of stremio-watched-bitfield (`{anchor}:{len}:{base64(zlib)}`,
+  parsed from the right because episode ids contain `:`, re-aligned on the anchor).
+  `removed`/`temp` mean what they mean in Stremio: a title played but never added is
+  `removed + temp` and shows only in Continue Watching. Video order follows
+  stremio-core too: the next episode is taken from the meta's own order (duplicates
+  dropped, specials last, videos without episode numbers by date), the bitfield from
+  `watched_bitfield`'s; a season or episode that is not a 32-bit number reads as
+  absent, never as an error. All of the meta's behaviour hints are kept on the item.
+  Marking the episode Continue Watching points at moves it on, as Stremio's apps do.
+- **Store** (`src-tauri/src/library/`). `library.json` under `profile_dir()`, one bucket
+  keyed by id (`uid: null` until account sync). A damaged item is skipped, not the file.
+  Every change is made on a copy and committed only when the item really changed
+  (`_mtime` stamped then), then announced as `library://changed`.
+- **Progress comes from the player, not the UI.** The Player screen passes the launch's
+  `context` (meta summary, video id, the title's videos) to `player_start`; the shell
+  feeds that session's `PlayerEvent`s to a tracker (`library/progress.rs`), whichever
+  backend plays and also after Back leaves external mpv playing. stremio-core's player
+  rules apply: time watched accumulates only from playback (a `seek` event, a jump
+  beyond what the wall clock allows, or a step back counts as a seek); more than 70% of
+  the duration watched marks the video watched (its bit set, `timesWatched + 1`);
+  stopping past 90% drops the resume position and moves Continue Watching on to the
+  next released episode (never across into the specials). Live TV is never tracked.
+  Writes happen every 15 s while playing, on pause, at the end of the file and when the
+  session ends (replaced, stopped, loaded over, shut down, or the app exits, which waits
+  up to 3 s). One worker applies them in order, and a session is always closed before
+  the next one starts, so a session's last write can never land after the next one's.
+  A playback that never reported a position writes nothing. The last-resort external
+  launch without JSON IPC has no position feed and saves nothing.
+- **Robust counting.** Watched time is the distance between consecutive reports of
+  one run. When the stored position moved underneath a run (the user dismissed the
+  title or marked it watched while external mpv plays on, or a write failed), the run
+  re-anchors first, so a skip is never counted. Only the file the playback loaded (or
+  its redirect) is tracked; another file opened in the same mpv ends the session. The
+  context arrives as plain JSON and is read inside the command, so a malformed one
+  costs only the library entry, never the playback. A failed write is retried once,
+  and a session's batches count as its first until one is saved.
 
 ## Player backends
 

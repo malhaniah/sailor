@@ -72,6 +72,7 @@ librsvg, patchelf — see `.github/workflows/ci.yml` for the exact list).
 
 | Path | What it is |
 | --- | --- |
+| `crates/zeiler-account` | Library items, playback-progress rules and the watched bitfield (Stremio-compatible; pure, no I/O) |
 | `crates/zeiler-addon` | Stremio addon-protocol client (types, URL building, fan-out) |
 | `crates/zeiler-engine` | Embedded librqbit torrent engine + loopback stream endpoint |
 | `crates/zeiler-player` | Playback session: external mpv over JSON IPC; embedded libmpv behind the `embedded` feature |

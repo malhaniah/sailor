@@ -12,6 +12,41 @@ written against the behavior of **stremio-core**
 and the **stremio-addon-sdk** protocol documentation
 (<https://github.com/Stremio/stremio-addon-sdk>), MIT License.
 
+## stremio-core and stremio-watched-bitfield (MIT)
+
+`crates/zeiler-account` adapts the library model of **stremio-core**
+(<https://github.com/Stremio/stremio-core>): the `libraryItem` schema
+(`types/library/library_item.rs`), the player's progress rules (`models/player.rs`),
+the meta's video order and next video (`types/resource/meta_item.rs`), marking videos
+watched (`models/meta_details.rs`), the library update and view rules
+(`models/ctx/update_library.rs`, `models/library_with_filters.rs`), and ports its **stremio-watched-bitfield** codec. The
+adapted files (`src/types.rs`, `src/library.rs`, `src/watched.rs`) keep a pointer to
+this notice.
+
+```text
+MIT License
+
+Copyright (c) 2019 SmartCode OOD
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Harbor (MIT)
 
 Zeiler's built-in player follows the Tauri + libmpv technique shipped by **Harbor**

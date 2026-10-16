@@ -13,6 +13,11 @@
  *   IPC never comes up (`remoteControl: false`) does the page fall back to the passive
  *   "Playing in mpv" card.
  *
+ * Progress is not this page's job: `player_start` gets the launch's `playbackContext`
+ * (title, video, episode list) and Rust saves the position, watched marks and Continue
+ * Watching from the player's own events, whichever backend plays — also after Back
+ * leaves external mpv playing.
+ *
  * The session owns its torrent: however the page goes away (Back, Escape, native history
  * navigation, an error), the player is stopped and a torrent it resolved is removed from
  * the engine (honouring `deleteOnStop`) — including one whose resolve only completes
@@ -25,6 +30,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorKind } from "../../lib/ipc";
 import {
   leavePlayer,
+  playbackContext,
   type PlayerLaunch,
   playerActive,
   urlRequest,
@@ -193,7 +199,8 @@ export function usePlaybackSession(
       setVideoBehind(false);
       let result;
       try {
-        result = await playerStart(request, launch.backend);
+        // with the context, Rust saves this playback's progress to the library
+        result = await playerStart(request, launch.backend, playbackContext(launch));
       } catch (e) {
         // A refused start leaves nothing of ours running: Rust validates the request
         // before it replaces the previous session, and a later failure has already

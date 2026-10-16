@@ -39,6 +39,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
+# the watched-episodes bitfield of library items (zeiler-account): zlib + base64, both
+# already in Cargo.lock (flate2 via librqbit's compression, base64 via reqwest)
+flate2 = "1"
+base64 = "0.22"
 
 # torrent engine — pinned to a main rev carrying Windows fixes #681/#689/#690
 # (switch to crates.io once 9.0.2 is released)
@@ -59,6 +63,7 @@ windows = { version = "0.62", features = [
 ] }
 
 # workspace crates
+zeiler-account = { path = "crates/zeiler-account" }
 zeiler-addon = { path = "crates/zeiler-addon" }
 zeiler-engine = { path = "crates/zeiler-engine" }
 zeiler-player = { path = "crates/zeiler-player" }

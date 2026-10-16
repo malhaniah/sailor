@@ -1,13 +1,17 @@
 mod builtin;
 mod commands;
 mod error;
+mod library;
 mod persist;
 mod state;
 mod updater;
 
-use tauri::Manager;
+use std::time::Duration;
+
+use tauri::{Emitter, Manager};
 use tracing::{error, info};
 
+use crate::library::{LIBRARY_CHANGED, LibraryChanged, LibraryState};
 use crate::state::AppState;
 
 pub fn run() {
@@ -45,7 +49,15 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?;
             let state = tauri::async_runtime::block_on(AppState::load(data_dir, cache_dir))?;
+            let handle = app.handle().clone();
+            let library = tauri::async_runtime::block_on(LibraryState::load(
+                &state.profile_dir(),
+                move |ids| {
+                    let _ = handle.emit(LIBRARY_CHANGED, LibraryChanged { ids });
+                },
+            ))?;
             app.manage(state);
+            app.manage(library);
             app.manage(commands::mpv::PlayerState::default());
             updater::start(app.handle().clone());
             info!("zeiler started");
@@ -62,6 +74,12 @@ pub fn run() {
             commands::engine::engine_resolve,
             commands::engine::engine_stats,
             commands::engine::engine_remove,
+            // library
+            commands::library::library_list,
+            commands::library::library_get,
+            commands::library::library_set,
+            commands::library::library_mark_watched,
+            commands::library::library_clear_progress,
             commands::settings::settings_get,
             commands::settings::settings_patch,
             commands::settings::settings_set,
@@ -93,6 +111,15 @@ pub fn run() {
         })
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                // write the progress of whatever is still playing (bounded wait)
+                if let Some(player) = app.try_state::<commands::mpv::PlayerState>()
+                    && let Some(written) = player.close_progress()
+                {
+                    let _ = tauri::async_runtime::block_on(tokio::time::timeout(
+                        Duration::from_secs(3),
+                        written,
+                    ));
+                }
                 // flush engine persistence before the process dies
                 if let Some(state) = app.try_state::<AppState>()
                     && let Some(engine) = state.engine_if_running()

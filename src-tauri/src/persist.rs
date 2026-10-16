@@ -7,8 +7,9 @@
 //!   overwrite the user's real data), then `T::default()`;
 //! - any other IO error (permissions, AV sharing violation) is returned, so startup
 //!   fails rather than silently losing state;
-//! - writes go to `*.json.tmp` first and are renamed over the target.
+//! - writes go to `*.json.tmp` first, are flushed to disk, then renamed over the target.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -40,15 +41,29 @@ pub(crate) async fn read_json<T: DeserializeOwned + Default>(path: &Path) -> any
     }
 }
 
-/// Write `value` to `path` as pretty JSON, atomically (temp file + rename). Callers
+/// Write `value` to `path` as pretty JSON, atomically (temp file + rename) and durably:
+/// the temp file reaches the disk before it replaces the target, so a crash or power
+/// loss right after a write leaves the old file or the new one, never a zero-filled
+/// one (NTFS and APFS can otherwise commit the rename before the data). Callers
 /// serialize concurrent writes to the same path themselves (a lock per file).
 pub(crate) async fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), IpcError> {
     let json = serde_json::to_vec_pretty(value)
         .map_err(|e| IpcError::Storage(format!("Could not serialize {}: {e}", path.display())))?;
     let tmp = path.with_extension("json.tmp");
-    tokio::fs::write(&tmp, &json)
+    // std::fs in one blocking task, so every error of the data write comes back here (a
+    // tokio File reports a failed write only on a later flush) and the handle is closed
+    // before the rename
+    let written = {
+        let tmp = tmp.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(&json)?;
+            file.sync_all()
+        })
         .await
-        .map_err(|e| IpcError::Storage(format!("Could not write {}: {e}", tmp.display())))?;
+        .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+    };
+    written.map_err(|e| IpcError::Storage(format!("Could not write {}: {e}", tmp.display())))?;
     tokio::fs::rename(&tmp, path)
         .await
         .map_err(|e| IpcError::Storage(format!("Could not replace {}: {e}", path.display())))?;
@@ -63,10 +78,6 @@ pub(crate) async fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(
 ///
 /// New files should carry a `{"version": N, ...}` envelope so their schema can be
 /// migrated at load time.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the first feature store lands after M0")
-)]
 pub(crate) struct JsonStore<T> {
     path: PathBuf,
     value: RwLock<T>,
@@ -75,10 +86,6 @@ pub(crate) struct JsonStore<T> {
     write_lock: Mutex<()>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the first feature store lands after M0")
-)]
 impl<T> JsonStore<T>
 where
     T: Clone + Default + Serialize + DeserializeOwned,
@@ -97,12 +104,20 @@ where
     }
 
     /// A snapshot of the current value.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the library store reads through `read`")
+    )]
     pub(crate) async fn get(&self) -> T {
         self.value.read().await.clone()
     }
 
     /// Apply `f` to a copy of the value, persist it, then publish it. If the write
     /// fails, the in-memory value is left unchanged, so memory never runs ahead of disk.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the library store updates through `try_update`")
+    )]
     pub(crate) async fn update(&self, f: impl FnOnce(&mut T)) -> Result<T, IpcError> {
         let _guard = self.write_lock.lock().await;
         let mut next = self.value.read().await.clone();
@@ -110,6 +125,30 @@ where
         write_json(&self.path, &next).await?;
         *self.value.write().await = next.clone();
         Ok(next)
+    }
+
+    /// Run `f` on the current value without copying it (for large values such as the
+    /// library).
+    pub(crate) async fn read<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        f(&*self.value.read().await)
+    }
+
+    /// Like [`update`](Self::update), but `f` decides what happens: `Ok(Some(r))`
+    /// persists and publishes the changed copy and returns `r`; `Ok(None)` means nothing
+    /// changed, so nothing is written; `Err` aborts without a write. Serialized with
+    /// every other update, with the same memory-never-ahead-of-disk rule.
+    pub(crate) async fn try_update<R>(
+        &self,
+        f: impl FnOnce(&mut T) -> Result<Option<R>, IpcError>,
+    ) -> Result<Option<R>, IpcError> {
+        let _guard = self.write_lock.lock().await;
+        let mut next = self.value.read().await.clone();
+        let Some(result) = f(&mut next)? else {
+            return Ok(None);
+        };
+        write_json(&self.path, &next).await?;
+        *self.value.write().await = next;
+        Ok(Some(result))
     }
 }
 
@@ -213,6 +252,42 @@ pub(crate) mod tests {
         assert_eq!(store.get().await.hits, 16);
         let on_disk: Counter = read_json(&path).await.unwrap();
         assert_eq!(on_disk.hits, 16);
+    }
+
+    #[tokio::test]
+    async fn try_update_writes_only_changes() {
+        let dir = temp_dir("persist-store-try");
+        let path = dir.join("counter.json");
+        let store = JsonStore::<Counter>::load(path.clone()).await.unwrap();
+
+        let unchanged = store.try_update(|_| Ok(None::<()>)).await.unwrap();
+        assert_eq!(unchanged, None);
+        assert!(!path.exists(), "nothing changed, nothing written");
+
+        let refused = store
+            .try_update(|c| {
+                c.hits = 5;
+                Err::<Option<()>, _>(IpcError::InvalidInput("no".into()))
+            })
+            .await;
+        assert!(refused.is_err());
+        assert_eq!(
+            store.read(|c| c.hits).await,
+            0,
+            "an error discards the copy"
+        );
+
+        let changed = store
+            .try_update(|c| {
+                c.hits = 7;
+                Ok(Some(c.hits * 2))
+            })
+            .await
+            .unwrap();
+        assert_eq!(changed, Some(14));
+        assert_eq!(store.read(|c| c.hits).await, 7);
+        let on_disk: Counter = read_json(&path).await.unwrap();
+        assert_eq!(on_disk.hits, 7);
     }
 
     #[tokio::test]

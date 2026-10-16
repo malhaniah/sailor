@@ -225,10 +225,6 @@ impl AppState {
     /// `data_dir/profiles/<active id>/`, so new per-user stores must take their path
     /// from here rather than from the data dir. Device-wide files (settings.json,
     /// engine state) stay in the data dir.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "first per-profile store lands after M0")
-    )]
     pub fn profile_dir(&self) -> PathBuf {
         self.data_dir.clone()
     }

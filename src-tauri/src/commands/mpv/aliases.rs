@@ -37,9 +37,16 @@ pub async fn player_play(
     mut request: PlaybackRequest,
 ) -> Result<(), IpcError> {
     check_request(&mut request)?;
-    start(&app, &state, &player, request, PlayerBackend::External)
-        .await
-        .map(drop)
+    start(
+        &app,
+        &state,
+        &player,
+        request,
+        PlayerBackend::External,
+        None,
+    )
+    .await
+    .map(drop)
 }
 
 /// Deprecated: `player_start { request, backend: "embedded" }`.
@@ -51,9 +58,16 @@ pub async fn player_embedded_start(
     mut request: PlaybackRequest,
 ) -> Result<(), IpcError> {
     check_request(&mut request)?;
-    start(&app, &state, &player, request, PlayerBackend::Embedded)
-        .await
-        .map(drop)
+    start(
+        &app,
+        &state,
+        &player,
+        request,
+        PlayerBackend::Embedded,
+        None,
+    )
+    .await
+    .map(drop)
 }
 
 /// Deprecated: stops only an embedded session (see the module docs).

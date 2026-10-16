@@ -17,8 +17,9 @@
  * and the app shell is mounted but hidden underneath it (see `src/main.tsx`). The shell's
  * global key listeners read it so they stay quiet while the player has the keyboard.
  */
+import { type PlaybackContext, videoRefs } from "./library-ipc";
 import type { PlaybackRequest } from "./player-ipc";
-import type { MetaItem, PlayerBackend, Stream, Subtitle, Video } from "./types";
+import type { MetaItem, PlayerBackend, PosterShape, Stream, Subtitle, Video } from "./types";
 
 // --- the launch ---------------------------------------------------------------------------
 
@@ -49,10 +50,18 @@ export interface LaunchMeta {
   id: string;
   name: string;
   poster: string | null;
+  posterShape: PosterShape;
   /** wide backdrop art; the external-mpv screen fills the window with it */
   background: string | null;
   /** the series' episode list, for next-episode and binge lookups */
   videos: Video[];
+  /** all of the meta's hints (the library keeps them, as Stremio does) */
+  behaviorHints: {
+    /** the video a movie's streams are asked for when it has no `video` */
+    defaultVideoId: string | null;
+    hasScheduledVideos: boolean;
+    [key: string]: unknown;
+  };
 }
 
 export interface LaunchVideo {
@@ -153,8 +162,13 @@ export function launchForStream({
       id: meta.id,
       name: meta.name,
       poster: meta.poster ?? null,
+      posterShape: meta.posterShape,
       background: meta.background ?? null,
       videos: meta.videos,
+      behaviorHints: {
+        ...meta.behaviorHints,
+        defaultVideoId: meta.behaviorHints.defaultVideoId ?? null,
+      },
     },
     video: video
       ? {
@@ -179,6 +193,29 @@ export function launchForStream({
     addonName,
     live: meta.behaviorHints.isLive || meta.type === "tv",
     backend: "auto",
+  };
+}
+
+/**
+ * What `player_start` needs to save this launch's progress to the library (Rust tracks
+ * it from the player's events). Null for live TV, which is never tracked, and for
+ * launches without a meta (the dev-only legacy routes).
+ */
+export function playbackContext(launch: PlayerLaunch): PlaybackContext | null {
+  const { meta } = launch;
+  if (!meta || launch.live) return null;
+  return {
+    meta: {
+      id: meta.id,
+      type: meta.type,
+      name: meta.name,
+      poster: meta.poster,
+      posterShape: meta.posterShape,
+      behaviorHints: { ...meta.behaviorHints, isLive: false },
+    },
+    // the id the picker asked the addons for (PlayPicker)
+    videoId: launch.video?.id ?? meta.behaviorHints.defaultVideoId ?? meta.id,
+    videos: videoRefs(meta.videos),
   };
 }
 

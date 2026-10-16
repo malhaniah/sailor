@@ -12,6 +12,11 @@
 //! - **Validation.** Property writes, property reads and commands from the UI are
 //!   checked against the tables in [`validate`]; requests are scheme- and
 //!   header-checked here before anything reaches mpv.
+//! - **Library progress.** `player_start` and `player_load` take an optional
+//!   `context` (the title and video being played); the session's events then also
+//!   feed a progress tracker (`crate::library::progress`) that writes the library.
+//!   Replacing, stopping or loading over a session closes its tracker first, so its
+//!   last write always lands before the next playback's first.
 //! - **Per-OS surfaces.** The embedded video surface is OS code: `windows.rs`
 //!   (libmpv child window under the transparent WebView2; its module docs hold the
 //!   transparency policy), `macos.rs`/`linux.rs` (not available yet) and `stub.rs`
@@ -50,6 +55,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::oneshot;
 use tracing::warn;
 use zeiler_player::external_ipc::{ExternalError, ExternalIpcPlayer};
 use zeiler_player::{
@@ -57,6 +63,8 @@ use zeiler_player::{
 };
 
 use crate::error::IpcError;
+use crate::library::LibraryState;
+use crate::library::progress::{PlaybackContext, SessionProgress};
 use crate::state::AppState;
 
 /// The Tauri event carrying every [`PlayerEvent`].
@@ -85,6 +93,8 @@ pub struct PlayerState {
     /// Serializes start/load/stop, so two starts can never both spawn a player.
     op: tokio::sync::Mutex<()>,
     surface: imp::Surface,
+    /// Library progress of the playback in session `.0` (absent: not tracked).
+    progress: Mutex<Option<(u64, Arc<SessionProgress>)>>,
 }
 
 #[derive(Clone)]
@@ -119,6 +129,31 @@ impl PlayerState {
             }
         };
         drop(gone);
+    }
+
+    /// The progress tracker fed by session `id`'s events.
+    fn progress_for(&self, id: u64) -> Option<Arc<SessionProgress>> {
+        self.progress
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(owner, _)| *owner == id)
+            .map(|(_, progress)| progress.clone())
+    }
+
+    /// Track session `id`'s playback with `progress` from now on, after closing the
+    /// tracker before it (its last write is queued ahead of anything the new one
+    /// writes).
+    fn track(&self, id: u64, progress: Option<Arc<SessionProgress>>) {
+        self.close_progress();
+        *self.progress.lock().unwrap() = progress.map(|progress| (id, progress));
+    }
+
+    /// Stop tracking the current playback: its last write is queued, and the receiver
+    /// resolves once it is on disk (`None`: nothing to write).
+    pub fn close_progress(&self) -> Option<oneshot::Receiver<()>> {
+        let closing = self.progress.lock().unwrap().take();
+        closing.and_then(|(_, progress)| progress.close())
     }
 
     /// Whether the running session (if any) is embedded.
@@ -222,6 +257,8 @@ pub async fn player_backends(state: State<'_, AppState>) -> Result<Backends, Ipc
 
 /// Start (or replace) playback of an http(s) stream. `backend` defaults to `auto`,
 /// which follows the `playerBackend` setting. Returns the backend actually used.
+/// With `context` (the title and video), the playback's progress is written to the
+/// library.
 #[tauri::command]
 pub async fn player_start(
     app: AppHandle,
@@ -229,24 +266,34 @@ pub async fn player_start(
     player: State<'_, PlayerState>,
     mut request: PlaybackRequest,
     backend: Option<PlayerBackend>,
+    context: Option<serde_json::Value>,
 ) -> Result<StartResult, IpcError> {
     check_request(&mut request)?;
     let preference = match backend.unwrap_or_default() {
         PlayerBackend::Auto => state.settings.read().await.player_backend,
         explicit => explicit,
     };
-    start(&app, &state, &player, request, preference).await
+    let context = checked_context(context);
+    start(&app, &state, &player, request, preference, context).await
 }
 
-/// Load another file into the running player (same window, same backend).
+/// Load another file into the running player (same window, same backend). Progress
+/// of the file it replaces is closed; `context` tracks the new one.
 #[tauri::command]
 pub async fn player_load(
+    app: AppHandle,
     player: State<'_, PlayerState>,
     mut request: PlaybackRequest,
+    context: Option<serde_json::Value>,
 ) -> Result<(), IpcError> {
     check_request(&mut request)?;
+    let context = checked_context(context);
     let _op = player.op.lock().await;
-    player.session()?.load(request).await.map_err(session_error)
+    let active = player
+        .active()
+        .ok_or_else(|| IpcError::Player("Nothing is playing.".into()))?;
+    player.track(active.id, progress(&app, context));
+    active.session.load(request).await.map_err(session_error)
 }
 
 /// Stop whatever is playing, on any backend (including an external mpv launched
@@ -261,6 +308,13 @@ pub async fn player_stop(
     only: Option<Backend>,
 ) -> Result<(), IpcError> {
     let _op = player.op.lock().await;
+    // the tracked playback ends with this stop unless `only` spares its session
+    if player
+        .active()
+        .is_none_or(|active| stop_matches(active.session.backend(), only))
+    {
+        player.close_progress();
+    }
     player.stop_session(only);
     // `only: "external"` leaves a built-in video playing: keep its surface
     if !player.embedded_active() {
@@ -341,11 +395,14 @@ async fn start(
     player: &PlayerState,
     request: PlaybackRequest,
     preference: PlayerBackend,
+    context: Option<PlaybackContext>,
 ) -> Result<StartResult, IpcError> {
     let _op = player.op.lock().await;
     let id = player.next_id.fetch_add(1, Ordering::SeqCst) + 1;
     // from here on, events of the session being replaced are dropped
     player.current.store(id, Ordering::SeqCst);
+    // and its progress is closed before this playback's can start
+    player.track(id, progress(app, context));
     // A built-in session that is replaced leaves its surface set up: a new built-in
     // session takes it over (no flash of the opaque background in between); every
     // other outcome below gives the plain window back (`on_stop`, idempotent).
@@ -414,15 +471,41 @@ async fn start(
     }
 }
 
+/// The context, if it is well-formed: a malformed one only costs the library entry,
+/// never the playback. (It arrives as plain JSON and is read here, so not even a shape
+/// error can refuse the command.)
+fn checked_context(context: Option<serde_json::Value>) -> Option<PlaybackContext> {
+    let context = serde_json::from_value::<PlaybackContext>(context?)
+        .map_err(|e| IpcError::InvalidInput(e.to_string()))
+        .and_then(|context| context.check().map(|()| context));
+    match context {
+        Ok(context) => Some(context),
+        Err(e) => {
+            warn!(error = %e, "ignoring a malformed playback context; progress is not saved");
+            None
+        }
+    }
+}
+
+/// A progress tracker for `context`, if there is one and it is not live TV.
+fn progress(app: &AppHandle, context: Option<PlaybackContext>) -> Option<Arc<SessionProgress>> {
+    let context = context?;
+    app.try_state::<LibraryState>()?.session(context)
+}
+
 /// Forwards session `id`'s events to the webview while it is the current session,
 /// and forgets the session when it shuts down by itself (e.g. the user closed the
-/// external mpv window).
+/// external mpv window). Every event also feeds the session's progress tracker, if it
+/// has one.
 fn event_sink(app: &AppHandle, id: u64) -> impl Fn(PlayerEvent) + Send + Sync + 'static {
     let app = app.clone();
     move |event| {
         let Some(player) = app.try_state::<PlayerState>() else {
             return;
         };
+        if let Some(progress) = player.progress_for(id) {
+            progress.on_event(&event);
+        }
         if player.current.load(Ordering::SeqCst) != id {
             return; // a replaced session
         }
@@ -648,5 +731,30 @@ mod tests {
                 "external": {"available": false, "path": null}
             })
         );
+    }
+
+    /// The context is read inside the command, so even a shape error only costs the
+    /// library entry; a bad episode number costs only that number.
+    #[test]
+    fn a_malformed_context_never_refuses_playback() {
+        use serde_json::json;
+        assert!(checked_context(None).is_none());
+        assert!(checked_context(Some(json!("not an object"))).is_none());
+        assert!(checked_context(Some(json!({"meta": {"id": 5}, "videoId": "x"}))).is_none());
+        assert!(
+            checked_context(Some(
+                json!({"meta": {"id": "", "type": "movie"}, "videoId": "x"})
+            ))
+            .is_none()
+        );
+        let context = checked_context(Some(json!({
+            "meta": {"id": "tt9", "type": "series", "name": "A Show",
+                     "behaviorHints": {"featuredVideoId": 3, "isLive": "no"}},
+            "videoId": "tt9:1:1",
+            "videos": [{"id": "tt9:1:1", "season": -1, "episode": 1}]
+        })))
+        .expect("usable");
+        assert_eq!(context.videos[0].season, None);
+        assert_eq!(context.meta.behavior_hints.featured_video_id, None);
     }
 }
