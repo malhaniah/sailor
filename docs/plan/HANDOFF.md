@@ -1,7 +1,7 @@
 # Feature plan handoff
 
 How to pick up the feature plan locally. Written when the cloud session handed over on
-2026-10-16.
+2026-10-16, and updated after M4a was finished locally the same day.
 
 ## Where things stand
 
@@ -18,6 +18,7 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 | `a6c0356` | M2a | Backend-neutral player API (`player_start/load/stop/set_property/command/get_property/backends`), external mpv over JSON IPC, allow-list validation |
 | `7838aae` | M2b | Full remote controls for external mpv; Auto / Built-in / External choice in Settings |
 | `21887d4` | M3 | Built-in (embedded libmpv) playback is the Windows default; CI covers it; the Windows installer artifact; licensing |
+| `1bf37c9` | M4a | `crates/zeiler-account` (stremio-core-compatible LibraryItem, watched bitfield, progress rules, video order, sorts), `library.json` under `profile_dir()`, `library_*` commands + `library://changed`, progress tracked in Rust from player events via `player_start`'s `context`; three review rounds with adversarial verification |
 
 ## Decisions already made by the owner
 
@@ -42,16 +43,12 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 - Paths inside these files come from the cloud container. Read `/home/user/sailor` as your
   repo root. The Harbor reference (MIT) was a clone of https://github.com/harborstremio/harbor,
   also mirrored at `9000000/harbor`, v0.8.5. Clone it next to the repo if you want it.
-- `m4a-wip.patch` holds unreviewed, unfinished M4a work: a new `crates/zeiler-account`
-  crate with library types, the watched bitfield and progress logic. Apply it with
-  `git apply docs/plan/m4a-wip.patch`, or discard it and redo M4a from the spec.
 
 ## Remaining milestones (in order)
 
 | # | Milestone | Scope (see critique.md §4 and the named spec) |
 |---|---|---|
-| M4a | Library core (Rust) | `crates/zeiler-account` with stremio-core-compatible LibraryItem, the watched bitfield and `apply_playback_progress` (70% rule, live excluded). LibraryStore under `profile_dir()`. `library_*` commands plus `library://changed`. Progress is tracked in Rust from player events, using a playback context passed to `player_start`. account-profile.json steps 1, 3 and 7 (library parts only). |
-| M4b | Library UI | Library view tabs (Continue Watching / Library / History), a Continue Watching row on Home, watched marks and add-to-library on Detail, a "Resume from 12:34" prompt, progress bars on posters |
+| M4b | Library UI | Library view tabs (Continue Watching / Library / History), a Continue Watching row on Home, watched marks and add-to-library on Detail, a "Resume from 12:34" prompt, progress bars on posters. The backend is ready: `src/lib/library-ipc.ts` has every command (list with filter/sort/type/limit, get with `watchedVideoIds`, set, mark watched for episodes, a season or the title, clear progress), `metaSummary`/`videoRefs` helpers and `onLibraryChanged`; `LibraryEntry.resume` is the resume point (ms); the resume prompt sets `launch.startAtSec` (seconds) from it. |
 | M5 | Built-ins | OpenSubtitles v3 (subtitles) and anime metadata snapshots in the builtin registry, per-built-in toggles, meta-type fallback for `kitsu:`/`mal:` ids. Update the CONTRIBUTING/ARCHITECTURE policy text to "metadata or subtitles only" (the owner asked for OpenSubtitles). |
 | M6 | Subtitles and audio | `subtitles_get` fan-out, subtitle fetch and normalize (gzip, encoding detection), `player_subtitle_add`, pick a local file (tauri-plugin-dialog, Rust-side only), subtitle menu with sources, delay, style and saved preferences, audio delay and speed (player-ui.json steps 4–7) |
 | M7 | Skip and next episode | A `zeiler-skip` crate (AniSkip for anime, TheIntroDB, chapter-name fallback), a skip pill, an Up Next card, auto-skip off by default with Undo, bingeGroup next episode via `player_load` (player-ui.json) |
@@ -81,6 +78,9 @@ Each milestone went through the same loop, and each step is worth keeping:
 
 ## Gates (run all before every commit)
 
+On Windows, run `node scripts/fetch-libmpv.mjs` from PowerShell, not Git Bash: Git Bash's
+GNU `tar` cannot read the .7z, while Windows' own `tar.exe` (bsdtar) can.
+
 ```bash
 npm ci && npm run build          # tauri::generate_context! needs ../dist
 cargo fmt --all -- --check
@@ -108,6 +108,15 @@ Never run `cargo update` in a feature commit. The lockfile pins `rust-ini` 0.21.
 purpose; see the comment in `Cargo.toml`.
 
 ## Not yet verified on a real machine
+
+- Library progress with a real stream in the app. It is unit-tested against a real
+  libmpv event trace (recorded headless by `record_a_progress_trace` in
+  `crates/zeiler-player/tests/embedded.rs`, replayed in `src-tauri/src/library/progress.rs`)
+  and the Player's `context` was checked in the browser with mocked IPC, but nobody has
+  watched an episode through and looked at `library.json`. External mpv was not installed
+  on the machine that built M4a, so its event feed and the real-mpv tests
+  (`--test external_mpv -- --ignored`) were not run there.
+- Whether Stremio's own apps read Zeiler-written items as expected (needs M12 sync).
 
 - Windows built-in playback at runtime: WebView2 transparency, re-pinning the video under
   the webview, focus hand-back, and Escape/fullscreen. CI linked the code and ran the
