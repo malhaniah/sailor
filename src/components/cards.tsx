@@ -1,27 +1,47 @@
-import { Poster, fallbackGradient } from "./Poster";
-import type { MetaPreview } from "../lib/types";
+import { Poster, PosterProgress, fallbackGradient } from "./Poster";
+import { useTitleProgress } from "../lib/library";
+import type { MetaPreview, PosterShape } from "../lib/types";
 
-const SILK = "ease-[cubic-bezier(0.32,0.72,0.24,1)]";
+export const SILK = "ease-[cubic-bezier(0.32,0.72,0.24,1)]";
 
-/** Standard poster card: hover lift + deep shadow + amber ring (Harbor's PickCard). */
+/** The `Poster` ratio for an addon's `posterShape`. */
+export function posterRatio(shape: PosterShape): "portrait" | "landscape" | "square" {
+  return shape === "landscape" ? "landscape" : shape === "square" ? "square" : "portrait";
+}
+
+/** PickCard's poster shadow, with the amber ring on hover (Harbor's recipe). */
+export const CARD_SHADOW =
+  "shadow-[0_2px_8px_-2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.06)] transition-[box-shadow] duration-300 group-hover:shadow-[0_24px_48px_-14px_rgba(0,0,0,0.65),0_0_0_1.5px_rgba(232,170,108,0.4),inset_0_1px_0_rgba(255,255,255,0.08)]";
+
+/**
+ * Standard poster card: hover lift + deep shadow + amber ring (Harbor's PickCard). A
+ * title the user is partway through shows how far along its poster's bottom edge.
+ */
 export function PickCard({ meta, onClick }: { meta: MetaPreview; onClick: () => void }) {
   const isNew = meta.releaseInfo === String(new Date().getFullYear());
+  const progress = useTitleProgress(meta.id);
   return (
     <button onClick={onClick} className="group flex w-full min-w-0 flex-col gap-2.5 text-left">
       <div className={`relative transition-transform duration-300 ${SILK} group-hover:-translate-y-2`}>
         <Poster
           src={meta.poster}
           seed={meta.id}
-          ratio={meta.posterShape === "landscape" ? "landscape" : meta.posterShape === "square" ? "square" : "portrait"}
-          className="shadow-[0_2px_8px_-2px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.06)] transition-[box-shadow] duration-300 group-hover:shadow-[0_24px_48px_-14px_rgba(0,0,0,0.65),0_0_0_1.5px_rgba(232,170,108,0.4),inset_0_1px_0_rgba(255,255,255,0.08)]"
-        />
+          ratio={posterRatio(meta.posterShape)}
+          className={CARD_SHADOW}
+        >
+          {progress !== null && <PosterProgress value={progress} />}
+        </Poster>
         {isNew && (
           <span className="absolute left-2 top-2 rounded-md border border-edge-soft bg-canvas/95 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink">
             New
           </span>
         )}
         {meta.imdbRating && (
-          <span className="absolute bottom-1.5 right-1.5 flex items-center gap-1 rounded-md bg-canvas/95 px-1.5 py-0.5 text-[10px] font-semibold text-ink">
+          <span
+            className={`absolute right-1.5 flex items-center gap-1 rounded-md bg-canvas/95 px-1.5 py-0.5 text-[10px] font-semibold text-ink ${
+              progress !== null ? "bottom-3" : "bottom-1.5"
+            }`}
+          >
             <span className="rounded-[3px] bg-[#f5c518] px-1 text-[8.5px] font-bold text-black">IMDb</span>
             {meta.imdbRating}
           </span>

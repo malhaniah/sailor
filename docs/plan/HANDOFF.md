@@ -1,7 +1,7 @@
 # Feature plan handoff
 
 How to pick up the feature plan locally. Written when the cloud session handed over on
-2026-10-16, and updated after M4a was finished locally the same day.
+2026-10-16, and updated after M4a and M4b were finished locally the same day.
 
 ## Where things stand
 
@@ -19,6 +19,7 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 | `7838aae` | M2b | Full remote controls for external mpv; Auto / Built-in / External choice in Settings |
 | `21887d4` | M3 | Built-in (embedded libmpv) playback is the Windows default; CI covers it; the Windows installer artifact; licensing |
 | `1bf37c9` | M4a | `crates/zeiler-account` (stremio-core-compatible LibraryItem, watched bitfield, progress rules, video order, sorts), `library.json` under `profile_dir()`, `library_*` commands + `library://changed`, progress tracked in Rust from player events via `player_start`'s `context`; three review rounds with adversarial verification |
+| `d085e4c` | M4b | The library on screen (`src/lib/library.tsx` provider and hooks, re-read on `library://changed`): My Library tabs (Continue Watching / Library / History, the six sorts), a Continue Watching row on Home with dismiss, Detail's Add to Library and watched marks (title, season, episode; only released episodes), Resume / Continue on Play, a "Resume from 12:34" prompt in the stream picker, progress bars on posters; two reviews plus a check of their fixes |
 
 ## Decisions already made by the owner
 
@@ -48,7 +49,6 @@ How to pick up the feature plan locally. Written when the cloud session handed o
 
 | # | Milestone | Scope (see critique.md §4 and the named spec) |
 |---|---|---|
-| M4b | Library UI | Library view tabs (Continue Watching / Library / History), a Continue Watching row on Home, watched marks and add-to-library on Detail, a "Resume from 12:34" prompt, progress bars on posters. The backend is ready: `src/lib/library-ipc.ts` has every command (list with filter/sort/type/limit, get with `watchedVideoIds`, set, mark watched for episodes, a season or the title, clear progress), `metaSummary`/`videoRefs` helpers and `onLibraryChanged`; `LibraryEntry.resume` is the resume point (ms); the resume prompt sets `launch.startAtSec` (seconds) from it. |
 | M5 | Built-ins | OpenSubtitles v3 (subtitles) and anime metadata snapshots in the builtin registry, per-built-in toggles, meta-type fallback for `kitsu:`/`mal:` ids. Update the CONTRIBUTING/ARCHITECTURE policy text to "metadata or subtitles only" (the owner asked for OpenSubtitles). |
 | M6 | Subtitles and audio | `subtitles_get` fan-out, subtitle fetch and normalize (gzip, encoding detection), `player_subtitle_add`, pick a local file (tauri-plugin-dialog, Rust-side only), subtitle menu with sources, delay, style and saved preferences, audio delay and speed (player-ui.json steps 4–7) |
 | M7 | Skip and next episode | A `zeiler-skip` crate (AniSkip for anime, TheIntroDB, chapter-name fallback), a skip pill, an Up Next card, auto-skip off by default with Undo, bingeGroup next episode via `player_load` (player-ui.json) |
@@ -70,7 +70,11 @@ Each milestone went through the same loop, and each step is worth keeping:
 1. Implement against `critique.md` plus the area spec, and keep house conventions
    (`specs/conventions.json`, CONTRIBUTING.md).
 2. Smoke-test the UI in a real browser: `npm run dev` plus Playwright with
-   `window.__TAURI_INTERNALS__` mocked, and a screenshot of every flow.
+   `window.__TAURI_INTERNALS__` mocked, and a screenshot of every flow. M4b did this
+   without Playwright: a throwaway page in a git-ignored `smoke.local/` folder (`*.local`
+   is ignored) loads a mock module before `/src/main.tsx`, which answers the commands with
+   `mockIPC(handler, { shouldMockEvents: true })` from `@tauri-apps/api/mocks` and calls
+   `emit` from `@tauri-apps/api/event` for `library://changed`.
 3. Two independent reviews: correctness and behaviour preservation, then spec, security and
    cross-platform. Have someone try to refute each finding; fix only the confirmed ones.
 4. Run every gate after the last edit, then commit one milestone per commit with the why in
@@ -79,7 +83,10 @@ Each milestone went through the same loop, and each step is worth keeping:
 ## Gates (run all before every commit)
 
 On Windows, run `node scripts/fetch-libmpv.mjs` from PowerShell, not Git Bash: Git Bash's
-GNU `tar` cannot read the .7z, while Windows' own `tar.exe` (bsdtar) can.
+GNU `tar` cannot read the .7z, while Windows' own `tar.exe` (bsdtar) can. Stop `npm run
+dev` before `npm ci`: the dev server keeps native modules open and `npm ci` fails with
+EPERM halfway, leaving `node_modules` broken. The embedded test needs `src-tauri\libmpv`
+on `LIB` and `PATH`, as `ci.yml` sets them.
 
 ```bash
 npm ci && npm run build          # tauri::generate_context! needs ../dist
@@ -117,6 +124,9 @@ purpose; see the comment in `Cargo.toml`.
   on the machine that built M4a, so its event feed and the real-mpv tests
   (`--test external_mpv -- --ignored`) were not run there.
 - Whether Stremio's own apps read Zeiler-written items as expected (needs M12 sync).
+- The Library UI (M4b) against the real backend. It was smoke-tested in the browser
+  against an imitation of the `library_*` commands, not in the app with a real
+  `library.json`; mpv was not installed on the machine that built M4b either.
 
 - Windows built-in playback at runtime: WebView2 transparency, re-pinning the video under
   the webview, focus hand-back, and Escape/fullscreen. CI linked the code and ran the

@@ -28,6 +28,7 @@
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { errorKind } from "../../lib/ipc";
+import { libraryGet } from "../../lib/library-ipc";
 import {
   leavePlayer,
   playbackContext,
@@ -79,6 +80,15 @@ export function startErrorMessage(e: unknown): string {
   return errorMessage(e);
 }
 
+/** Where the library says this launch's video stopped, in seconds (null: none). */
+async function resumeAtSec(launch: PlayerLaunch): Promise<number | null> {
+  const context = playbackContext(launch);
+  if (!context) return null;
+  const detail = await libraryGet(context.meta.id).catch(() => null);
+  const resume = detail?.entry.resume;
+  return resume && resume.videoId === context.videoId ? resume.timeOffset / 1000 : null;
+}
+
 /** Where the Rust-side player of this session stands. */
 type PlayerSlot =
   | { state: "idle" } // player_start not sent yet
@@ -102,7 +112,7 @@ export interface PlaybackSession {
   /** why built-in playback fell back to external mpv, dismissible */
   fallbackReason: string | null;
   dismissFallback: () => void;
-  /** start the same stream again (after mpv was closed) */
+  /** start the same stream again (after mpv was closed), where the library says it stopped */
   playAgain: () => void;
   /** stop the player, drop the torrent, leave the page (external mpv's Stop) */
   stopAndLeave: () => Promise<void>;
@@ -238,9 +248,14 @@ export function usePlaybackSession(
     };
 
     actions.current = {
+      // Again from where the library now says this video stopped (the launch's own
+      // start point, e.g. a resume, is stale by then); from the beginning without one.
       playAgain: () => {
         dispatch({ type: "start-file" });
-        void start().catch(fail);
+        void (async () => {
+          if (request) request = { ...request, startAtSec: await resumeAtSec(launch) };
+          if (!cancelled) await start();
+        })().catch(fail);
       },
       stopAndLeave: async () => {
         stopping = true;

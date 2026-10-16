@@ -1,12 +1,18 @@
 import { useMemo } from "react";
 import { PickCard, TopRankCard } from "../components/cards";
 import { HeroCarousel } from "../components/Hero";
+import { LibraryCard } from "../components/LibraryCard";
 import { Row } from "../components/Row";
 import { EmptyState, Spinner } from "../components/ui";
 import { browsableCatalogs, catalogDisplayName } from "../lib/catalogs";
+import { continueLine, useLibrary, useOpenLibraryEntry } from "../lib/library";
+import { libraryClearProgress } from "../lib/library-ipc";
 import { dedupRows, useCatalogRows } from "../lib/rows";
 import { useAddons } from "../lib/store";
 import { useView } from "../lib/view";
+
+/** How many titles the Home row shows; the Library page has all of them. */
+const CONTINUE_ROW_MAX = 20;
 
 const TYPE_LABEL: Record<string, string> = {
   movie: "Movies",
@@ -78,6 +84,8 @@ export function HomeView() {
           onOpen={(meta) => openMeta(meta)}
         />
 
+        <ContinueWatchingRow />
+
         {rankItems.length >= 10 && (
           <Row title={`Top 10 — ${catalogDisplayName(catalogs[0].catalog)}`} min={180}>
             {rankItems.map((meta, i) => (
@@ -112,6 +120,42 @@ export function HomeView() {
         ))}
       </div>
     </main>
+  );
+}
+
+/**
+ * The titles the user is partway through, most recent first: a card resumes (the
+ * stream picker for the episode or movie it stopped at); its ✕ takes it out of the row.
+ */
+function ContinueWatchingRow() {
+  const { continueWatching } = useLibrary();
+  const { setView } = useView();
+  const { open, pending } = useOpenLibraryEntry();
+  const shown = continueWatching.slice(0, CONTINUE_ROW_MAX);
+  // Row measures its cells once, on mount: mount it only with cards to measure
+  if (shown.length === 0) return null;
+  return (
+    <Row
+      title={
+        <button onClick={() => setView("library")} className="transition-colors hover:text-accent">
+          Continue Watching
+        </button>
+      }
+      count={continueWatching.length > 1 ? continueWatching.length : undefined}
+      min={148}
+    >
+      {shown.map((entry) => (
+        <LibraryCard
+          key={entry.id}
+          entry={entry}
+          sub={continueLine(entry)}
+          pending={pending === entry.id}
+          onOpen={() => open(entry, "resume")}
+          // a failed dismiss leaves the card where it is
+          onDismiss={() => void libraryClearProgress(entry.id).catch(() => undefined)}
+        />
+      ))}
+    </Row>
   );
 }
 
