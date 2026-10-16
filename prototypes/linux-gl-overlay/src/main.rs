@@ -119,7 +119,11 @@ fn main() {
             init.set_option("ao", "null")?;
             init.set_option("idle", "yes")?;
             init.set_option("keep-open", "yes")?;
-            init.set_option("video-timing-offset", "0")?;
+            // PROTO_VTO0: hand frames over at their display time (as macOS does); by
+            // default mpv's own offset, so render() waits for the display time instead
+            if std::env::var_os("PROTO_VTO0").is_some() {
+                init.set_option("video-timing-offset", "0")?;
+            }
             // the prototype's diagnostics: mpv's own log on stdout
             init.set_option("terminal", "yes")?;
             init.set_option("msg-level", "all=info,vo=v,libmpv_render=v,vd=v")?;
