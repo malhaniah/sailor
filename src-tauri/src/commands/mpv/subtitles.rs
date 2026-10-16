@@ -6,7 +6,8 @@
 //! local file comes from the OS file dialog, opened here in Rust (no dialog permission
 //! is granted to the webview), or from a file dropped on the window; the track title
 //! and language are display text and a language code, passed as mpv argv (no shell, no
-//! command string). An add that finishes after the video changed is not applied.
+//! command string). An add that finishes after the video changed (another file of
+//! ours, or one the user opened in external mpv) is not applied.
 //!
 //! - `player_subtitle_add { request: { url, lang?, label?, select?, encoding? } }`
 //! - `player_subtitle_reencode { file, encoding? }`: the same subtitle again, read as

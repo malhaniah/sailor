@@ -65,7 +65,7 @@ use zeiler_player::{
 
 use crate::error::IpcError;
 use crate::library::LibraryState;
-use crate::library::progress::{PlaybackContext, SessionProgress};
+use crate::library::progress::{OwnFile, PlaybackContext, SessionProgress};
 use crate::state::AppState;
 use crate::subtitles::SubtitleStore;
 use crate::subtitles::prefs::{PlayerPrefs, TitlePrefs};
@@ -98,9 +98,14 @@ pub struct PlayerState {
     surface: imp::Surface,
     /// Library progress of the playback in session `.0` (absent: not tracked).
     progress: Mutex<Option<(u64, Arc<SessionProgress>)>>,
-    /// Counts files started (`player_start`, `player_load`), so work for one file (a
-    /// subtitle download) is never applied to the next.
+    /// Counts files started (`player_start`, `player_load`, and another file the user
+    /// opened in the player), so work for one file (a subtitle download) is never
+    /// applied to the next.
     loads: AtomicU64,
+    /// Tells session `.0`'s own file (the one `player_start` or `player_load` played
+    /// last) from another one the user opened in the same player, as external mpv
+    /// allows; the progress tracker follows the same rule.
+    own_file: Mutex<(u64, OwnFile)>,
 }
 
 #[derive(Clone)]
@@ -165,6 +170,25 @@ impl PlayerState {
     /// How many files have been started so far (see `loads`).
     fn load_count(&self) -> u64 {
         self.loads.load(Ordering::SeqCst)
+    }
+
+    /// Session `id` plays a file of ours (`player_start`, `player_load`): work for the
+    /// file before is stale from now on, and the session's next `start-file` is this
+    /// file's own.
+    fn new_file(&self, id: u64) {
+        *self.own_file.lock().unwrap() = (id, OwnFile::default());
+        self.loads.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Take one of session `id`'s events: another file opened in its player counts as
+    /// a new file too, so a subtitle add started for the file before fails instead of
+    /// landing on it.
+    fn watch_file(&self, id: u64, event: &PlayerEvent) {
+        let mut own_file = self.own_file.lock().unwrap();
+        let (owner, own) = &mut *own_file;
+        if *owner == id && own.another_file(event) {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     /// Whether the running session (if any) is embedded.
@@ -318,7 +342,7 @@ pub async fn player_load(
     let active = player
         .active()
         .ok_or_else(|| IpcError::Player("Nothing is playing.".into()))?;
-    player.loads.fetch_add(1, Ordering::SeqCst);
+    player.new_file(active.id);
     player.track(active.id, progress(&app, context));
     active.session.load(request).await.map_err(session_error)
 }
@@ -431,7 +455,7 @@ async fn start(
     let id = player.next_id.fetch_add(1, Ordering::SeqCst) + 1;
     // from here on, events of the session being replaced are dropped
     player.current.store(id, Ordering::SeqCst);
-    player.loads.fetch_add(1, Ordering::SeqCst);
+    player.new_file(id);
     // the replaced session's subtitle files go with it
     if let Some(store) = app.try_state::<SubtitleStore>() {
         store.purge();
@@ -538,7 +562,8 @@ fn progress(app: &AppHandle, context: Option<PlaybackContext>) -> Option<Arc<Ses
 /// Forwards session `id`'s events to the webview while it is the current session,
 /// and forgets the session when it shuts down by itself (e.g. the user closed the
 /// external mpv window). Every event also feeds the session's progress tracker, if it
-/// has one.
+/// has one. Another file the user opened in the player counts as a new file before
+/// the webview hears of it.
 fn event_sink(app: &AppHandle, id: u64) -> impl Fn(PlayerEvent) + Send + Sync + 'static {
     let app = app.clone();
     move |event| {
@@ -551,6 +576,7 @@ fn event_sink(app: &AppHandle, id: u64) -> impl Fn(PlayerEvent) + Send + Sync + 
         if player.current.load(Ordering::SeqCst) != id {
             return; // a replaced session
         }
+        player.watch_file(id, &event);
         let shutdown = event == PlayerEvent::Shutdown;
         let _ = app.emit(PLAYER_EVENT, &event);
         if shutdown {
@@ -744,6 +770,60 @@ mod tests {
         assert!(stop_matches(Backend::External, None));
         let missing: Option<Backend> = serde_json::from_value(serde_json::Value::Null).unwrap();
         assert_eq!(missing, None);
+    }
+
+    /// A subtitle add compares `loads` before and after its download: it moves for each
+    /// file of ours and for another file the user opens in the player, never for the
+    /// own file's start-file, a redirect, or a replaced session's late events.
+    #[test]
+    fn another_file_opened_in_the_player_is_a_new_file() {
+        let player = PlayerState::default();
+        let end = |reason| PlayerEvent::EndFile {
+            reason,
+            file_error: None,
+        };
+        let watch = |id, events: &[PlayerEvent]| {
+            for event in events {
+                player.watch_file(id, event);
+            }
+        };
+
+        // player_start: session 1 plays its file, which redirects
+        player.new_file(1);
+        let launched = player.load_count();
+        watch(
+            1,
+            &[
+                PlayerEvent::StartFile,
+                end("redirect"),
+                PlayerEvent::StartFile,
+                PlayerEvent::FileLoaded,
+            ],
+        );
+        assert_eq!(player.load_count(), launched, "its own file");
+
+        // the user drops another file into the external mpv window, then a third
+        watch(1, &[end("stop"), PlayerEvent::StartFile]);
+        assert_eq!(player.load_count(), launched + 1, "another file");
+        watch(1, &[end("eof"), PlayerEvent::StartFile]);
+        assert_eq!(player.load_count(), launched + 2, "and another");
+
+        // player_load: the loaded file's start-file follows the end of the one before,
+        // and is its own
+        player.new_file(1);
+        let loaded = player.load_count();
+        assert_eq!(loaded, launched + 3);
+        watch(1, &[end("stop"), PlayerEvent::StartFile]);
+        assert_eq!(player.load_count(), loaded, "the loaded file");
+
+        // player_start replaces session 1: its late events change nothing
+        player.new_file(2);
+        let replaced = player.load_count();
+        watch(1, &[end("stop"), PlayerEvent::StartFile]);
+        watch(2, &[PlayerEvent::StartFile]);
+        assert_eq!(player.load_count(), replaced);
+        watch(2, &[end("eof"), PlayerEvent::StartFile]);
+        assert_eq!(player.load_count(), replaced + 1);
     }
 
     #[test]
