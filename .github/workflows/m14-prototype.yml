@@ -1,0 +1,41 @@
+name: m14-prototype
+
+# M14 prototype only (this branch): libmpv's render API in a GtkGLArea under a
+# transparent WebKitGTK webview, run under Xvfb with Mesa, with a screenshot.
+on:
+  push:
+    branches: [claude/m14-gtkglarea-prototype]
+  workflow_dispatch:
+
+jobs:
+  run:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            env: ""
+          - name: no-dmabuf
+            env: "WEBKIT_DISABLE_DMABUF_RENDERER=1"
+          - name: no-compositing
+            env: "WEBKIT_DISABLE_COMPOSITING_MODE=1"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libmpv-dev xvfb imagemagick \
+            mesa-utils libgl1-mesa-dri
+          pkg-config --modversion webkit2gtk-4.1 mpv gtk+-3.0
+      - uses: dtolnay/rust-toolchain@1.99.0
+      - name: Build
+        working-directory: prototypes/linux-gl-overlay
+        run: cargo build --release
+      - name: Run under Xvfb
+        working-directory: prototypes/linux-gl-overlay
+        run: env ${{ matrix.env }} ./run.sh out
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: m14-${{ matrix.name }}
+          path: prototypes/linux-gl-overlay/out/

@@ -1,0 +1,177 @@
+//! M14 prototype: libmpv's OpenGL render API into a `GtkGLArea`, with a transparent
+//! `WebKitWebView` stacked above it in a `GtkOverlay` (the layout Zeiler would need on
+//! Linux: Tauri's webview over the video). It plays a solid green lavfi source; the
+//! page paints a red box at the top left and leaves everything else transparent. A
+//! screenshot then tells whether the video shows through the page.
+//!
+//! Prints `PROTO:` lines (GL renderer, WebKitGTK version, frames rendered) and quits
+//! after `PROTO_SECONDS` (default 12).
+
+use std::cell::RefCell;
+use std::ffi::{CString, c_void};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use gtk::prelude::*;
+use libmpv2::Mpv;
+use libmpv2::render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType};
+use webkit2gtk::{WebViewExt, SettingsExt};
+
+static FRAMES: AtomicU64 = AtomicU64::new(0);
+
+/// GL entry points: GLX's or EGL's loader, whichever this process has.
+fn get_proc_address(_: &(), name: &str) -> *mut c_void {
+    type Loader = unsafe extern "C" fn(*const libc::c_char) -> *mut c_void;
+    let name = CString::new(name).unwrap();
+    unsafe {
+        for (lib, sym) in [
+            (c"libEGL.so.1", c"eglGetProcAddress"),
+            (c"libGL.so.1", c"glXGetProcAddressARB"),
+        ] {
+            let handle = libc::dlopen(lib.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
+            if handle.is_null() {
+                continue;
+            }
+            let loader = libc::dlsym(handle, sym.as_ptr());
+            if loader.is_null() {
+                continue;
+            }
+            let loader: Loader = std::mem::transmute(loader);
+            let f = loader(name.as_ptr());
+            if !f.is_null() {
+                return f;
+            }
+        }
+        libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr())
+    }
+}
+
+fn gl_get_integer(pname: u32) -> i32 {
+    type GetIntegerv = unsafe extern "C" fn(u32, *mut i32);
+    let f = get_proc_address(&(), "glGetIntegerv");
+    let mut v = 0;
+    if !f.is_null() {
+        unsafe { std::mem::transmute::<*mut c_void, GetIntegerv>(f)(pname, &mut v) };
+    }
+    v
+}
+
+fn gl_string(name: u32) -> String {
+    type GetString = unsafe extern "C" fn(u32) -> *const libc::c_char;
+    let f = get_proc_address(&(), "glGetString");
+    if f.is_null() {
+        return "?".into();
+    }
+    unsafe {
+        let s = std::mem::transmute::<*mut c_void, GetString>(f)(name);
+        if s.is_null() { "?".into() } else { std::ffi::CStr::from_ptr(s).to_string_lossy().into() }
+    }
+}
+
+const PAGE: &str = r#"<!doctype html><html><head><style>
+html, body { margin: 0; background: transparent; }
+#box { position: absolute; left: 0; top: 0; width: 200px; height: 100px; background: rgb(255, 0, 0); }
+#label { position: absolute; left: 220px; top: 20px; font: 24px sans-serif; color: white; }
+</style></head><body><div id="box"></div><div id="label">webview above the video</div></body></html>"#;
+
+fn main() {
+    gtk::init().expect("GTK initializes");
+    // GTK sets the user's locale; libmpv needs "C" numerics
+    unsafe { libc::setlocale(libc::LC_NUMERIC, c"C".as_ptr()) };
+
+    let window = gtk::Window::new(gtk::WindowType::Toplevel);
+    window.set_default_size(800, 450);
+    window.move_(0, 0);
+    let overlay = gtk::Overlay::new();
+    let area = gtk::GLArea::new();
+    area.set_auto_render(false);
+    overlay.add(&area);
+
+    let webview = webkit2gtk::WebView::new();
+    webview.set_background_color(&gtk::gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+    if let Some(settings) = WebViewExt::settings(&webview) {
+        println!("PROTO: hardware acceleration policy {:?}", settings.hardware_acceleration_policy());
+    }
+    webview.load_html(PAGE, None);
+    overlay.add_overlay(&webview);
+    // clicks go to the page, as in Zeiler
+    overlay.set_overlay_pass_through(&webview, false);
+    window.add(&overlay);
+
+    let mpv = Rc::new(
+        Mpv::with_initializer(|init| {
+            init.set_option("config", "no")?;
+            init.set_option("vo", "libmpv")?;
+            init.set_option("ao", "null")?;
+            init.set_option("idle", "yes")?;
+            init.set_option("keep-open", "yes")?;
+            init.set_option("video-timing-offset", "0")?;
+            Ok(())
+        })
+        .expect("libmpv initializes"),
+    );
+    let render: Rc<RefCell<Option<RenderContext<'static>>>> = Rc::new(RefCell::new(None));
+
+    {
+        let mpv = Rc::clone(&mpv);
+        let render = Rc::clone(&render);
+        area.connect_realize(move |area| {
+            area.make_current();
+            if let Some(e) = area.error() {
+                println!("PROTO: GLArea error {e}");
+                return;
+            }
+            println!("PROTO: GL {} / {}", gl_string(0x1F01), gl_string(0x1F02));
+            let ctx = mpv
+                .create_render_context([
+                    RenderParam::ApiType(RenderParamApiType::OpenGl),
+                    RenderParam::InitParams(OpenGLInitParams { get_proc_address, ctx: () }),
+                ])
+                .expect("render context");
+            // prototype only: the Rc<Mpv> outlives the window's main loop
+            let mut ctx: RenderContext<'static> = unsafe { std::mem::transmute(ctx) };
+            let (tx, rx) = glib::MainContext::channel::<()>(glib::Priority::DEFAULT);
+            ctx.set_update_callback(move || {
+                let _ = tx.send(());
+            });
+            let area2 = area.clone();
+            rx.attach(None, move |()| {
+                area2.queue_render();
+                glib::ControlFlow::Continue
+            });
+            *render.borrow_mut() = Some(ctx);
+            mpv.command("loadfile", &["av://lavfi:color=c=0x00ff00:s=640x360:r=25", "replace"])
+                .expect("loadfile");
+            println!("PROTO: render context created, playing");
+        });
+    }
+    {
+        let render = Rc::clone(&render);
+        area.connect_render(move |area, _| {
+            if let Some(ctx) = render.borrow().as_ref() {
+                let fbo = gl_get_integer(0x8CA6); // GL_FRAMEBUFFER_BINDING
+                let scale = area.scale_factor();
+                let (w, h) = (area.allocated_width() * scale, area.allocated_height() * scale);
+                if let Err(e) = ctx.render::<()>(fbo, w, h, true) {
+                    println!("PROTO: render error {e:?}");
+                }
+                FRAMES.fetch_add(1, Ordering::Relaxed);
+            }
+            glib::Propagation::Stop
+        });
+    }
+
+    window.connect_destroy(|_| gtk::main_quit());
+    window.show_all();
+
+    let seconds: u64 = std::env::var("PROTO_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
+    let render_q = Rc::clone(&render);
+    glib::timeout_add_local_once(Duration::from_secs(seconds), move || {
+        println!("PROTO: frames rendered {}", FRAMES.load(Ordering::Relaxed));
+        // free the render context before the core (GL current)
+        render_q.borrow_mut().take();
+        gtk::main_quit();
+    });
+    gtk::main();
+}
