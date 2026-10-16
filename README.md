@@ -60,6 +60,7 @@ removes Sailor. On macOS the updated app keeps its old name in Applications: ren
 | `crates/zeiler-player` | Playback: embedded libmpv (Windows), or the user's mpv remote-controlled over JSON IPC |
 | `src-tauri` | Tauri 2 shell wiring the core to the UI |
 | `src/` | TypeScript/React frontend |
+| `website/` | The download website for zeiler.io (static, Vite) — see [website/README.md](website/README.md) |
 
 ## Building from source
 
