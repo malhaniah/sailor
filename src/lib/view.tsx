@@ -13,7 +13,8 @@ import { playerActive } from "./playback-handoff";
 import type { MetaItem, MetaPreview, Video } from "./types";
 
 // Names reserved for later milestones (docs/ARCHITECTURE.md, "Navigation names") are
-// already in these unions so every switch handles them; nothing navigates to them yet.
+// already in these unions so every switch handles them; nothing navigates to
+// `addon-detail` yet.
 
 export type RootView =
   | "home"
@@ -24,7 +25,7 @@ export type RootView =
   | "library"
   | "addons"
   | "settings"
-  // reserved: Live TV (addon tv/channel catalogs, then user IPTV)
+  // Live TV: addon tv/channel catalogs, then user IPTV
   | "live";
 
 export const ROOT_VIEWS: RootView[] = [
