@@ -9,6 +9,11 @@ import type {
   MarketDetail,
   MarketPage,
   ProfilesState,
+  AccountStatus,
+  AddonsChoice,
+  AddonsPreview,
+  LinkCode,
+  SyncReport,
   CatalogResponse,
   Descriptor,
   IpcError,
@@ -143,3 +148,27 @@ export const profileDelete = (id: string, pin?: string | null) =>
   invoke<ProfilesState>("profile_delete", { id, pin: pin ?? null });
 /** Emitted by Rust with the new ProfilesState after every profile change. */
 export const PROFILES_CHANGED = "profiles://changed";
+
+// ---- Stremio account ------------------------------------------------------------------
+
+export const accountStatus = () => invoke<AccountStatus>("account_status");
+export const accountLinkStart = () => invoke<LinkCode>("account_link_start");
+/** null while the code waits for confirmation in the browser */
+export const accountLinkPoll = (code: string, remember: boolean) =>
+  invoke<AccountStatus | null>("account_link_poll", { code, remember });
+export const accountLoginPassword = (email: string, password: string, remember: boolean) =>
+  invoke<AccountStatus>("account_login_password", { email, password, remember });
+export const accountLogout = () => invoke<AccountStatus>("account_logout");
+export const accountSetSync = (change: { library?: boolean; addons?: false }) =>
+  invoke<AccountStatus>("account_set_sync", {
+    library: change.library ?? null,
+    addons: change.addons ?? null,
+  });
+export const accountAddonsPreview = () => invoke<AddonsPreview>("account_addons_preview");
+export const accountAddonsApply = (choice: AddonsChoice) =>
+  invoke<AccountStatus>("account_addons_apply", { choice });
+export const accountSyncNow = () => invoke<SyncReport>("account_sync_now");
+/** Emitted by Rust with the new AccountStatus after sign-in, sign-out and every sync. */
+export const ACCOUNT_CHANGED = "account://changed";
+/** Emitted by Rust when an account sync replaced the active profile's addons. */
+export const ADDONS_CHANGED = "addons://changed";

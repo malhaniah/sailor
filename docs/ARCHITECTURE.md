@@ -16,6 +16,7 @@ addon URLs. This document records the load-bearing decisions and the shape of th
 | Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM, the default on Windows releases; macOS render-API NSOpenGLView next) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, macOS for now, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is the `embedded` cargo feature: Windows release builds turn it on and ship a hash-pinned LGPL `libmpv-2.dll` (`scripts/fetch-libmpv.mjs`); plain dev builds leave it off. See "Player backends". |
 | Content neutrality | No seeded stream addons; built-ins are metadata or subtitles only, switchable, never streams | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only metadata and subtitle addons — Cinemeta and Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) — from manifest snapshots compiled into the app (`src-tauri/builtin/`), each switchable in Settings → Content. A test fails the build if a built-in declares a `stream` resource. Stream addons are installed only by the user, behind a confirmation dialog showing the live manifest (name, version, resources, p2p/adult hints): from a pasted URL, an opt-in `stremio://` link, or the opt-in addon directory. |
 | Addon directory | Opt-in browsing of third-party listings (stremio-addons.net, Stremio's `addon_catalog`) | Zeiler curates, ranks and seeds nothing: no featured rails, no recommendations, no bundled list; the only orderings are the directory's own stars, listing date, or name. Every listing is labelled "not reviewed by Zeiler"; adult listings are hidden unless `showAdult`; every install goes through the confirmation dialog, which fetches the live manifest and shows where it differs from the listing. Nothing is fetched before `marketplaceEnabled`. |
+| Stremio account | Opt-in, per profile; link-code sign-in first, password second; the key in the OS keychain | Off until a profile signs in. Hand-rolled client of the account API (`zeiler-sync`, stremio-core's request shapes, an honest `Zeiler/<version>` user agent); never the telemetry or premium endpoints (events, seekLog, getSkipGaps, …). See "Account sync". |
 | Updates | tauri-plugin-updater, install on next launch | Signed (minisign) packages from `releases/latest/download/latest.json`; releases are therefore regular, not pre-releases. Checked at launch (installed immediately, before the user starts anything) and every 6 h (downloaded to the cache, installed on the next launch). Signing key: `TAURI_SIGNING_PRIVATE_KEY` secret; release builds pass `--config src-tauri/tauri.release.conf.json` to emit updater artifacts. Dev builds never self-update. |
 
 ## Workspace layout
@@ -30,6 +31,7 @@ zeiler/
     zeiler-engine/        # librqbit session + local stream endpoint for the player
     zeiler-player/        # player session: external mpv over JSON IPC; embedded libmpv (feature)
     zeiler-skip/          # skip segments (intro/recap/credits) from AniSkip and TheIntroDB
+    zeiler-sync/          # opt-in Stremio account: API client + library/addon sync rules
   src-tauri/              # Tauri shell: commands, state, config, capabilities
   docs/  scripts/  .github/workflows/
 ```
@@ -344,6 +346,16 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   pin? }` · `profile_select { id, pin? }` (`locked` for a wrong or missing PIN,
   `conflict` while playing) · `profile_delete { id, pin? }`; each returns the new state
   and emits `profiles://changed`
+- Account: `account_status()` → `{ signedIn, user?: { id, email, premium }, storage:
+  os|memory, syncLibrary, syncAddons, needsAddonChoice, lastLibrarySync,
+  lastAddonsSync, addonsLocked, lastError }` · `account_link_start()` → `{ code, link,
+  qrcode? }` · `account_link_poll { code, remember }` → status, or null while pending ·
+  `account_login_password { email, password, remember }` · `account_logout()` ·
+  `account_set_sync { library?, addons? (false only) }` · `account_addons_preview()` →
+  `{ accountOnly, localOnly, both }` (names) · `account_addons_apply { choice:
+  useAccount|merge|keepLocal }` · `account_sync_now()` → `{ pulled, pushed, addons? }`;
+  events `account://changed` (the new status) and `addons://changed` (a sync replaced
+  the profile's addons) (`auth`, `sessionExpired`, `network` error kinds)
 - Deep links: `deeplink_take_pending()` → the `stremio://` link that started the app,
   once · `deeplink_stremio_status()` → `{ supported, enabled, registered }` ·
   `deeplink_set_stremio { enabled }` (registers or unregisters with the OS, then stores
@@ -418,11 +430,11 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   null · `update_install_now()`
 
 Errors serialize as `{ kind, message }`; `message` is a full sentence shown as-is. Kinds:
-`invalidInput`, `addon`, `notFound`, `engine`, `player`, `storage`, plus kinds reserved
-for later milestones — `network` (service unreachable or timed out; retryable),
-`auth` (credentials rejected), `sessionExpired` (sign in again), `locked` (wrong PIN,
-or addon sync locked after a failed pull), `conflict` (clashes with existing state,
-e.g. the same addon under another URL) and `unsupported` (not on this platform/build).
+`invalidInput`, `addon`, `notFound`, `engine`, `player`, `storage`, `network` (service
+unreachable or timed out; retryable), `auth` (credentials rejected), `sessionExpired`
+(sign in again), `locked` (wrong PIN, or addon sync locked after a failed pull),
+`conflict` (clashes with existing state, e.g. a changed addon list) and `unsupported`
+(not on this platform/build).
 The TS mirror is `IpcErrorKind` in `src/lib/types.ts`.
 
 Events (named `<domain>://<event>`, rare notifications only):
@@ -541,6 +553,48 @@ switches on a third-party host for someone who had switched off the only built-i
 Per-profile keys are kept per profile in `profiles/<id>/prefs.json` (see "Local
 profiles"); `settings.json` keeps the last active profile's copy for older builds. There
 is no `profile{}` group in Settings.
+
+## Account sync
+
+A profile may sign in to a Stremio account (Settings → Profiles & account): a code
+confirmed at link.stremio.com (recommended; the password never reaches Zeiler), or email
+and password, which cross IPC once and go only to api.strem.io. The session key is kept
+by `account/secrets.rs` in the OS keychain (`io.zeiler.desktop`, account
+`stremio-auth:<profileId>`) when the user asks to stay signed in, else in memory; never
+in a file or settings, never over IPC, never logged; a key read from the keychain is
+kept in memory for the run, so the keychain is asked once per profile. The profile's
+`account.json` holds only the user's id, email, avatar URL and premium date (never the
+Trakt token or anything else of the user object), the sync switches and the last sync
+times. The QR code of a link sign-in is shown only when Stremio sends it as a `data:`
+image or an https URL (the latter is fetched from Stremio's chosen host).
+
+- **Library** (on once signed in): stremio-core's plan — `datastoreMeta`, pull what is
+  newer there (`datastoreGet`; everything in one request on a first sync), push what is
+  newer here (`datastorePut`, 50 per request), per item, newer `_mtime` wins at second
+  precision; the library is then marked as that account's (`uid`). A library used
+  before signing in is merged into the account; one marked as another account's is kept
+  beside it (`library-<uid>.json`) and the profile starts that account's own, so two
+  accounts' libraries never mix. Items written are
+  stremio-core's exact shape (`zeiler-account`). Runs at sign-in, shortly after launch,
+  every 15 minutes, a minute after a local change, and on "Sync now". Progress during
+  playback reaches the account with the next sync (no 180 s push of its own yet).
+- **Addons** (off until the user answers the sign-in's question: use the account's,
+  combine, or don't sync): the account's collection is the source of truth. A pull
+  replaces the profile's addons with the account's, leaving out Zeiler's built-ins
+  (which stay under Settings → Content), entries Stremio protects (its own, like Local
+  Files) and loopback addresses, all of which stay in the account untouched; every local
+  add, remove, replace or reorder is queued (in order) and replayed onto a fresh `addonCollectionGet` (`zeiler_sync::sync::rebase_addon_op`) and
+  sent with `addonCollectionSet`, keeping the account's own entries, flags and unknown
+  fields byte for byte and never adding a built-in. Stremio has no compare-and-swap, so
+  an edit made in Stremio at the same moment can be lost. Queued changes go before every
+  pull, and a pull leaves the local list alone while any are left, so a change that
+  couldn't be sent is never undone (the queue is in memory: quitting before it is sent
+  loses it from the account, not from the profile). A failed pull pauses pushes
+  (`addonsLocked`) until a pull succeeds. Transport URLs are matched once parsed.
+- Error code 1 (session ended) signs the profile out. Signing out keeps the library
+  (still marked as that account's) and the addons as they are; deleting a profile also
+  forgets its session key. A profile switch waits for a running sync and never overlaps
+  one (lock order: `sync_lock`, then `profile_op`).
 
 ## Library and progress
 
@@ -739,7 +793,13 @@ is up; leaving the player pops the history entry it pushed.
   mpv or the OS (mpv would happily open `file://`); `proxyHeaders` are treated as
   attacker-controlled; infoHashes validated as 40-char hex.
 - Addon transport URLs may embed credentials (config-in-URL pattern) — they are secrets;
-  never logged, never sent anywhere but the addon host.
+  never logged, and sent nowhere but the addon host, except to the user's own Stremio
+  account while they have addon sync on (as Stremio's apps do; the sync switch and the
+  privacy text say so).
+- The Stremio session key lives in the OS keychain (or memory), never in a file,
+  settings or IPC, and is never logged; the password crosses IPC once in a password
+  sign-in and is wiped after the call; only the user's id, email, avatar URL and premium
+  date are kept from the user object.
 - Playback goes through the in-memory one-shot handoff, never the location hash: stream
   URLs, headers and transport URLs stay out of the history stack, and release builds
   ignore URL-carrying player params.
@@ -821,5 +881,5 @@ is up; leaving the player pops the history entry it pushed.
    release pipeline.
 3. **v0.3** — macOS/Linux embedded playback, stream ranking (Harbor-core-inspired
    parse→trust→score→rank), deep links, binge/next-episode (bingeGroup).
-4. **Later** — casting, Live TV/EPG, PiP, theme system, optional Stremio account sync
-   (isolated, off by default).
+4. **Later** — casting, Live TV/EPG, PiP, theme system. (Optional Stremio account sync,
+   isolated and off by default, shipped with M12; see "Account sync".)

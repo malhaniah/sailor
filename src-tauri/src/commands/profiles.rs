@@ -11,6 +11,7 @@ use std::collections::HashSet;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::account::AccountState;
 use crate::commands::addons::UpdateCache;
 use crate::commands::mpv::PlayerState;
 use crate::commands::settings::SETTINGS_CHANGED;
@@ -256,9 +257,14 @@ pub async fn profile_select(
     prefs: State<'_, PlayerPrefs>,
     player: State<'_, PlayerState>,
     updates: State<'_, UpdateCache>,
+    account: State<'_, AccountState>,
     id: String,
     pin: Option<String>,
 ) -> Result<ProfilesState, IpcError> {
+    // lock order everywhere: `sync_lock`, then `profile_op` (an addon pull holds the
+    // first and writes the addons under the second); no account sync runs across the
+    // switch (one profile's key, another's library)
+    let _sync = account.sync_lock.lock().await;
     let _op = state.profile_op.lock().await;
     let file = state.profiles.read().await.clone();
     let profile = find(&file.profiles, &id)?;
@@ -294,6 +300,11 @@ pub async fn profile_select(
         let _ = library.switch_to(&old).await;
         return Err(storage(e));
     }
+    if let Err(e) = account.switch_to(&new).await {
+        let _ = library.switch_to(&old).await;
+        let _ = prefs.switch_to(&old).await;
+        return Err(storage(e));
+    }
     if let Err(e) = state
         .switch_profile(&id, |after| {
             let _ = app.emit(SETTINGS_CHANGED, after);
@@ -302,10 +313,13 @@ pub async fn profile_select(
     {
         let _ = library.switch_to(&old).await;
         let _ = prefs.switch_to(&old).await;
+        let _ = account.switch_to(&old).await;
         return Err(e);
     }
     unlock(&state);
     updates.clear();
+    // addon changes not yet sent belonged to the profile left
+    account.clear_pending();
     Ok(changed(&app, &state).await)
 }
 
@@ -315,6 +329,7 @@ pub async fn profile_select(
 pub async fn profile_delete(
     app: AppHandle,
     state: State<'_, AppState>,
+    account: State<'_, AccountState>,
     id: String,
     pin: Option<String>,
 ) -> Result<ProfilesState, IpcError> {
@@ -334,6 +349,8 @@ pub async fn profile_delete(
     authorize(&state, profile, pin.as_deref())?;
     next.profiles.retain(|p| p.id != id);
     state.save_profiles(next).await?;
+    // its Stremio session goes too (the keychain entry would outlive the profile)
+    account.sessions.forget(&id);
     // the profile is gone from profiles.json first: a folder left behind by a failed
     // removal is only disk space, never a half-deleted profile
     if let Err(e) = tokio::fs::remove_dir_all(profiles::profile_dir(state.data_dir(), &id)).await {

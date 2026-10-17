@@ -28,6 +28,7 @@ import { AdultContentSetting } from "./AdultContentSetting";
 import { SkipAndNextCards } from "./SkipSettings";
 import { SubtitlesSection } from "./SubtitleSettings";
 import { AddonDirectorySettings } from "./addons/DirectorySettings";
+import { AccountSettings } from "./profiles/AccountSettings";
 import { ProfilesSettings } from "./profiles/ProfilesSettings";
 
 /** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
@@ -62,7 +63,7 @@ const SECTIONS: {
         id: "account",
         label: "Profiles & account",
         icon: Users,
-        sub: "Who's watching: profiles, pictures and PINs.",
+        sub: "Who's watching: profiles, pictures, PINs, and an optional Stremio account.",
       },
     ],
   },
@@ -185,7 +186,12 @@ export function SettingsView() {
             <p className="text-[15px] text-ink-muted">{meta.sub}</p>
           </header>
 
-          {active === "account" && <ProfilesSettings />}
+          {active === "account" && (
+            <>
+              <ProfilesSettings />
+              <AccountSettings />
+            </>
+          )}
           {active === "player" && <PlayerSection />}
           {active === "subtitles" && <SubtitlesSection />}
           {active === "engine" && <EngineSection />}

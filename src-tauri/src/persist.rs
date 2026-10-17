@@ -112,7 +112,7 @@ where
         })
     }
 
-    fn path(&self) -> PathBuf {
+    pub(crate) fn path(&self) -> PathBuf {
         self.path.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
@@ -131,20 +131,12 @@ where
     }
 
     /// A snapshot of the current value.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the library store reads through `read`")
-    )]
     pub(crate) async fn get(&self) -> T {
         self.value.read().await.clone()
     }
 
     /// Apply `f` to a copy of the value, persist it, then publish it. If the write
     /// fails, the in-memory value is left unchanged, so memory never runs ahead of disk.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the library store updates through `try_update`")
-    )]
     pub(crate) async fn update(&self, f: impl FnOnce(&mut T)) -> Result<T, IpcError> {
         let _guard = self.write_lock.lock().await;
         let mut next = self.value.read().await.clone();

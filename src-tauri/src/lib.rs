@@ -1,3 +1,4 @@
+mod account;
 mod builtin;
 mod catalog_cache;
 mod commands;
@@ -66,7 +67,18 @@ pub fn run() {
                 &state.profile_dir(),
                 move |ids| {
                     let _ = handle.emit(LIBRARY_CHANGED, LibraryChanged { ids });
+                    // a local change goes to the Stremio account (not one a sync made)
+                    if let Some(account) = handle.try_state::<account::AccountState>()
+                        && !account.syncing.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        account.kick.notify_one();
+                    }
                 },
+            ))?;
+            let account_state = tauri::async_runtime::block_on(account::AccountState::load(
+                &state.profile_dir(),
+                zeiler_sync::StremioApi::new()?,
+                account::secrets::Sessions::new(Box::new(account::secrets::KeyringStore)),
             ))?;
             let prefs = tauri::async_runtime::block_on(subtitles::prefs::PlayerPrefs::load(
                 &state.profile_dir(),
@@ -76,6 +88,7 @@ pub fn run() {
             app.manage(commands::marketplace::MarketState::new(&cache_dir));
             app.manage(commands::addons::UpdateCache::default());
             app.manage(deeplink::DeepLinkState::default());
+            app.manage(account_state);
             let deep_link_on =
                 tauri::async_runtime::block_on(state.settings.read()).stremio_deep_link;
             app.manage(state);
@@ -96,6 +109,7 @@ pub fn run() {
                 std::env::args().collect(),
                 true,
             ));
+            commands::account::start_background_sync(app.handle().clone());
             updater::start(app.handle().clone());
             info!("zeiler started");
             Ok(())
@@ -130,6 +144,16 @@ pub fn run() {
             commands::profiles::profile_set_avatar,
             commands::profiles::profile_select,
             commands::profiles::profile_delete,
+            // Stremio account
+            commands::account::account_status,
+            commands::account::account_link_start,
+            commands::account::account_link_poll,
+            commands::account::account_login_password,
+            commands::account::account_logout,
+            commands::account::account_set_sync,
+            commands::account::account_addons_preview,
+            commands::account::account_addons_apply,
+            commands::account::account_sync_now,
             commands::content::catalog_load,
             commands::content::meta_get,
             commands::content::streams_get,

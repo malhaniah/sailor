@@ -455,3 +455,43 @@ export interface ProfilesState {
   unlocked: boolean;
   profiles: ProfileView[];
 }
+
+// ---- Stremio account (Rust account/mod.rs, commands/account.rs) ----------------------
+
+export interface AccountStatus {
+  signedIn: boolean;
+  user: { id: string; email: string; premium: boolean } | null;
+  /** where the session key is kept */
+  storage: "os" | "memory" | null;
+  syncLibrary: boolean;
+  syncAddons: boolean;
+  /** signed in, but the addon question wasn't answered yet */
+  needsAddonChoice: boolean;
+  /** Unix ms */
+  lastLibrarySync: number | null;
+  lastAddonsSync: number | null;
+  /** addon pushes are paused: the last pull failed */
+  addonsLocked: boolean;
+  lastError: string | null;
+}
+
+export interface LinkCode {
+  code: string;
+  link: string;
+  /** a data: or https image of the link */
+  qrcode: string | null;
+}
+
+export interface SyncReport {
+  pulled: number;
+  pushed: number;
+  addons: number | null;
+}
+
+export interface AddonsPreview {
+  accountOnly: string[];
+  localOnly: string[];
+  both: string[];
+}
+
+export type AddonsChoice = "useAccount" | "merge" | "keepLocal";

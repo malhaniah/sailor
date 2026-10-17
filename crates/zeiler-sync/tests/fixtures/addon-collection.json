@@ -1,0 +1,24 @@
+{
+  "addons": [
+    {
+      "transportUrl": "https://v3-cinemeta.strem.io/manifest.json",
+      "transportName": "http",
+      "manifest": { "id": "com.linvo.cinemeta", "version": "3.0.13", "name": "Cinemeta", "resources": ["catalog", "meta", "addon_catalog"], "types": ["movie", "series"], "catalogs": [], "unknownField": { "kept": true } },
+      "flags": { "official": true, "protected": true }
+    },
+    {
+      "transportUrl": "https://subs.example.org/key%3D1/manifest.json",
+      "transportName": "http",
+      "manifest": { "id": "org.example.subs", "version": "1.0.0", "name": "Example Subtitles", "resources": ["subtitles"], "types": ["movie"], "catalogs": [] },
+      "flags": { "official": false, "protected": false }
+    },
+    {
+      "transportUrl": "http://127.0.0.1:11470/local-addon/manifest.json",
+      "transportName": "",
+      "manifest": { "id": "org.stremio.local", "version": "1.10.0", "name": "Local Files", "resources": ["catalog", "meta", "stream"], "types": ["other"], "catalogs": [] },
+      "flags": { "official": true, "protected": true }
+    },
+    { "manifest": { "id": "broken" } }
+  ],
+  "lastModified": "2026-10-01T12:00:00.000Z"
+}

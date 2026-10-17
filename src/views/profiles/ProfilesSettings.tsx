@@ -150,10 +150,12 @@ function ProfileRow({ profile }: { profile: ProfileView }) {
           />
         ))}
         <span className="flex-1" />
-        <button className={SMALL_BUTTON} onClick={() => setPinDialogOpen(true)}>
-          <Lock size={14} /> {profile.locked ? "Change PIN" : "Add PIN"}
-        </button>
-        {profile.locked && (
+        {profile.active && (
+          <button className={SMALL_BUTTON} onClick={() => setPinDialogOpen(true)}>
+            <Lock size={14} /> {profile.locked ? "Change PIN" : "Add PIN"}
+          </button>
+        )}
+        {profile.active && profile.locked && (
           <button className={SMALL_BUTTON} onClick={() => setRemovingPin(true)}>
             Remove PIN
           </button>
