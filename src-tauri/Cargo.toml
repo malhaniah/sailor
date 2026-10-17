@@ -53,7 +53,6 @@ zeroize = { workspace = true }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { workspace = true }
-tauri-plugin-window-state = { workspace = true }
 tauri-plugin-updater = { workspace = true }
 # the subtitle file picker, opened from Rust (no capability lets the webview use it)
 tauri-plugin-dialog = { workspace = true }
