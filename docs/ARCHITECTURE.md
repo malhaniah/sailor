@@ -481,7 +481,9 @@ later feature owns a `JsonStore<T>` (load / get / update-and-persist under its o
 registered with `app.manage` — it does not grow `AppState`. New files carry a
 `{"version": N, ...}` envelope. Per-user files take their path from
 `AppState::profile_dir()`, the active profile's folder; re-creatable caches go under the
-cache dir.
+cache dir. `window.json` (device; `window_state.rs`) keeps the main window's size,
+position and maximized state as the window last had them while normal, so a fullscreen
+or maximized frame is never kept and a launch never starts fullscreen.
 
 ### Local profiles
 

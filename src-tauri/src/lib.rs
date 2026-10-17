@@ -14,6 +14,7 @@ mod settings_groups;
 mod state;
 mod subtitles;
 mod updater;
+mod window_state;
 
 use std::time::Duration;
 
@@ -52,8 +53,6 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 app.handle()
-                    .plugin(tauri_plugin_window_state::Builder::default().build())?;
-                app.handle()
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
                 // the subtitle file picker, opened from Rust only: no capability grants
                 // the webview its commands
@@ -62,6 +61,13 @@ pub fn run() {
             commands::mpv::fix_fullscreen_client_area(app.handle());
 
             let data_dir = app.path().app_data_dir()?;
+            // the main window's size, position and maximized state from the last run
+            let window_state = tauri::async_runtime::block_on(async {
+                let window_state = window_state::WindowState::load(&data_dir).await?;
+                window_state.restore(app.handle()).await;
+                anyhow::Ok(window_state)
+            })?;
+            app.manage(window_state);
             let cache_dir = app.path().app_cache_dir()?;
             let state =
                 tauri::async_runtime::block_on(AppState::load(data_dir, cache_dir.clone()))?;
@@ -128,6 +134,7 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            window_state::on_window_event(window, event);
             // a subtitle file dropped on the window goes to the running player
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 commands::mpv::subtitles::on_drop(window.app_handle(), paths);
@@ -230,6 +237,7 @@ pub fn run() {
         })
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                window_state::on_exit(app);
                 // write the progress of whatever is still playing (bounded wait)
                 if let Some(player) = app.try_state::<commands::mpv::PlayerState>()
                     && let Some(written) = player.close_progress()

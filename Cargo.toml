@@ -18,7 +18,6 @@ tauri-plugin-opener = "2.7"
 # that deep-link 2.6.2 doesn't set (E0063). Keep it there until deep-link ships a fix.
 tauri-plugin-deep-link = "2.6"
 tauri-plugin-single-instance = { version = "2.5", features = ["deep-link"] }
-tauri-plugin-window-state = "2.5"
 tauri-plugin-updater = "2"
 # the "Load subtitle file…" picker, opened from Rust only (no JS permission is granted)
 tauri-plugin-dialog = "2.8"

@@ -313,6 +313,16 @@ the rest transparent, and a solid green lavfi video. It runs in CI on ubuntu-24.
   later: the EPG grid, catch-up, top-network rows, Replay reloading a live stream.
 - The Sailor → Zeiler NSIS hook (`src-tauri/windows/hooks.nsh`) runs only when a real
   Sailor v0.1.2 install updates.
+- The window's size, position and maximized state across launches (`window_state.rs`,
+  replacing tauri-plugin-window-state, which never tracked the main window). Checked on
+  the Apple Silicon Mac in a dev build with built-in playback: moved, resized, maximized
+  and made fullscreen in the playing player through the window calls the app makes
+  (from a temporary test hook, as the shell had no Accessibility access), and quit the
+  way Cmd+Q does (`terminate:`) or by closing the window. It came back at the same
+  place and size; maximized, with its smaller size to restore down to; windowed after a
+  quit in fullscreen; and centered when its place was off every monitor. Not tried:
+  Windows (an Aero Snap maximize, and fullscreen from a window restored maximized with
+  #33's client-area fix), Linux, and two monitors with different scale factors.
 
 ## Releasing
 
