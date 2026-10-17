@@ -1,0 +1,24 @@
+{
+  "name": "zeiler-website",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "description": "The download website for Zeiler (zeiler.io)",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "snapshot": "node scripts/snapshot-release.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "~6.0.3",
+    "vite": "^8.3.4"
+  }
+}

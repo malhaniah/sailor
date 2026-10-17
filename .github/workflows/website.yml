@@ -1,0 +1,43 @@
+name: website
+
+# The download website in website/ only: the app's CI (ci.yml) doesn't run for it,
+# and this doesn't run for the app.
+on:
+  push:
+    branches: [main]
+    paths: ["website/**", ".github/workflows/website.yml"]
+  pull_request:
+    paths: ["website/**", ".github/workflows/website.yml"]
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - run: npm test
+      # typechecks, then builds with the live release (the token lifts the API's
+      # anonymous rate limit; without the API the build uses release-snapshot.json)
+      - run: npm run build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: website
+          path: website/dist
+          retention-days: 7
