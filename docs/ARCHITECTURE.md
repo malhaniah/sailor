@@ -124,7 +124,12 @@ backend setting says.
     player screen any other way ends fullscreen too. After a fullscreen
     toggle and on every window resize, move and scale change the page re-sends the
     video rect and calls `player_surface_refresh` on a kick schedule (0, 60, 200,
-    500, 1000, 2000 ms; `surface-sync.ts`).
+    500, 1000, 2000 ms; `surface-sync.ts`). On Windows the main window is subclassed
+    at setup so a fullscreen window's client area is the whole window: tao 0.37.1
+    otherwise trims a maximized undecorated window to the work area also while
+    fullscreen, leaving the page and video short by the taskbar
+    (`fix_fullscreen_client_area` in `commands/mpv/windows.rs`; it goes away with a
+    tao release that has tauri-apps/tao#1353).
   - *External mpv* (Linux, Windows and macOS dev builds without the feature, a
     fallback, or a forced launch): mpv plays in its own window and the page is its full remote
     control (`ExternalRemote.tsx`): the title's art fills the window, dimmed; title,

@@ -76,6 +76,15 @@ use crate::subtitles::prefs::{PlayerPrefs, TitlePrefs};
 /// The Tauri event carrying every [`PlayerEvent`].
 pub const PLAYER_EVENT: &str = "player://event";
 
+/// Windows: make the built-in player's fullscreen fill the screen when it starts from a
+/// maximized window (windows.rs). Elsewhere a no-op. Called once at setup.
+pub fn fix_fullscreen_client_area(app: &AppHandle) {
+    #[cfg(all(windows, feature = "embedded"))]
+    imp::fix_fullscreen_client_area(app);
+    #[cfg(not(all(windows, feature = "embedded")))]
+    let _ = app;
+}
+
 /// Target rectangle for the embedded video, in physical pixels relative to the main
 /// window's client area (the UI computes getBoundingClientRect() × devicePixelRatio).
 #[derive(Debug, Clone, Copy, Deserialize)]

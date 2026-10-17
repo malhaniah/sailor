@@ -258,9 +258,12 @@ the rest transparent, and a solid green lavfi video. It runs in CI on ubuntu-24.
   `library.json`; mpv was not installed on the machine that built M4b either.
 
 - Windows built-in playback at runtime: WebView2 transparency, re-pinning the video under
-  the webview, focus hand-back, and Escape/fullscreen. CI linked the code and ran the
-  headless libmpv tests on Windows, but nobody has watched a video yet. Try the
-  `windows-installer` artifact from PR #4.
+  the webview, focus hand-back, and Escape/fullscreen. The owner has now watched v0.3.0
+  on Windows and found fullscreen from a maximized window stopping short by the
+  taskbar (tao 0.37.1 trims a maximized undecorated window to the work area even when
+  fullscreen); `fix_fullscreen_client_area` (commands/mpv/windows.rs) subclasses the
+  main window to give a fullscreen window its whole rect, as tauri-apps/tao#1353 does
+  upstream. Not yet tried on Windows; drop it when Zeiler gets a tao with #1353.
 - The M6 leftovers in the real app. Menus, keys, the stats overlay, the Settings fields
   and the hash's use were smoke-tested in the browser with mocked IPC; the hash itself
   (two range requests, basic auth from the URL) against a loopback server in tests; the
