@@ -1,0 +1,81 @@
+name: Bug report
+description: Something in Zeiler does not work as it should.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Two things first:
+
+        - **Security bugs** go through [private vulnerability reporting](https://github.com/malhaniah/zeiler/security/advisories/new), never a public issue. See [SECURITY.md](https://github.com/malhaniah/zeiler/blob/main/SECURITY.md).
+        - **Addon problems** (no streams, wrong metadata, a broken catalog) belong to the addon's author. Zeiler ships no content addon and does not review third-party ones. A bug in how Zeiler *handles* an addon's answers is welcome here.
+  - type: input
+    id: version
+    attributes:
+      label: Zeiler version
+      description: Settings → About shows it. For a build from source, give the commit.
+      placeholder: "0.2.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 10 / 11
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (.deb)
+        - Linux (.rpm)
+        - Linux (AppImage)
+        - Built from source
+    validations:
+      required: true
+  - type: dropdown
+    id: playback
+    attributes:
+      label: Where videos play
+      description: Settings → Player & quality shows the current choice.
+      options:
+        - Not about playback
+        - Built-in (inside the Zeiler window)
+        - External mpv window
+        - Auto (not sure which)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, with the exact text of any error card or notice.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: Screenshots, `mpv --version` if playback is involved, and the *kind* of addon or playlist involved. Leave out addon, playlist and stream URLs, since they can carry credentials.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues.
+          required: true
+        - label: This report contains no addon transport URL, playlist URL, stream URL or account detail.
+          required: true
