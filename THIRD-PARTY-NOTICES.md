@@ -22,7 +22,10 @@ watched (`models/meta_details.rs`), the library update and view rules
 (`models/ctx/update_library.rs`, `models/library_with_filters.rs`), and ports its **stremio-watched-bitfield** codec. The
 adapted files (`src/types.rs`, `src/library.rs`, `src/watched.rs`) keep a pointer to
 this notice. The player's next episode (`src/lib/next-video.ts`) follows the same video
-order and next-video rules, and keeps the pointer too.
+order and next-video rules, and keeps the pointer too. `crates/zeiler-sync` follows
+stremio-core's account API requests (`types/api/request.rs`, `types/api/response.rs`)
+and ports its library sync planning and merge (`models/ctx/update_library.rs`,
+`plan_sync_with_api`).
 
 ```text
 MIT License
@@ -91,6 +94,8 @@ Adapted files:
 - `src-tauri/src/deeplink.rs` — runtime `stremio://` registration
   (`deeplink_set_stremio`); `src/views/addons/*` — install match kinds, the facts table
   and masked addresses (`install-modal.tsx`, `addon-detail.tsx`)
+- `src/views/profiles/*` — the "Who's watching?" picker layout and the avatar resize to
+  a small WebP (`picker-modal`, `avatar-utils.ts`)
 
 ```text
 MIT License

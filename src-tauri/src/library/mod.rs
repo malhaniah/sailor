@@ -14,7 +14,7 @@ pub mod progress;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -276,6 +276,8 @@ type OnChange = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 pub struct LibraryState {
     store: Arc<JsonStore<LibraryFile>>,
     jobs: mpsc::UnboundedSender<Job>,
+    /// Progress batches sent and not yet applied (a profile switch waits for none).
+    pending: Arc<AtomicUsize>,
     on_change: OnChange,
 }
 
@@ -297,6 +299,8 @@ impl LibraryState {
         let (jobs, mut queue) = mpsc::unbounded_channel::<Job>();
         let worker_store = store.clone();
         let worker_change = on_change.clone();
+        let pending = Arc::new(AtomicUsize::new(0));
+        let worker_pending = pending.clone();
         tauri::async_runtime::spawn(async move {
             while let Some(job) = queue.recv().await {
                 let mut flush = job.flush;
@@ -319,6 +323,7 @@ impl LibraryState {
                     }
                     Err(e) => warn!(error = %e, "could not save playback progress"),
                 }
+                worker_pending.fetch_sub(1, Ordering::SeqCst);
                 if let Some(done) = job.done {
                     let _ = done.send(());
                 }
@@ -327,13 +332,32 @@ impl LibraryState {
         Ok(Self {
             store,
             jobs,
+            pending,
             on_change,
         })
     }
 
+    /// Read another profile's `library.json` from now on (no player may be running).
+    pub(crate) async fn switch_to(&self, dir: &Path) -> anyhow::Result<()> {
+        self.store.switch_to(dir.join(FILE_NAME)).await
+    }
+
+    /// Wait (up to `limit`) until every progress batch sent so far is applied, so a
+    /// profile switch never lands one in the next profile's library. False on timeout.
+    pub(crate) async fn settle(&self, limit: Duration) -> bool {
+        let until = tokio::time::Instant::now() + limit;
+        while self.pending.load(Ordering::SeqCst) > 0 {
+            if tokio::time::Instant::now() >= until {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        true
+    }
+
     /// Progress tracking for a playback, or none for live TV (never tracked).
     pub(crate) fn session(&self, context: PlaybackContext) -> Option<Arc<SessionProgress>> {
-        SessionProgress::new(context, self.jobs.clone())
+        SessionProgress::new(context, self.jobs.clone(), self.pending.clone())
     }
 
     pub async fn list(&self, query: &LibraryQuery) -> Vec<LibraryEntry> {
@@ -464,6 +488,74 @@ impl LibraryState {
             })
             .await?;
         Ok(changed.map(|item| LibraryDetail::new(&item, videos)))
+    }
+
+    /// Every item and the account the library belongs to, for account sync.
+    pub(crate) async fn sync_snapshot(&self) -> (Option<String>, BTreeMap<String, LibraryItem>) {
+        self.store
+            .read(|file| (file.uid.clone(), file.items.clone()))
+            .await
+    }
+
+    /// Take items pulled from the account `uid` (each only if at least as new as the
+    /// local copy and different from it) and mark the library as that account's.
+    /// Returns the ids that changed; listeners hear about them.
+    pub(crate) async fn merge_remote(
+        &self,
+        uid: &str,
+        pulled: Vec<LibraryItem>,
+    ) -> Result<Vec<String>, IpcError> {
+        let pulled: Vec<LibraryItem> = pulled
+            .into_iter()
+            .filter(|i| check_id(&i.id).is_ok())
+            .collect();
+        let changed = self
+            .store
+            .try_update(|file| {
+                let changed = zeiler_sync::sync::merge_pulled(&mut file.items, pulled);
+                let new_uid = file.uid.as_deref() != Some(uid);
+                file.uid = Some(uid.to_string());
+                Ok((new_uid || !changed.is_empty()).then_some(changed))
+            })
+            .await?
+            .unwrap_or_default();
+        if !changed.is_empty() {
+            (self.on_change)(changed.clone());
+        }
+        Ok(changed)
+    }
+
+    /// The library is about to sync with account `uid`. When it belongs to another
+    /// account, that library is kept beside it (`library-<uid>.json`) and this one
+    /// starts empty for `uid`, so two accounts' libraries never mix (stremio-core
+    /// keeps one bucket per user the same way). A library of no account (used before
+    /// signing in) is kept and merged. Returns whether it started over.
+    pub(crate) async fn prepare_for_account(&self, uid: &str) -> Result<bool, IpcError> {
+        let path = self.store.path();
+        let started_over = self
+            .store
+            .try_update(|file| {
+                let Some(previous) = file.uid.clone().filter(|p| p != uid) else {
+                    return Ok(None);
+                };
+                let backup = path.with_file_name(format!(
+                    "library-{}.json",
+                    previous.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+                ));
+                let json = serde_json::to_vec_pretty(&*file)
+                    .map_err(|e| IpcError::Storage(format!("Could not keep the library: {e}")))?;
+                std::fs::write(&backup, json)
+                    .map_err(|e| IpcError::Storage(format!("Could not keep the library: {e}")))?;
+                file.items.clear();
+                file.uid = Some(uid.to_string());
+                Ok(Some(()))
+            })
+            .await?
+            .is_some();
+        if started_over {
+            (self.on_change)(Vec::new());
+        }
+        Ok(started_over)
     }
 
     /// Take the title out of Continue Watching (its resume position is dropped).

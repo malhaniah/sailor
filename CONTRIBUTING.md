@@ -108,6 +108,7 @@ librsvg, patchelf — see `.github/workflows/ci.yml` for the exact list).
 | `crates/zeiler-account` | Library items, playback-progress rules and the watched bitfield (Stremio-compatible; pure, no I/O) |
 | `crates/zeiler-addon` | Stremio addon-protocol client (types, URL building, fan-out) |
 | `crates/zeiler-engine` | Embedded librqbit torrent engine + loopback stream endpoint |
+| `crates/zeiler-sync` | Opt-in Stremio account sync: the account API client (mock-server tests only) and the pure sync rules |
 | `crates/zeiler-player` | Playback session: external mpv over JSON IPC; embedded libmpv behind the `embedded` feature |
 | `src-tauri` | Tauri shell: typed IPC commands, state, capabilities, config |
 | `src/` | React/TypeScript UI (design system mirrors Harbor's tokens — see `docs/ARCHITECTURE.md`) |

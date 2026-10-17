@@ -28,7 +28,7 @@
 //!   so a stream that fails to open leaves the library untouched. Live TV is never
 //!   tracked.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -391,6 +391,8 @@ pub(crate) struct SessionProgress {
     context: Arc<PlaybackContext>,
     tracker: Mutex<Tracker>,
     jobs: mpsc::UnboundedSender<Job>,
+    /// Batches sent and not yet applied (shared with the worker, which counts down).
+    pending: Arc<AtomicUsize>,
     /// Set by the worker once one of this session's batches is in the store.
     committed: Arc<AtomicBool>,
 }
@@ -400,6 +402,7 @@ impl SessionProgress {
     pub(crate) fn new(
         context: PlaybackContext,
         jobs: mpsc::UnboundedSender<Job>,
+        pending: Arc<AtomicUsize>,
     ) -> Option<Arc<Self>> {
         if context.meta.is_live() {
             return None;
@@ -408,6 +411,7 @@ impl SessionProgress {
             context: Arc::new(context),
             tracker: Mutex::new(Tracker::default()),
             jobs,
+            pending,
             committed: Arc::new(AtomicBool::new(false)),
         }))
     }
@@ -432,12 +436,16 @@ impl SessionProgress {
     }
 
     fn send(&self, flush: Flush, done: Option<oneshot::Sender<()>>) {
-        let _ = self.jobs.send(Job {
+        self.pending.fetch_add(1, Ordering::SeqCst);
+        let sent = self.jobs.send(Job {
             context: self.context.clone(),
             flush,
             committed: self.committed.clone(),
             done,
         });
+        if sent.is_err() {
+            self.pending.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 

@@ -127,6 +127,13 @@ impl PlayerPrefs {
         })
     }
 
+    /// Read another profile's `player-prefs.json` from now on.
+    pub(crate) async fn switch_to(&self, profile_dir: &Path) -> anyhow::Result<()> {
+        self.store
+            .switch_to(profile_dir.join("player-prefs.json"))
+            .await
+    }
+
     /// The choices remembered for `meta_id`.
     pub async fn get(&self, meta_id: &str) -> Result<Option<TitlePrefs>, IpcError> {
         check_meta_id(meta_id)?;

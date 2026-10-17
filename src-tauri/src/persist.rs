@@ -49,7 +49,15 @@ pub(crate) async fn read_json<T: DeserializeOwned + Default>(path: &Path) -> any
 pub(crate) async fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), IpcError> {
     let json = serde_json::to_vec_pretty(value)
         .map_err(|e| IpcError::Storage(format!("Could not serialize {}: {e}", path.display())))?;
-    let tmp = path.with_extension("json.tmp");
+    write_bytes(path, json).await
+}
+
+/// Write `bytes` to `path` the way [`write_json`] does: atomically and durably.
+pub(crate) async fn write_bytes(path: &Path, bytes: Vec<u8>) -> Result<(), IpcError> {
+    // `<name>.tmp` next to the target (`settings.json.tmp`)
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
     // std::fs in one blocking task, so every error of the data write comes back here (a
     // tokio File reports a failed write only on a later flush) and the handle is closed
     // before the rename
@@ -57,7 +65,7 @@ pub(crate) async fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(
         let tmp = tmp.clone();
         tokio::task::spawn_blocking(move || {
             let mut file = std::fs::File::create(&tmp)?;
-            file.write_all(&json)?;
+            file.write_all(&bytes)?;
             file.sync_all()
         })
         .await
@@ -79,7 +87,8 @@ pub(crate) async fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(
 /// New files should carry a `{"version": N, ...}` envelope so their schema can be
 /// migrated at load time.
 pub(crate) struct JsonStore<T> {
-    path: PathBuf,
+    /// Changes only under `write_lock` (`switch_to`, when the active profile changes).
+    path: std::sync::RwLock<PathBuf>,
     value: RwLock<T>,
     /// Serializes `update`s, so two writers can neither lose each other's change nor
     /// race on the temp file.
@@ -97,32 +106,42 @@ where
         }
         let value = read_json(&path).await?;
         Ok(Self {
-            path,
+            path: std::sync::RwLock::new(path),
             value: RwLock::new(value),
             write_lock: Mutex::new(()),
         })
     }
 
+    pub(crate) fn path(&self) -> PathBuf {
+        self.path.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Point the store at another file (another profile's), loading it with the same
+    /// recovery rules. Serialized with every update, so no write lands in the old file
+    /// after the switch, nor in the new one before it.
+    pub(crate) async fn switch_to(&self, path: PathBuf) -> anyhow::Result<()> {
+        let _guard = self.write_lock.lock().await;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        let value = read_json(&path).await?;
+        *self.value.write().await = value;
+        *self.path.write().unwrap_or_else(|e| e.into_inner()) = path;
+        Ok(())
+    }
+
     /// A snapshot of the current value.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the library store reads through `read`")
-    )]
     pub(crate) async fn get(&self) -> T {
         self.value.read().await.clone()
     }
 
     /// Apply `f` to a copy of the value, persist it, then publish it. If the write
     /// fails, the in-memory value is left unchanged, so memory never runs ahead of disk.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the library store updates through `try_update`")
-    )]
     pub(crate) async fn update(&self, f: impl FnOnce(&mut T)) -> Result<T, IpcError> {
         let _guard = self.write_lock.lock().await;
         let mut next = self.value.read().await.clone();
         f(&mut next);
-        write_json(&self.path, &next).await?;
+        write_json(&self.path(), &next).await?;
         *self.value.write().await = next.clone();
         Ok(next)
     }
@@ -146,7 +165,7 @@ where
         let Some(result) = f(&mut next)? else {
             return Ok(None);
         };
-        write_json(&self.path, &next).await?;
+        write_json(&self.path(), &next).await?;
         *self.value.write().await = next;
         Ok(Some(result))
     }
@@ -231,6 +250,28 @@ pub(crate) mod tests {
 
         let reloaded = JsonStore::<Counter>::load(path).await.unwrap();
         assert_eq!(reloaded.get().await.hits, 2);
+    }
+
+    #[tokio::test]
+    async fn json_store_switches_files_and_writes_only_the_new_one() {
+        let dir = temp_dir("persist-switch");
+        let (a, b) = (dir.join("a/counter.json"), dir.join("b/counter.json"));
+        let store = JsonStore::<Counter>::load(a.clone()).await.unwrap();
+        store.update(|c| c.hits = 1).await.unwrap();
+
+        store.switch_to(b.clone()).await.unwrap();
+        assert_eq!(
+            store.get().await,
+            Counter::default(),
+            "the new file's value"
+        );
+        store.update(|c| c.hits = 7).await.unwrap();
+
+        let read = |p: &Path| std::fs::read_to_string(p).unwrap();
+        assert!(read(&a).contains("\"hits\": 1"));
+        assert!(read(&b).contains("\"hits\": 7"));
+        store.switch_to(a).await.unwrap();
+        assert_eq!(store.get().await.hits, 1);
     }
 
     #[tokio::test]

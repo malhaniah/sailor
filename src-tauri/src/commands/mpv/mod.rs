@@ -177,6 +177,11 @@ impl PlayerState {
         closing.and_then(|(_, progress)| progress.close())
     }
 
+    /// Whether a player is running (a profile switch waits until it is stopped).
+    pub fn is_playing(&self) -> bool {
+        self.active().is_some()
+    }
+
     /// How many files have been started so far (see `loads`).
     fn load_count(&self) -> u64 {
         self.loads.load(Ordering::SeqCst)

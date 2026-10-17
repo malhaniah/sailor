@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -12,6 +13,7 @@ use zeiler_player::{Player, PlayerBackend};
 use crate::error::IpcError;
 use crate::home_rows::HomeRows;
 use crate::persist::{read_json, write_json};
+use crate::profiles::{self, PinAttempts, ProfilesFile};
 use crate::settings_groups::{
     AudioSettings, KeyError, MarketplaceSources, SettingsObject, SkipSettings, SubtitleSettings,
     survives, with_key,
@@ -255,9 +257,22 @@ async fn migrate_legacy_data(data_dir: &Path) {
 
 pub struct AppState {
     pub client: AddonClient,
+    /// The active profile's addons.
     pub addons: RwLock<Vec<Descriptor>>,
+    /// Device settings merged with the active profile's preferences (`profiles.rs`).
     pub settings: RwLock<Settings>,
     pub player: Player,
+    /// `profiles.json`. Changed only under `profile_op`.
+    pub profiles: RwLock<ProfilesFile>,
+    /// Serializes profile changes (create, edit, switch, delete).
+    pub profile_op: tokio::sync::Mutex<()>,
+    pub pin_attempts: PinAttempts,
+    /// The active profile, once its PIN was entered (or at once, if it has none);
+    /// empty while a PIN-locked profile waits at "Who's watching?". Never another
+    /// profile: switching away locks the one left.
+    pub unlocked: std::sync::Mutex<HashSet<String>>,
+    /// The active profile's folder.
+    profile_dir: std::sync::RwLock<PathBuf>,
     engine: OnceCell<Arc<Engine>>,
     /// Serializes all persist operations: concurrent writers would otherwise race on
     /// the same temp file and rename stale state over fresh state.
@@ -266,21 +281,65 @@ pub struct AppState {
     cache_dir: PathBuf,
 }
 
+/// `base` with every per-profile key taken from `prefs` (a profile's `prefs.json`),
+/// or reset to its default where `prefs` doesn't have it or has an invalid value.
+pub(crate) fn with_profile_prefs(base: &Settings, prefs: &Map<String, Value>) -> Settings {
+    let defaults = Settings::default().to_object();
+    let mut object = base.to_object();
+    for key in profiles::PROFILE_KEYS {
+        if let Some(default) = defaults.get(key) {
+            object.insert(key.to_string(), default.clone());
+        }
+    }
+    let mut settings = Settings::from_object(object).unwrap_or_else(|_| base.clone());
+    for (key, value) in prefs {
+        if !profiles::PROFILE_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        match with_key(&settings, key, value.clone()) {
+            Ok(next) => settings = next,
+            Err(KeyError::Unknown) => {}
+            Err(KeyError::Invalid(e)) => {
+                warn!(key = %key, error = %e, "invalid profile setting; using its default");
+            }
+        }
+    }
+    settings
+}
+
 impl AppState {
     pub async fn load(data_dir: PathBuf, cache_dir: PathBuf) -> anyhow::Result<Self> {
         tokio::fs::create_dir_all(&data_dir).await?;
         tokio::fs::create_dir_all(&cache_dir).await?;
         migrate_legacy_data(&data_dir).await;
+        let profiles = profiles::load_or_migrate(&data_dir).await?;
+        let active = profiles.active_id.clone().unwrap_or_default();
+        let profile_dir = profiles::profile_dir(&data_dir, &active);
 
-        let settings: Settings = read_json(&data_dir.join("settings.json")).await?;
-        let addons: Vec<Descriptor> = read_json(&data_dir.join("addons.json")).await?;
+        let device: Settings = read_json(&data_dir.join("settings.json")).await?;
+        let prefs: Map<String, Value> = read_json(&profile_dir.join(profiles::PREFS_FILE)).await?;
+        let settings = with_profile_prefs(&device, &prefs);
+        let addons: Vec<Descriptor> = read_json(&profile_dir.join("addons.json")).await?;
         let player = Player::new(settings.mpv_path.as_deref().map(std::path::Path::new));
+        let locked = profiles
+            .profiles
+            .iter()
+            .any(|p| p.id == active && p.pin_hash.is_some());
 
         Ok(Self {
             client: AddonClient::new()?,
             addons: RwLock::new(addons),
             settings: RwLock::new(settings),
             player,
+            profiles: RwLock::new(profiles),
+            profile_op: tokio::sync::Mutex::new(()),
+            pin_attempts: PinAttempts::default(),
+            unlocked: std::sync::Mutex::new(if locked {
+                HashSet::new()
+            } else {
+                HashSet::from([active])
+            }),
+            profile_dir: std::sync::RwLock::new(profile_dir),
             engine: OnceCell::new(),
             persist_lock: tokio::sync::Mutex::new(()),
             data_dir,
@@ -297,13 +356,76 @@ impl AppState {
         crate::builtin::with_builtins(user, &settings)
     }
 
-    /// Where per-profile files (library, profile preferences, …) live. Until profiles
-    /// exist this is the data dir itself; once they do it becomes
-    /// `data_dir/profiles/<active id>/`, so new per-user stores must take their path
-    /// from here rather than from the data dir. Device-wide files (settings.json,
-    /// engine state) stay in the data dir.
+    /// Where per-profile files (addons, library, preferences, …) live: the active
+    /// profile's folder, `data_dir/profiles/<id>/`. New per-user stores take their path
+    /// from here and follow a switch (`switch_profile`). Device-wide files
+    /// (settings.json, engine state) stay in the data dir.
     pub fn profile_dir(&self) -> PathBuf {
-        self.data_dir.clone()
+        self.profile_dir
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.data_dir
+    }
+
+    /// Make `id` the active profile: its addons, its preferences merged into the
+    /// settings, `profiles.json` updated. The caller holds `profile_op`, has checked
+    /// that no player runs, and has already switched the stores that read a file
+    /// (library, player choices), putting them back if this fails. Its own files are
+    /// read before anything changes, so a damaged folder fails here, not halfway.
+    pub async fn switch_profile(
+        &self,
+        id: &str,
+        on_commit: impl FnOnce(&Settings),
+    ) -> Result<PathBuf, IpcError> {
+        let dir = profiles::profile_dir(&self.data_dir, id);
+        let storage = |e: anyhow::Error| IpcError::Storage(format!("{e:#}"));
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| IpcError::Storage(format!("Could not open the profile's folder: {e}")))?;
+        let addons: Vec<Descriptor> = read_json(&dir.join("addons.json")).await.map_err(storage)?;
+        let prefs: Map<String, Value> = read_json(&dir.join(profiles::PREFS_FILE))
+            .await
+            .map_err(storage)?;
+        let previous = self.profiles.read().await.clone();
+        let mut next = previous.clone();
+        next.active_id = Some(id.to_string());
+        self.save_profiles(next).await?;
+        // settings.json and the new profile's prefs.json are written before anything
+        // in memory changes; if that fails, profiles.json is put back
+        let saved = self
+            .update_settings_in(
+                &dir,
+                |current| Ok(with_profile_prefs(current, &prefs)),
+                on_commit,
+            )
+            .await;
+        if let Err(e) = saved {
+            if let Err(undo) = self.save_profiles(previous).await {
+                warn!("could not put profiles.json back after a failed switch: {undo}");
+            }
+            return Err(e);
+        }
+        // the list first, then the folder: a persist in between (all of them hold
+        // `profile_op`, so there is none) would otherwise write one profile's list
+        // into the other's file
+        *self.addons.write().await = addons;
+        *self.profile_dir.write().unwrap_or_else(|e| e.into_inner()) = dir.clone();
+        Ok(dir)
+    }
+
+    /// Save `profiles.json` as `next` (the caller holds `profile_op`).
+    pub async fn save_profiles(&self, next: ProfilesFile) -> Result<(), IpcError> {
+        let mut file = self.profiles.write().await;
+        {
+            let _guard = self.persist_lock.lock().await;
+            write_json(&self.data_dir.join(profiles::PROFILES_FILE), &next).await?;
+        }
+        *file = next;
+        Ok(())
     }
 
     /// The torrent engine, started on first use (avoids a firewall prompt at app launch).
@@ -337,7 +459,7 @@ impl AppState {
     pub async fn persist_addons(&self) -> Result<(), IpcError> {
         let _guard = self.persist_lock.lock().await;
         let snapshot = self.addons.read().await.clone();
-        write_json(&self.data_dir.join("addons.json"), &snapshot).await
+        write_json(&self.profile_dir().join("addons.json"), &snapshot).await
     }
 
     /// Compute the next settings from the current ones, persist them, and only then
@@ -350,11 +472,27 @@ impl AppState {
         next: impl FnOnce(&Settings) -> Result<Settings, IpcError>,
         on_commit: impl FnOnce(&Settings),
     ) -> Result<Settings, IpcError> {
+        self.update_settings_in(&self.profile_dir(), next, on_commit)
+            .await
+    }
+
+    /// `update_settings`, writing the profile keys into `profile_dir`'s `prefs.json`
+    /// (a switch writes the profile being switched to).
+    async fn update_settings_in(
+        &self,
+        profile_dir: &Path,
+        next: impl FnOnce(&Settings) -> Result<Settings, IpcError>,
+        on_commit: impl FnOnce(&Settings),
+    ) -> Result<Settings, IpcError> {
         let mut current = self.settings.write().await;
         let next = next(&current)?;
         {
             let _guard = self.persist_lock.lock().await;
             write_json(&self.data_dir.join("settings.json"), &next).await?;
+            // the active profile's own keys go to its folder too: they are what it
+            // gets back when it is switched to
+            let prefs = Value::Object(profiles::profile_subset(&next.to_object()));
+            write_json(&profile_dir.join(profiles::PREFS_FILE), &prefs).await?;
         }
         *current = next.clone();
         on_commit(&next);
@@ -694,12 +832,94 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profile_dir_is_the_data_dir_until_profiles_exist() {
+    async fn profile_dir_is_the_active_profiles_folder() {
         let dir = crate::persist::tests::temp_dir("profile-dir");
         let state = AppState::load(dir.join("data"), dir.join("cache"))
             .await
             .unwrap();
-        assert_eq!(state.profile_dir(), dir.join("data"));
+        let active = state.profiles.read().await.active_id.clone().unwrap();
+        assert_eq!(
+            state.profile_dir(),
+            dir.join("data").join("profiles").join(&active)
+        );
+    }
+
+    #[tokio::test]
+    async fn addons_and_profile_keys_follow_the_active_profile() {
+        let dir = crate::persist::tests::temp_dir("profile-switch");
+        let data = dir.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(
+            data.join("settings.json"),
+            r#"{"theme":"ocean","mpvPath":"/opt/mpv"}"#,
+        )
+        .unwrap();
+        std::fs::write(data.join("addons.json"), r#"[{"manifest":{"id":"a","name":"A"},"transportUrl":"https://a.example/manifest.json"}]"#).unwrap();
+        let state = AppState::load(data.clone(), dir.join("cache"))
+            .await
+            .unwrap();
+        let primary = state.profiles.read().await.active_id.clone().unwrap();
+        assert_eq!(state.addons.read().await.len(), 1, "migrated");
+        assert_eq!(state.settings.read().await.theme, "ocean");
+
+        // a second profile: its own keys start at their defaults, device keys stay
+        let mut file = state.profiles.read().await.clone();
+        let kid = profiles::new_profile("Kid".into(), "teal".into());
+        let kid_id = kid.id.clone();
+        file.profiles.push(kid);
+        state.save_profiles(file).await.unwrap();
+        state.switch_profile(&kid_id, |_| {}).await.unwrap();
+        assert!(state.addons.read().await.is_empty());
+        let settings = state.settings.read().await.clone();
+        assert_eq!(settings.theme, Settings::default().theme);
+        assert_eq!(
+            settings.mpv_path.as_deref(),
+            Some("/opt/mpv"),
+            "device key kept"
+        );
+
+        // changes land in the active profile only
+        state
+            .update_settings(|s| s.patched(json!({"hideAnime": true})), |_| {})
+            .await
+            .unwrap();
+        state.persist_addons().await.unwrap();
+        state.switch_profile(&primary, |_| {}).await.unwrap();
+        assert_eq!(state.addons.read().await.len(), 1);
+        assert_eq!(state.settings.read().await.theme, "ocean");
+        assert!(!state.settings.read().await.hide_anime);
+        state.switch_profile(&kid_id, |_| {}).await.unwrap();
+        assert!(state.settings.read().await.hide_anime);
+
+        // and survive a restart
+        drop(state);
+        let again = AppState::load(data, dir.join("cache")).await.unwrap();
+        assert_eq!(
+            again.profiles.read().await.active_id.as_deref(),
+            Some(kid_id.as_str())
+        );
+        assert!(again.settings.read().await.hide_anime);
+        assert!(again.addons.read().await.is_empty());
+    }
+
+    #[test]
+    fn profile_prefs_replace_only_profile_keys_and_read_leniently() {
+        let base = Settings {
+            theme: "ocean".into(),
+            mpv_path: Some("/m".into()),
+            show_adult: true,
+            ..Settings::default()
+        };
+        let prefs = json!({"theme": "dusk", "hideAnime": "yes", "mpvPath": "/evil"});
+        let merged = with_profile_prefs(&base, prefs.as_object().unwrap());
+        assert_eq!(merged.theme, "dusk");
+        assert!(!merged.hide_anime, "bad value → default");
+        assert!(!merged.show_adult, "absent profile key → default");
+        assert_eq!(
+            merged.mpv_path.as_deref(),
+            Some("/m"),
+            "device keys never from prefs"
+        );
     }
 
     /// `<tmp>/<test>/{app.sailor.desktop,io.zeiler.desktop}`, mirroring the OS data dir.

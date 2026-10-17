@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { SETTINGS_CHANGED, addonList, settingsGet, settingsPatch } from "./ipc";
+import { ADDONS_CHANGED, SETTINGS_CHANGED, addonList, settingsGet, settingsPatch } from "./ipc";
 import { applyTheme } from "./theme";
 import type { Descriptor, Settings, SettingsPatch } from "./types";
 
@@ -101,8 +101,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       .then(setSettings)
       .catch(() => {});
     const unlisten = listen<Settings>(SETTINGS_CHANGED, (e) => setSettings(e.payload));
+    // an account sync replaced the profile's addons
+    const unlistenAddons = listen(ADDONS_CHANGED, () => void reload());
     return () => {
       void unlisten.then((off) => off());
+      void unlistenAddons.then((off) => off());
     };
   }, [reload, setSettings]);
 

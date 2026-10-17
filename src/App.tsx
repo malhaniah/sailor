@@ -5,6 +5,7 @@ import { Topbar } from "./chrome/Topbar";
 import { UpdateBanner } from "./chrome/UpdateBanner";
 import { LibraryProvider } from "./lib/library";
 import { subscribePickerRequests } from "./lib/playback-handoff";
+import { ProfilesProvider } from "./lib/profiles";
 import { StoreProvider, useSettings } from "./lib/store";
 import {
   type Frame,
@@ -18,6 +19,8 @@ import { AddonsView } from "./views/Addons";
 import { BrowseView } from "./views/Browse";
 import { AddonDetailView } from "./views/addons/AddonDetail";
 import { InstallHost } from "./views/addons/InstallDialog";
+import { ProfilePicker } from "./views/profiles/ProfilePicker";
+import { openSettingsSection } from "./views/Settings";
 import { DetailView } from "./views/Detail";
 import { DiscoverView } from "./views/Discover";
 import { HomeView } from "./views/Home";
@@ -28,14 +31,26 @@ import { SettingsView } from "./views/Settings";
 import { TypeRoomView } from "./views/TypeRoom";
 
 export default function App() {
+  // keyed by the active profile: a switch remounts every store, which then reads the
+  // new profile's addons, settings and library
   return (
-    <StoreProvider>
-      <LibraryProvider>
-        <ViewProvider>
-          <Shell />
-        </ViewProvider>
-      </LibraryProvider>
-    </StoreProvider>
+    <ProfilesProvider>
+      {(activeId, unlocked) =>
+        // a PIN-locked profile mounts nothing (no addons, library or search) until
+        // its PIN is entered at "Who's watching?"
+        unlocked ? (
+          <StoreProvider key={activeId ?? "loading"}>
+            <LibraryProvider>
+              <ViewProvider>
+                <Shell />
+              </ViewProvider>
+            </LibraryProvider>
+          </StoreProvider>
+        ) : (
+          <ProfilePicker onManage={() => {}} />
+        )
+      }
+    </ProfilesProvider>
   );
 }
 
@@ -74,6 +89,12 @@ function Shell() {
       <SearchOverlay />
       <UpdateBanner />
       <InstallHost />
+      <ProfilePicker
+        onManage={() => {
+          openSettingsSection("account");
+          setView("settings");
+        }}
+      />
     </div>
   );
 }

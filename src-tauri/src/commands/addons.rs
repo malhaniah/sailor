@@ -2,14 +2,17 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
 use url::Url;
 use zeiler_addon::{
     Descriptor, is_adult_manifest, manifest_changes, normalize_transport_input,
     without_adult_options,
 };
+use zeiler_sync::sync::AddonOp;
 
+use crate::account;
+use crate::commands;
 use crate::commands::marketplace::MarketState;
 use crate::error::IpcError;
 use crate::state::AppState;
@@ -200,6 +203,7 @@ pub(crate) fn install_into(
 /// addon serves now, never what the webview sent.
 #[tauri::command]
 pub async fn addon_add(
+    app: AppHandle,
     state: State<'_, AppState>,
     updates: State<'_, UpdateCache>,
     url: String,
@@ -214,6 +218,8 @@ pub async fn addon_add(
         ));
     }
 
+    // a profile switch can't land between the change and its write
+    let _profile = state.profile_op.lock().await;
     install_into(
         &mut *state.addons.write().await,
         descriptor.clone(),
@@ -224,15 +230,27 @@ pub async fn addon_add(
     if let Some(old) = &replace {
         updates.forget(&[old.as_str()]);
     }
+    let mut ops: Vec<AddonOp> = account::to_raw(&descriptor)
+        .map(AddonOp::Add)
+        .into_iter()
+        .collect();
+    if let Some(old) = replace.filter(|old| *old != descriptor.transport_url.as_str()) {
+        // the new copy takes the old one's place in the account too
+        ops.push(AddonOp::Remove(old));
+        ops.push(AddonOp::Reorder(user_order(&state).await));
+    }
+    commands::account::addons_changed(&app, ops).await;
     Ok(descriptor)
 }
 
 #[tauri::command]
 pub async fn addon_remove(
+    app: AppHandle,
     state: State<'_, AppState>,
     updates: State<'_, UpdateCache>,
     transport_url: String,
 ) -> Result<(), IpcError> {
+    let _profile = state.profile_op.lock().await;
     {
         let mut addons = state.addons.write().await;
         let before = addons.len();
@@ -243,7 +261,19 @@ pub async fn addon_remove(
     }
     state.persist_addons().await?;
     updates.forget(&[transport_url.as_str()]);
+    commands::account::addons_changed(&app, vec![AddonOp::Remove(transport_url)]).await;
     Ok(())
+}
+
+/// The user's addons' transport URLs, in order.
+async fn user_order(state: &AppState) -> Vec<String> {
+    state
+        .addons
+        .read()
+        .await
+        .iter()
+        .map(|d| d.transport_url.to_string())
+        .collect()
 }
 
 /// The addons in effect, as the UI shows them: while adult content is hidden, their
@@ -302,14 +332,17 @@ pub(crate) fn reordered(
 /// that has them, and stream groups are listed in this order. Built-ins stay first.
 #[tauri::command]
 pub async fn addon_reorder(
+    app: AppHandle,
     state: State<'_, AppState>,
     order: Vec<String>,
 ) -> Result<Vec<Descriptor>, IpcError> {
+    let _profile = state.profile_op.lock().await;
     {
         let mut addons = state.addons.write().await;
         *addons = reordered(&addons, &order)?;
     }
     state.persist_addons().await?;
+    commands::account::addons_changed(&app, vec![AddonOp::Reorder(order)]).await;
     Ok(state.effective_addons().await)
 }
 
@@ -352,6 +385,8 @@ struct UpdateCacheInner {
     last: Option<(Instant, Vec<AddonUpdate>)>,
     /// Addons forgotten since the running check started.
     forgotten: Vec<String>,
+    /// Cleared (a profile switch) since the running check started: drop its result.
+    cleared: bool,
 }
 
 impl UpdateCache {
@@ -379,14 +414,27 @@ impl UpdateCache {
         }
     }
 
+    /// Forget everything (another profile's addons are in effect now).
+    pub fn clear(&self) {
+        let mut inner = self.inner();
+        inner.last = None;
+        inner.forgotten.clear();
+        inner.cleared = true;
+    }
+
     fn begin(&self) {
-        self.inner().forgotten.clear();
+        let mut inner = self.inner();
+        inner.forgotten.clear();
+        inner.cleared = false;
     }
 
     /// Store a finished check's result, without what was forgotten meanwhile.
     fn finish(&self, mut updates: Vec<AddonUpdate>) -> Vec<AddonUpdate> {
         let mut inner = self.inner();
         let forgotten = std::mem::take(&mut inner.forgotten);
+        if std::mem::take(&mut inner.cleared) {
+            return Vec::new();
+        }
         updates.retain(|u| !forgotten.contains(&u.transport_url));
         inner.last = Some((Instant::now(), updates.clone()));
         updates
@@ -453,6 +501,7 @@ pub async fn addon_check_updates(
 /// install confirmation instead.
 #[tauri::command]
 pub async fn addon_refresh(
+    app: AppHandle,
     state: State<'_, AppState>,
     cache: State<'_, UpdateCache>,
     transport_url: String,
@@ -473,7 +522,9 @@ pub async fn addon_refresh(
             "This update changes what the addon can do. Review it before installing.".into(),
         ));
     }
-    // in place, and NotFound if it was removed meanwhile (never added back)
+    // in place, and NotFound if it was removed meanwhile (never added back); a switch
+    // to another profile meanwhile makes it NotFound too
+    let _profile = state.profile_op.lock().await;
     install_into(
         &mut *state.addons.write().await,
         fresh.clone(),
@@ -481,6 +532,14 @@ pub async fn addon_refresh(
     )?;
     state.persist_addons().await?;
     cache.forget(&[transport_url.as_str()]);
+    commands::account::addons_changed(
+        &app,
+        account::to_raw(&fresh)
+            .map(AddonOp::Add)
+            .into_iter()
+            .collect(),
+    )
+    .await;
     Ok(fresh)
 }
 
