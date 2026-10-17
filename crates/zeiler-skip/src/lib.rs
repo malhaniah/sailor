@@ -164,7 +164,7 @@ pub struct Endpoints {
     pub aniskip: Url,
     /// Kitsu's JSON:API, ending in `/`.
     pub kitsu: Url,
-    /// TheIntroDB API v2, ending in `/`.
+    /// TheIntroDB API v4, ending in `/`.
     pub introdb: Url,
 }
 
@@ -174,7 +174,7 @@ impl Default for Endpoints {
         Self {
             aniskip: url("https://api.aniskip.com/v2/"),
             kitsu: url("https://kitsu.app/api/edge/"),
-            introdb: url("https://api.theintrodb.org/v2/"),
+            introdb: url("https://api.theintrodb.org/v4/"),
         }
     }
 }

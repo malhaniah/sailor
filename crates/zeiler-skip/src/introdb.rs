@@ -1,12 +1,15 @@
 //! TheIntroDB (IMDb and TMDB ids). Ported from Harbor's
 //! `src/lib/skip-intro/theintrodb.ts` (MIT) — see THIRD-PARTY-NOTICES.md.
 //!
-//! `GET {introdb}media?imdb_id=tt…|tmdb_id=N[&season=S&episode=E]` → `{tmdb_id, type,
+//! `GET {introdb}media?imdb_id=tt…|tmdb_id=N[&season=S&episode=E]` → `{tvdb_id, type,
 //! intro: [{start_ms, end_ms}], recap: [...], credits: [...], preview: [...]}`, each
 //! list optional; a `null` start is the beginning and a `null` end the end of the video.
-//! Credits and the preview after them are both an outro. 404 when it knows no such
-//! title. Read leniently: a missing or broken list is empty, a broken entry is skipped,
-//! and a number may come as a string.
+//! Credits and the preview after them are both an outro; one starting at 0 is the
+//! service's "none" (an intro or recap ending at 0 is too, and comes out empty). 404 when
+//! it knows no such title. Season and episode are in the id's own provider's numbering (IMDb's, TMDB's),
+//! which the service converts itself, so no `mapping` is sent. Read leniently: a missing
+//! or broken list is empty (so is the per-episode count list it may answer instead), a
+//! broken entry is skipped, and a number may come as a string.
 
 use serde::Deserialize;
 use serde_with::{DefaultOnError, DisplayFromStr, PickFirst, VecSkipError, serde_as};
@@ -81,12 +84,16 @@ fn parse_media(media: Media) -> Vec<RawSegment> {
     ]
     .into_iter()
     .flat_map(|(kind, ranges)| {
-        ranges.into_iter().map(move |r| RawSegment {
-            kind,
-            start: seconds(r.start_ms),
-            end: seconds(r.end_ms),
-            source: SegmentSource::IntroDb,
-        })
+        ranges
+            .into_iter()
+            // credits or a preview starting at 0 is the service's "none", not the whole video
+            .filter(move |r| kind != SegmentKind::Outro || r.start_ms != Some(0.0))
+            .map(move |r| RawSegment {
+                kind,
+                start: seconds(r.start_ms),
+                end: seconds(r.end_ms),
+                source: SegmentSource::IntroDb,
+            })
     })
     .collect()
 }
@@ -99,7 +106,7 @@ mod tests {
     #[test]
     fn credits_and_previews_are_outros_and_open_ends_stay_open() {
         let media: Media = serde_json::from_str(
-            r#"{"tmdb_id":1396,"type":"tv","season":1,"episode":1,
+            r#"{"tvdb_id":81189,"type":"tv","season":1,"episode":1,
                 "intro":[{"start_ms":228664,"end_ms":246143}],
                 "credits":[{"start_ms":3431000,"end_ms":null}],
                 "recap":[{"start_ms":null,"end_ms":30000}],
@@ -118,7 +125,7 @@ mod tests {
             ]
         );
         let movie: Media = serde_json::from_str(
-            r#"{"tmdb_id":278,"type":"movie","credits":[{"start_ms":8300000,"end_ms":null}]}"#,
+            r#"{"tvdb_id":190,"type":"movie","credits":[{"start_ms":8300000,"end_ms":null}]}"#,
         )
         .unwrap();
         assert_eq!(parse_media(movie).len(), 1);
@@ -143,5 +150,40 @@ mod tests {
                 (SegmentKind::Outro, Some(3500.0), Some(3520.0)),
             ]
         );
+    }
+
+    /// The OpenAPI spec: credits and previews "may" start at 0 for "no segment".
+    #[test]
+    fn credits_starting_at_zero_are_no_credits() {
+        let media: Media = serde_json::from_str(
+            r#"{"tvdb_id":81189,"type":"tv","season":1,"episode":1,
+                "recap":[{"start_ms":0,"end_ms":30000}],
+                "credits":[{"start_ms":0,"end_ms":null},{"start_ms":3431000,"end_ms":null}],
+                "preview":[{"start_ms":0,"end_ms":0}]}"#,
+        )
+        .unwrap();
+        let got: Vec<_> = parse_media(media)
+            .into_iter()
+            .map(|s| (s.kind, s.start, s.end))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (SegmentKind::Recap, Some(0.0), Some(30.0)),
+                (SegmentKind::Outro, Some(3431.0), None),
+            ],
+            "a recap may start at 0; credits may not"
+        );
+    }
+
+    /// v4's other answer for a title with no submissions (the OpenAPI spec's example).
+    #[test]
+    fn an_episode_count_list_has_no_segments() {
+        let media: Media = serde_json::from_str(
+            r#"{"tvdb_id":71663,"type":"tv","episodes":[{"season":1,"episode":1,
+                "total_submission_count":4,"intro_accepted_count":4}]}"#,
+        )
+        .unwrap();
+        assert!(parse_media(media).is_empty());
     }
 }

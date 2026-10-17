@@ -128,6 +128,15 @@ fn segments_serialize_for_the_ui() {
     );
 }
 
+#[test]
+fn theintrodb_is_asked_on_v4() {
+    assert_eq!(
+        Endpoints::default().introdb.join("media").unwrap().as_str(),
+        "https://api.theintrodb.org/v4/media",
+        "v2 and v3 are frozen and being retired"
+    );
+}
+
 /// A loopback HTTP server: answers a request whose path and query start with a route's
 /// prefix with that route's status and body (404 otherwise), and logs every request.
 struct Loopback {
@@ -187,7 +196,7 @@ impl Loopback {
         SkipClient::with_endpoints(Endpoints {
             aniskip: url("aniskip/v2/"),
             kitsu: url("kitsu/api/edge/"),
-            introdb: url("introdb/v2/"),
+            introdb: url("introdb/v4/"),
         })
         .unwrap()
     }
@@ -255,8 +264,8 @@ async fn a_kitsu_episode_is_asked_of_aniskip_by_its_myanimelist_id_once() {
 #[tokio::test]
 async fn failures_are_empty_and_not_cached() {
     let server = Loopback::start(&[
-        ("/introdb/v2/media?imdb_id=tt1&", 503, "busy"),
-        ("/introdb/v2/media?imdb_id=tt2", 200, "not json"),
+        ("/introdb/v4/media?imdb_id=tt1&", 503, "busy"),
+        ("/introdb/v4/media?imdb_id=tt2", 200, "not json"),
         ("/kitsu/api/edge/anime/3/", 200, r#"{"data":[]}"#),
     ])
     .await;
@@ -273,9 +282,9 @@ async fn failures_are_empty_and_not_cached() {
     assert_eq!(
         server.requests(),
         [
-            "/introdb/v2/media?imdb_id=tt1&season=1&episode=1",
-            "/introdb/v2/media?imdb_id=tt1&season=1&episode=1",
-            "/introdb/v2/media?imdb_id=tt2",
+            "/introdb/v4/media?imdb_id=tt1&season=1&episode=1",
+            "/introdb/v4/media?imdb_id=tt1&season=1&episode=1",
+            "/introdb/v4/media?imdb_id=tt2",
             "/kitsu/api/edge/anime/3/mappings?filter%5BexternalSite%5D=myanimelist%2Fanime",
         ]
     );
@@ -285,16 +294,16 @@ async fn failures_are_empty_and_not_cached() {
 async fn theintrodb_answers_for_imdb_and_tmdb_ids() {
     let server = Loopback::start(&[
         (
-            "/introdb/v2/media?imdb_id=tt0903747&season=1&episode=1",
+            "/introdb/v4/media?imdb_id=tt0903747&season=1&episode=1",
             200,
-            r#"{"tmdb_id":1396,"type":"tv","season":1,"episode":1,
+            r#"{"tvdb_id":81189,"type":"tv","season":1,"episode":1,
                 "intro":[{"start_ms":228664,"end_ms":246143}],
                 "credits":[{"start_ms":3431000,"end_ms":null}]}"#,
         ),
         (
-            "/introdb/v2/media?tmdb_id=278",
+            "/introdb/v4/media?tmdb_id=278",
             200,
-            r#"{"tmdb_id":278,"type":"movie","credits":[{"start_ms":8300000,"end_ms":null}]}"#,
+            r#"{"tvdb_id":190,"type":"movie","credits":[{"start_ms":8300000,"end_ms":null}]}"#,
         ),
     ])
     .await;
