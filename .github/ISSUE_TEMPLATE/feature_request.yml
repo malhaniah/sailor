@@ -1,0 +1,54 @@
+name: Feature request
+description: Suggest something Zeiler should do.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you write: Zeiler **hosts no media, indexes no media, and ships no content addon**, and never will (see [the one rule in CONTRIBUTING.md](https://github.com/malhaniah/zeiler/blob/main/CONTRIBUTING.md#the-one-rule-that-is-not-negotiable)). Requests to bundle, seed, recommend or feature stream addons, or to add default content sources, are declined. Features that help you manage the addons *you* choose are welcome.
+
+        The milestone plan in [docs/plan](https://github.com/malhaniah/zeiler/tree/main/docs/plan) lists what is already decided; please check it first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What Zeiler would do, from the user's side. If Stremio or another client does this, say how.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Player and playback
+        - Subtitles and audio
+        - Library and Continue Watching
+        - Catalogs and discovery
+        - Live TV and IPTV
+        - Addons and the marketplace
+        - Profiles and account sync
+        - Settings
+        - Installers and updates
+        - Something else
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: This does not ask Zeiler to bundle, seed, host, recommend or feature any content or stream addon.
+          required: true
+        - label: I searched the existing issues and the plan in docs/plan.
+          required: true

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/malhaniah/zeiler/security/advisories/new
+    about: Security bugs are reported privately, never as a public issue. SECURITY.md has the details.
+  - name: A problem with an addon's streams or metadata
+    url: https://github.com/malhaniah/zeiler/blob/main/CONTRIBUTING.md#the-one-rule-that-is-not-negotiable
+    about: Zeiler ships no content addon and does not review third-party ones. Please report addon problems to the addon's author.
