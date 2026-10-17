@@ -53,9 +53,9 @@ export function SkipAndNextCards() {
           When a video starts, Zeiler asks a community database where its intro, recap and
           credits are: AniSkip for anime (after Kitsu turns a Kitsu id into a MyAnimeList id),
           TheIntroDB for movies and shows with an IMDb or TMDB id. They get the title's id, the
-          season and episode, and for AniSkip the video's length — so they can tell what you
-          watch. Nothing else is sent, and the video never waits for them. Skipping by itself
-          uses only their times and chapters named exactly for it, never a guess.
+          season and episode, and the video's length — so they can tell what you watch.
+          Nothing else is sent, and the video never waits for them. Skipping by itself uses
+          only their times and chapters named exactly for it, never a guess.
         </p>
       </SectionCard>
 

@@ -284,12 +284,18 @@ impl SkipClient {
                 id,
                 season,
                 episode,
-            } => introdb::segments(self, ("imdb_id", id.clone()), *season, *episode).await,
+            } => {
+                let id = ("imdb_id", id.clone());
+                introdb::segments(self, id, *season, *episode, duration_sec).await
+            }
             Lookup::Tmdb {
                 id,
                 season,
                 episode,
-            } => introdb::segments(self, ("tmdb_id", id.to_string()), *season, *episode).await,
+            } => {
+                let id = ("tmdb_id", id.to_string());
+                introdb::segments(self, id, *season, *episode, duration_sec).await
+            }
         }
     }
 
@@ -338,22 +344,24 @@ impl SkipClient {
     }
 }
 
-/// AniSkip matches submissions by episode length, so its answers are cached per length
-/// (to the second); TheIntroDB's do not depend on it.
+/// Both services answer for the video's length (AniSkip matches submissions by episode
+/// length, TheIntroDB picks the release version, such as an extended cut), so answers are
+/// cached per length (to the second).
 fn segments_key(lookup: &Lookup, duration_sec: f64) -> String {
+    let length = whole(duration_sec);
     match lookup {
-        Lookup::Kitsu { id, episode } => format!("kitsu:{id}:{episode}:{}", whole(duration_sec)),
-        Lookup::Mal { id, episode } => format!("mal:{id}:{episode}:{}", whole(duration_sec)),
+        Lookup::Kitsu { id, episode } => format!("kitsu:{id}:{episode}:{length}"),
+        Lookup::Mal { id, episode } => format!("mal:{id}:{episode}:{length}"),
         Lookup::Imdb {
             id,
             season,
             episode,
-        } => format!("imdb:{id}:{season:?}:{episode:?}"),
+        } => format!("imdb:{id}:{season:?}:{episode:?}:{length}"),
         Lookup::Tmdb {
             id,
             season,
             episode,
-        } => format!("tmdb:{id}:{season:?}:{episode:?}"),
+        } => format!("tmdb:{id}:{season:?}:{episode:?}:{length}"),
     }
 }
 
