@@ -40,6 +40,8 @@ futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
+# local-profile PINs (Argon2id hashes with a random salt)
+argon2 = "0.5"
 libc = "0.2"
 # the watched-episodes bitfield of library items (zeiler-account): zlib + base64, both
 # already in Cargo.lock (flate2 via librqbit's compression, base64 via reqwest)

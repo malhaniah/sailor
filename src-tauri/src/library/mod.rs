@@ -14,7 +14,7 @@ pub mod progress;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -276,6 +276,8 @@ type OnChange = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 pub struct LibraryState {
     store: Arc<JsonStore<LibraryFile>>,
     jobs: mpsc::UnboundedSender<Job>,
+    /// Progress batches sent and not yet applied (a profile switch waits for none).
+    pending: Arc<AtomicUsize>,
     on_change: OnChange,
 }
 
@@ -297,6 +299,8 @@ impl LibraryState {
         let (jobs, mut queue) = mpsc::unbounded_channel::<Job>();
         let worker_store = store.clone();
         let worker_change = on_change.clone();
+        let pending = Arc::new(AtomicUsize::new(0));
+        let worker_pending = pending.clone();
         tauri::async_runtime::spawn(async move {
             while let Some(job) = queue.recv().await {
                 let mut flush = job.flush;
@@ -319,6 +323,7 @@ impl LibraryState {
                     }
                     Err(e) => warn!(error = %e, "could not save playback progress"),
                 }
+                worker_pending.fetch_sub(1, Ordering::SeqCst);
                 if let Some(done) = job.done {
                     let _ = done.send(());
                 }
@@ -327,13 +332,32 @@ impl LibraryState {
         Ok(Self {
             store,
             jobs,
+            pending,
             on_change,
         })
     }
 
+    /// Read another profile's `library.json` from now on (no player may be running).
+    pub(crate) async fn switch_to(&self, dir: &Path) -> anyhow::Result<()> {
+        self.store.switch_to(dir.join(FILE_NAME)).await
+    }
+
+    /// Wait (up to `limit`) until every progress batch sent so far is applied, so a
+    /// profile switch never lands one in the next profile's library. False on timeout.
+    pub(crate) async fn settle(&self, limit: Duration) -> bool {
+        let until = tokio::time::Instant::now() + limit;
+        while self.pending.load(Ordering::SeqCst) > 0 {
+            if tokio::time::Instant::now() >= until {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        true
+    }
+
     /// Progress tracking for a playback, or none for live TV (never tracked).
     pub(crate) fn session(&self, context: PlaybackContext) -> Option<Arc<SessionProgress>> {
-        SessionProgress::new(context, self.jobs.clone())
+        SessionProgress::new(context, self.jobs.clone(), self.pending.clone())
     }
 
     pub async fn list(&self, query: &LibraryQuery) -> Vec<LibraryEntry> {

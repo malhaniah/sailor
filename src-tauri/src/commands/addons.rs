@@ -214,6 +214,8 @@ pub async fn addon_add(
         ));
     }
 
+    // a profile switch can't land between the change and its write
+    let _profile = state.profile_op.lock().await;
     install_into(
         &mut *state.addons.write().await,
         descriptor.clone(),
@@ -233,6 +235,7 @@ pub async fn addon_remove(
     updates: State<'_, UpdateCache>,
     transport_url: String,
 ) -> Result<(), IpcError> {
+    let _profile = state.profile_op.lock().await;
     {
         let mut addons = state.addons.write().await;
         let before = addons.len();
@@ -305,6 +308,7 @@ pub async fn addon_reorder(
     state: State<'_, AppState>,
     order: Vec<String>,
 ) -> Result<Vec<Descriptor>, IpcError> {
+    let _profile = state.profile_op.lock().await;
     {
         let mut addons = state.addons.write().await;
         *addons = reordered(&addons, &order)?;
@@ -352,6 +356,8 @@ struct UpdateCacheInner {
     last: Option<(Instant, Vec<AddonUpdate>)>,
     /// Addons forgotten since the running check started.
     forgotten: Vec<String>,
+    /// Cleared (a profile switch) since the running check started: drop its result.
+    cleared: bool,
 }
 
 impl UpdateCache {
@@ -379,14 +385,27 @@ impl UpdateCache {
         }
     }
 
+    /// Forget everything (another profile's addons are in effect now).
+    pub fn clear(&self) {
+        let mut inner = self.inner();
+        inner.last = None;
+        inner.forgotten.clear();
+        inner.cleared = true;
+    }
+
     fn begin(&self) {
-        self.inner().forgotten.clear();
+        let mut inner = self.inner();
+        inner.forgotten.clear();
+        inner.cleared = false;
     }
 
     /// Store a finished check's result, without what was forgotten meanwhile.
     fn finish(&self, mut updates: Vec<AddonUpdate>) -> Vec<AddonUpdate> {
         let mut inner = self.inner();
         let forgotten = std::mem::take(&mut inner.forgotten);
+        if std::mem::take(&mut inner.cleared) {
+            return Vec::new();
+        }
         updates.retain(|u| !forgotten.contains(&u.transport_url));
         inner.last = Some((Instant::now(), updates.clone()));
         updates
@@ -473,7 +492,9 @@ pub async fn addon_refresh(
             "This update changes what the addon can do. Review it before installing.".into(),
         ));
     }
-    // in place, and NotFound if it was removed meanwhile (never added back)
+    // in place, and NotFound if it was removed meanwhile (never added back); a switch
+    // to another profile meanwhile makes it NotFound too
+    let _profile = state.profile_op.lock().await;
     install_into(
         &mut *state.addons.write().await,
         fresh.clone(),

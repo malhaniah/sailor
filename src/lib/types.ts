@@ -433,3 +433,25 @@ export interface DeepLinkStatus {
   enabled: boolean;
   registered: boolean;
 }
+
+// ---- local profiles (Rust commands/profiles.rs) ---------------------------------------
+
+export interface ProfileView {
+  id: string;
+  name: string;
+  /** a colour id (Rust `profiles::COLORS`) */
+  color: string;
+  /** a data: URL */
+  avatar: string | null;
+  isPrimary: boolean;
+  /** it has a PIN */
+  locked: boolean;
+  active: boolean;
+}
+
+export interface ProfilesState {
+  activeId: string;
+  /** the active profile's PIN was entered in this run (or it has none) */
+  unlocked: boolean;
+  profiles: ProfileView[];
+}

@@ -337,6 +337,13 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   total, hasMore, sourcesOk, sourcesFailed, fetchedAt }` · `marketplace_categories()` ·
   `marketplace_detail { key }` → `{ entry, documentation? }` (plain text) ·
   `marketplace_refresh()`
+- Profiles: `profile_list()` → `{ activeId, unlocked, profiles: [{ id, name, color,
+  avatar (data: URL), isPrimary, locked, active }] }` (never the PIN hash) ·
+  `profile_create { name, color }` · `profile_update { id, name?, color?, pin? }` ·
+  `profile_set_pin { id, currentPin?, newPin? }` · `profile_set_avatar { id, dataUrl?,
+  pin? }` · `profile_select { id, pin? }` (`locked` for a wrong or missing PIN,
+  `conflict` while playing) · `profile_delete { id, pin? }`; each returns the new state
+  and emits `profiles://changed`
 - Deep links: `deeplink_take_pending()` → the `stremio://` link that started the app,
   once · `deeplink_stremio_status()` → `{ supported, enabled, registered }` ·
   `deeplink_set_stremio { enabled }` (registers or unregisters with the OS, then stores
@@ -441,11 +448,40 @@ All durable state is Rust-owned JSON under the app data dir; there is no localSt
 unparseable one is moved to `*.json.corrupt.bak` and replaced by defaults; any other IO
 error fails startup; writes are atomic and durable (`*.json.tmp`, flushed to disk, then
 renamed over the target). `AppState` keeps
-`settings.json` and `addons.json`. Every later feature owns a `JsonStore<T>` (load / get /
-update-and-persist under its own lock), registered with `app.manage` — it does not grow
-`AppState`. New files carry a `{"version": N, ...}` envelope. Per-user files take their
-path from `AppState::profile_dir()` (the data dir until profiles exist, then the active
-profile's folder); re-creatable caches go under the cache dir. The first such store is
+`settings.json` (device), `profiles.json` and the active profile's `addons.json`. Every
+later feature owns a `JsonStore<T>` (load / get / update-and-persist under its own lock),
+registered with `app.manage` — it does not grow `AppState`. New files carry a
+`{"version": N, ...}` envelope. Per-user files take their path from
+`AppState::profile_dir()`, the active profile's folder; re-creatable caches go under the
+cache dir.
+
+### Local profiles
+
+`profiles.json` (`{ version, activeId, profiles: [{ id, name, color, avatar, isPrimary,
+pinHash, createdAt }] }`) lists the profiles; each has a folder `profiles/<id>/` with its
+`addons.json`, `library.json`, `player-prefs.json`, `prefs.json` (its per-profile settings
+keys) and avatar picture. The first run of a build with profiles creates the primary
+profile and **copies** (never moves) the per-user files and the profile keys of
+`settings.json` into its folder, so an older build still finds them; a damaged
+`profiles.json` adopts the folders on disk instead of starting over. `settings_get`
+keeps its payload: device settings merged with the active profile's keys, and every
+settings write also writes the active profile's `prefs.json`. A switch
+(`profile_select`) is refused while a player runs; it reads the new folder first, then
+swaps the addons, settings, library and per-title choices in place
+(`JsonStore::switch_to`), and the UI remounts its shell keyed by the active profile. A
+PIN (4–8 digits) is an Argon2id hash checked in Rust, with a growing wait after three
+wrong tries; it guards switching to, editing and deleting a profile (only the active
+profile counts as unlocked: switching away locks the one left), is set or changed only
+on the active profile, and is a convenience lock only: the files are not encrypted.
+While the active profile is locked at launch, the UI mounts nothing but "Who's
+watching?". A forgotten PIN is removed by deleting that profile's `pinHash` from
+`profiles.json` while Zeiler is closed. A damaged `profiles.json` adopts the profile
+folders without their PINs and makes the first one the main profile. A switch first
+moves the stores that read a file (library, player choices) and puts them back if the
+rest fails; addon writes and switches are serialized; the first-run copy fills a
+temporary folder and renames it into place. The primary and the active profile can't
+be deleted. Avatars are PNG, JPEG, WebP or GIF (checked by their bytes), 512 KB at
+most, resized in the UI and returned as `data:` URLs. The first such store is
 the library, `library.json` (`{ version, uid, items }`, see "Library and progress").
 
 Built-in addons are a table in `src-tauri/src/builtin.rs` (transport URL, compiled-in
@@ -502,8 +538,9 @@ Reserved key map — names are fixed now; each key is added only when its featur
 A settings file from before `builtinKitsu` and `builtinOpensubtitles` existed takes them
 from `builtinCinemeta` (Kitsu is also off when `hideAnime` is on), so an update never
 switches on a third-party host for someone who had switched off the only built-in.
-Per-profile keys live in `settings.json` until local profiles exist, then move into the
-profile store. There is no `profile{}` group in Settings.
+Per-profile keys are kept per profile in `profiles/<id>/prefs.json` (see "Local
+profiles"); `settings.json` keeps the last active profile's copy for older builds. There
+is no `profile{}` group in Settings.
 
 ## Library and progress
 
@@ -675,8 +712,8 @@ the frame `browse` (the catalog browser, `src/views/Browse.tsx`) is in use since
 replaced `filter`; the root view `live` (Live TV: the addons' `tv` and `channel` catalogs,
 `src/views/Live.tsx`) since M9; the frame `addon-detail` (a marketplace listing, keyed by
 manifest id) since M10.
-Reserved Settings section ids: `account`, `playback` (`subtitles` is in use since M6:
-Settings → Subtitles & audio).
+Reserved Settings section id: `playback` (`subtitles` is in use since M6: Settings →
+Subtitles & audio; `account` since M11: Settings → Profiles & account).
 
 The Player is not a frame: it is the `#/player?h=<id>` hash route, drawn over the
 still-mounted shell (see "Playback entry point"). The frame stack is untouched while it

@@ -6,6 +6,7 @@ mod error;
 mod home_rows;
 mod library;
 mod persist;
+mod profiles;
 mod settings_groups;
 mod state;
 mod subtitles;
@@ -121,6 +122,14 @@ pub fn run() {
             deeplink::deeplink_take_pending,
             deeplink::deeplink_stremio_status,
             deeplink::deeplink_set_stremio,
+            // profiles
+            commands::profiles::profile_list,
+            commands::profiles::profile_create,
+            commands::profiles::profile_update,
+            commands::profiles::profile_set_pin,
+            commands::profiles::profile_set_avatar,
+            commands::profiles::profile_select,
+            commands::profiles::profile_delete,
             commands::content::catalog_load,
             commands::content::meta_get,
             commands::content::streams_get,
