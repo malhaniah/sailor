@@ -34,15 +34,16 @@ export function HomeView() {
   const [customizing, setCustomizing] = useState(false);
   const hideAnime = settings?.hideAnime ?? false;
   const showAdult = settings?.showAdult ?? false;
+  const hideLiveTv = settings?.hideLiveTv ?? false;
   const custom = settings?.homeRows ?? EMPTY_HOME_ROWS;
   // every row Home can show (movies and series, then anime unless hidden, then the rest)
   const all = useMemo(
     () =>
-      roomCatalogs(addons, "home", { hideAnime, showAdult }).map((ref) => ({
+      roomCatalogs(addons, "home", { hideAnime, showAdult, hideLiveTv }).map((ref) => ({
         ...ref,
         name: catalogTitle(ref),
       })),
-    [addons, hideAnime, showAdult],
+    [addons, hideAnime, showAdult, hideLiveTv],
   );
   const catalogs = useMemo(() => applyHomeRowCustomization(all, custom), [all, custom]);
   const { rows, loadMore, request, version } = useCatalogRows(catalogs);
@@ -60,12 +61,24 @@ export function HomeView() {
   }
 
   if (all.length === 0) {
+    // only channel catalogs: they are in their own room
+    const hasLive =
+      !hideLiveTv && roomCatalogs(addons, "live", { hideAnime, showAdult, hideLiveTv }).length > 0;
     return (
       <main className="flex-1 overflow-y-auto px-12 pt-32">
         <EmptyState title="Welcome aboard">
           Zeiler ships with no content. Install an addon that provides catalogs and this page
           becomes your harbor.
-          <div className="mt-5">
+          {hasLive && " Your addons' channels are in the Live TV room."}
+          <div className="mt-5 flex justify-center gap-3">
+            {hasLive && (
+              <button
+                onClick={() => setView("live")}
+                className="h-11 rounded-full border border-edge px-6 text-[14px] font-semibold text-ink-muted transition-colors hover:border-ink hover:text-ink"
+              >
+                Open Live TV
+              </button>
+            )}
             <button
               onClick={() => setView("addons")}
               className="h-11 rounded-full bg-ink px-6 text-[14px] font-semibold text-canvas transition-transform hover:scale-[1.03]"

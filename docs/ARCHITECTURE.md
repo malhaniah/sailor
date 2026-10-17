@@ -585,8 +585,9 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
 The frontend navigates with a frame stack (`src/lib/view.tsx`). Every switch over
 `RootView` or `Frame` kinds ends in `unreachable(x)`, so a new kind that is not handled
 everywhere fails `tsc`. Reserved now, unreachable from the UI until their milestones:
-root view `live` and the frame `addon-detail` (marketplace). The frame `browse` (the
-catalog browser, `src/views/Browse.tsx`) is in use since M8 and replaced `filter`.
+the frame `addon-detail` (marketplace). The frame `browse` (the catalog browser,
+`src/views/Browse.tsx`) is in use since M8 and replaced `filter`; the root view `live`
+(Live TV: the addons' `tv` and `channel` catalogs, `src/views/Live.tsx`) since M9.
 Reserved Settings section ids: `account`, `playback` (`subtitles` is in use since M6:
 Settings → Subtitles & audio).
 

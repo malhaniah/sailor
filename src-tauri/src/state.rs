@@ -46,7 +46,7 @@ pub struct Settings {
     pub instant_play: bool,
     /// Hide the Anime room from navigation.
     pub hide_anime: bool,
-    /// Hide the (placeholder) Live TV entry from navigation.
+    /// Hide the Live TV room from navigation (its catalogs then go to Home and Shows).
     pub hide_live_tv: bool,
     /// Show adult catalogs, genres and titles (an addon flagged adult, and whatever
     /// `zeiler_addon::is_adult_text` matches). Off by default; turning it on asks the

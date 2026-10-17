@@ -603,7 +603,7 @@ function ContentSection() {
         />
         <ToggleRow
           label="Hide Live TV"
-          sub="Removes the (not-yet-functional) Live TV entry."
+          sub="Removes the Live TV room from the sidebar; its TV and channel catalogs then show on Home and Discover, and TV catalogs under Shows."
           on={settings.hideLiveTv}
           onChange={(on) => void save({ hideLiveTv: on })}
         />

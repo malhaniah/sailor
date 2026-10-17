@@ -17,9 +17,10 @@ export function DiscoverView() {
   const { openMeta, openBrowse, setView } = useView();
   const hideAnime = settings?.hideAnime ?? false;
   const showAdult = settings?.showAdult ?? false;
+  const hideLiveTv = settings?.hideLiveTv ?? false;
   const catalogs = useMemo(
-    () => roomCatalogs(addons, "home", { hideAnime, showAdult }),
-    [addons, hideAnime, showAdult],
+    () => roomCatalogs(addons, "home", { hideAnime, showAdult, hideLiveTv }),
+    [addons, hideAnime, showAdult, hideLiveTv],
   );
   const { rows, loadMore, request, version } = useCatalogRows(catalogs);
 
