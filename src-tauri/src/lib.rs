@@ -59,6 +59,7 @@ pub fn run() {
                 // the webview its commands
                 app.handle().plugin(tauri_plugin_dialog::init())?;
             }
+            commands::mpv::fix_fullscreen_client_area(app.handle());
 
             let data_dir = app.path().app_data_dir()?;
             let cache_dir = app.path().app_cache_dir()?;

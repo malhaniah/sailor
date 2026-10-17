@@ -159,6 +159,29 @@ pub(super) fn after_start(app: &AppHandle, surface: &Surface) {
     });
 }
 
+/// Make fullscreen fill the screen when it starts from a maximized window.
+///
+/// tao 0.37.1 trims a maximized window without OS decorations (Zeiler's) to the
+/// monitor's work area, also while it is fullscreen, and a window made fullscreen from
+/// maximized stays maximized underneath. The window then covers the whole monitor but
+/// its client area, the webview and so the video stop short by the taskbar's height,
+/// with mpv's letterbox bars beside the video. tao fixed this upstream
+/// (tauri-apps/tao#1353, after 0.37.1); this subclass does the same for the main window
+/// and goes away with a tao that has it. Called once at setup.
+pub(super) fn fix_fullscreen_client_area(app: &AppHandle) {
+    let (window, parent) = match main_window_handle(app) {
+        Ok(found) => found,
+        Err(e) => {
+            warn!("cannot subclass the main window: {e}");
+            return;
+        }
+    };
+    // a window can only be subclassed from the thread that owns it
+    if let Err(e) = window.run_on_main_thread(move || win32::subclass_main_window(parent)) {
+        warn!("cannot subclass the main window: {e}");
+    }
+}
+
 /// No embedded session is left: forget the window and the geometry, and give the
 /// webview its opaque default background back.
 pub(super) fn on_stop(app: &AppHandle, surface: &Surface) {
@@ -222,11 +245,13 @@ mod win32 {
         RDW_ALLCHILDREN, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
     };
     use ::windows::Win32::System::LibraryLoader::LoadLibraryW;
-    use ::windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+    use ::windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
     use ::windows::Win32::UI::WindowsAndMessaging::{
-        EnumChildWindows, GWL_EXSTYLE, GetClassNameW, GetClientRect, GetForegroundWindow,
-        GetWindowLongW, HTTRANSPARENT, HWND_BOTTOM, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-        SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowLongW, SetWindowPos, WM_NCHITTEST, WS_EX_TRANSPARENT,
+        EnumChildWindows, GWL_EXSTYLE, GWL_STYLE, GetClassNameW, GetClientRect,
+        GetForegroundWindow, GetWindowLongW, HTTRANSPARENT, HWND_BOTTOM, SWP_FRAMECHANGED,
+        SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+        SetWindowLongW, SetWindowPos, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST, WS_CAPTION,
+        WS_EX_TRANSPARENT,
     };
     use ::windows::core::{BOOL, HSTRING};
     use tracing::{debug, warn};
@@ -325,6 +350,58 @@ mod win32 {
     }
 
     const SUBCLASS_ID: usize = 0x5A1_10B; // arbitrary, stable
+    const MAIN_SUBCLASS_ID: usize = 0x5A1_10C; // arbitrary, stable
+
+    /// Subclass the main window so that a fullscreen window's client area is the whole
+    /// window (see [`super::fix_fullscreen_client_area`]). On the window's own thread.
+    pub fn subclass_main_window(parent: isize) {
+        let hwnd = HWND(parent as *mut _);
+        if !unsafe { SetWindowSubclass(hwnd, Some(main_subclass_proc), MAIN_SUBCLASS_ID, 0) }
+            .as_bool()
+        {
+            warn!("cannot subclass the main window: fullscreen from maximized may stop short");
+            return;
+        }
+        // recalculate the frame once, in case the window is fullscreen already
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+    }
+
+    /// tao takes WS_CAPTION away from the window only while it is fullscreen; then the
+    /// client area is the whole proposed window rect (returning 0 leaves `rgrc[0]`).
+    /// Everything else, and every message but NCCALCSIZE, goes on to tao. Assumes the
+    /// undecorated window Zeiler has (a menu bar would need its height taken off). One
+    /// gap: tao skips writing the style while the window is minimized, so a fullscreen
+    /// change made then is seen here only at tao's next style write.
+    unsafe extern "system" fn main_subclass_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> LRESULT {
+        if msg == WM_NCCALCSIZE && wparam.0 != 0 {
+            let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
+            if (style & WS_CAPTION.0) == 0 {
+                return LRESULT(0);
+            }
+        }
+        if msg == WM_NCDESTROY {
+            let _ =
+                unsafe { RemoveWindowSubclass(hwnd, Some(main_subclass_proc), MAIN_SUBCLASS_ID) };
+        }
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
 
     /// The mpv child must never eat mouse input meant for the UI above it.
     unsafe extern "system" fn subclass_proc(
