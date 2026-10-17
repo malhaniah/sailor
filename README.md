@@ -69,9 +69,9 @@ removes Sailor. On macOS the updated app keeps its old name in Applications: ren
 ## Privacy
 
 Zeiler has no telemetry and no account of its own. Signed out, it talks only to the
-addons you install (and the built-ins you leave on), to GitHub for updates, to AniSkip and
-TheIntroDB for skip times unless you turn that off, and to the addon directories once you
-turn the directory on. If you sign a profile in to a
+addons you install (and the built-ins you leave on), to GitHub for updates, to AniSkip,
+Kitsu and TheIntroDB for skip times unless you turn that off, to the addon directories
+once you turn the directory on, and to any IPTV provider you add yourself. If you sign a profile in to a
 Stremio account, Zeiler sends Stremio's servers (api.strem.io, link.stremio.com) your
 sign-in (a code you confirm in the browser, or your email and password), your library
 items (titles, progress, watched marks) and, if you turn on addon sync, your addons'

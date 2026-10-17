@@ -7352,7 +7352,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -7395,7 +7395,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler-account"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -7408,7 +7408,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler-addon"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chardetng",
  "chrono",
@@ -7428,7 +7428,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler-engine"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "librqbit",
@@ -7445,7 +7445,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler-iptv"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -7461,7 +7461,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler-player"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "libc",
  "libmpv2",
@@ -7475,7 +7475,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler-skip"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "reqwest 0.12.28",
  "serde",
@@ -7488,7 +7488,7 @@ dependencies = [
 
 [[package]]
 name = "zeiler-sync"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "reqwest 0.12.28",
