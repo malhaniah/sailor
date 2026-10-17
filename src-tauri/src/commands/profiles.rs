@@ -16,6 +16,7 @@ use crate::commands::addons::UpdateCache;
 use crate::commands::mpv::PlayerState;
 use crate::commands::settings::SETTINGS_CHANGED;
 use crate::error::IpcError;
+use crate::iptv::IptvState;
 use crate::library::LibraryState;
 use crate::profiles::{self, Profile, ProfileView};
 use crate::state::AppState;
@@ -258,6 +259,7 @@ pub async fn profile_select(
     player: State<'_, PlayerState>,
     updates: State<'_, UpdateCache>,
     account: State<'_, AccountState>,
+    iptv: State<'_, IptvState>,
     id: String,
     pin: Option<String>,
 ) -> Result<ProfilesState, IpcError> {
@@ -305,6 +307,12 @@ pub async fn profile_select(
         let _ = prefs.switch_to(&old).await;
         return Err(storage(e));
     }
+    if let Err(e) = iptv.switch_to(&new).await {
+        let _ = library.switch_to(&old).await;
+        let _ = prefs.switch_to(&old).await;
+        let _ = account.switch_to(&old).await;
+        return Err(storage(e));
+    }
     if let Err(e) = state
         .switch_profile(&id, |after| {
             let _ = app.emit(SETTINGS_CHANGED, after);
@@ -314,6 +322,7 @@ pub async fn profile_select(
         let _ = library.switch_to(&old).await;
         let _ = prefs.switch_to(&old).await;
         let _ = account.switch_to(&old).await;
+        let _ = iptv.switch_to(&old).await;
         return Err(e);
     }
     unlock(&state);
@@ -330,6 +339,7 @@ pub async fn profile_delete(
     app: AppHandle,
     state: State<'_, AppState>,
     account: State<'_, AccountState>,
+    iptv: State<'_, IptvState>,
     id: String,
     pin: Option<String>,
 ) -> Result<ProfilesState, IpcError> {
@@ -349,8 +359,10 @@ pub async fn profile_delete(
     authorize(&state, profile, pin.as_deref())?;
     next.profiles.retain(|p| p.id != id);
     state.save_profiles(next).await?;
-    // its Stremio session goes too (the keychain entry would outlive the profile)
+    // its Stremio session and IPTV accounts go too (keychain entries would outlive it)
     account.sessions.forget(&id);
+    iptv.delete_secrets_of(&profiles::profile_dir(state.data_dir(), &id))
+        .await;
     // the profile is gone from profiles.json first: a folder left behind by a failed
     // removal is only disk space, never a half-deleted profile
     if let Err(e) = tokio::fs::remove_dir_all(profiles::profile_dir(state.data_dir(), &id)).await {

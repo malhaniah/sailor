@@ -43,6 +43,7 @@ import { playerSetGeometry, playerStop, settingsGet } from "../../lib/player-ipc
 import type { SkipSettings } from "../../lib/types";
 import { ExternalRemote } from "./ExternalRemote";
 import { launchForRoute, launchIdForRoute, releaseRoute } from "./launch";
+import { LiveContext } from "./live";
 import { createPlaybackClock } from "./playback-clock";
 import { PlayerChrome } from "./PlayerChrome";
 import { SkipLayer } from "./SkipLayer";
@@ -67,7 +68,11 @@ export function PlayerPage({ hash }: { hash: string }) {
     void playerStop("embedded").catch(() => undefined);
   }, [launch]);
   if (!launch) return <NothingToPlay onBack={leavePlayer} />;
-  return <PlayerSession launch={launch} launchId={launchIdForRoute(hash)} />;
+  return (
+    <LiveContext.Provider value={launch.live}>
+      <PlayerSession launch={launch} launchId={launchIdForRoute(hash)} />
+    </LiveContext.Provider>
+  );
 }
 
 /** The skip and next-episode settings the player reads once per page. */

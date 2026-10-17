@@ -354,6 +354,9 @@ pub fn build_mpv_args(request: &PlaybackRequest) -> Vec<String> {
         "--force-window=immediate".to_string(),
         "--keep-open=yes".to_string(),
         "--playlist=-".to_string(),
+        // mpv would print the stream URL (which can carry an account) on the stdout
+        // Zeiler shares with it
+        "--really-quiet".to_string(),
     ];
     if let Some(title) = &request.title {
         args.push(format!("--title={title}"));
@@ -376,16 +379,25 @@ pub fn build_mpv_args(request: &PlaybackRequest) -> Vec<String> {
     args
 }
 
-/// Strip userinfo from a URL for logging (`http://user:pass@host/…` → `http://***@host/…`).
+/// A URL as it may be logged: scheme and host only (`http://user:pass@host/a?b` →
+/// `http://host/…`). Accounts hide in paths and queries too — Xtream streams are
+/// `/live/<user>/<pass>/<id>.m3u8`, debrid links carry tokens — so only the host stays.
 pub fn redact_url(url: &str) -> String {
-    if let Some(scheme_end) = url.find("://") {
-        let rest = &url[scheme_end + 3..];
-        let authority_end = rest.find('/').unwrap_or(rest.len());
-        if let Some(at) = rest[..authority_end].rfind('@') {
-            return format!("{}***{}", &url[..scheme_end + 3], &rest[at..]);
-        }
-    }
-    url.to_string()
+    let Some(scheme_end) = url.find("://") else {
+        return url.to_string();
+    };
+    let rest = &url[scheme_end + 3..];
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let host = authority
+        .rfind('@')
+        .map_or(authority, |at| &authority[at + 1..]);
+    let more = if authority_end < rest.len() {
+        "/…"
+    } else {
+        ""
+    };
+    format!("{}{host}{more}", &url[..scheme_end + 3])
 }
 
 /// Locate an mpv binary: an explicit configured path first, then `mpv(.exe)` on PATH.
@@ -662,9 +674,15 @@ mod tests {
     fn redacts_userinfo() {
         assert_eq!(
             redact_url("http://u:p@127.0.0.1:1/x/y?z=1"),
-            "http://***@127.0.0.1:1/x/y?z=1"
+            "http://127.0.0.1:1/…"
         );
-        assert_eq!(redact_url("https://host/a@b"), "https://host/a@b");
+        assert_eq!(redact_url("https://host/a@b"), "https://host/…");
+        assert_eq!(
+            redact_url("http://tv.example:8080/live/me/s3cret/42.m3u8"),
+            "http://tv.example:8080/…"
+        );
+        assert_eq!(redact_url("https://host?token=x"), "https://host/…");
+        assert_eq!(redact_url("https://host"), "https://host");
         assert_eq!(redact_url("not a url"), "not a url");
     }
 

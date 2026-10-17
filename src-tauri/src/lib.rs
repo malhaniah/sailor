@@ -5,9 +5,11 @@ mod commands;
 mod deeplink;
 mod error;
 mod home_rows;
+mod iptv;
 mod library;
 mod persist;
 mod profiles;
+mod secrets;
 mod settings_groups;
 mod state;
 mod subtitles;
@@ -83,6 +85,7 @@ pub fn run() {
             let prefs = tauri::async_runtime::block_on(subtitles::prefs::PlayerPrefs::load(
                 &state.profile_dir(),
             ))?;
+            let profile_dir = state.profile_dir();
             app.manage(subtitles::SubtitleStore::new(&cache_dir));
             app.manage(zeiler_addon::VideoHasher::new()?);
             app.manage(commands::marketplace::MarketState::new(&cache_dir));
@@ -110,6 +113,15 @@ pub fn run() {
                 true,
             ));
             commands::account::start_background_sync(app.handle().clone());
+            // IPTV accounts: the keychain store M12's sessions use, with IPTV's own
+            // memory fallback (secrets.rs)
+            let secrets = std::sync::Arc::new(secrets::Secrets::new(std::sync::Arc::new(
+                account::secrets::KeyringStore,
+            )));
+            app.manage(tauri::async_runtime::block_on(iptv::IptvState::load(
+                &profile_dir,
+                secrets,
+            ))?);
             updater::start(app.handle().clone());
             info!("zeiler started");
             Ok(())
@@ -158,6 +170,14 @@ pub fn run() {
             commands::content::meta_get,
             commands::content::streams_get,
             commands::content::subtitles_get,
+            // live TV: the user's IPTV sources
+            commands::iptv::iptv_sources,
+            commands::iptv::iptv_source_add,
+            commands::iptv::iptv_source_remove,
+            commands::iptv::iptv_channels,
+            commands::iptv::iptv_epg,
+            commands::iptv::iptv_favorite_set,
+            commands::iptv::iptv_resolve,
             commands::engine::engine_resolve,
             commands::engine::engine_stats,
             commands::engine::engine_remove,

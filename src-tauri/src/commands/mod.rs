@@ -2,6 +2,7 @@ pub mod account;
 pub mod addons;
 pub mod content;
 pub mod engine;
+pub mod iptv;
 pub mod library;
 pub mod marketplace;
 pub mod mpv;
