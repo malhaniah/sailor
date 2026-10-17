@@ -1,22 +1,27 @@
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, LayoutGrid } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { PickCard } from "../components/cards";
+import { CatalogRows } from "../components/CatalogRows";
 import { GenreTiles } from "../components/GenreTiles";
 import { Poster, fallbackGradient } from "../components/Poster";
-import { Row } from "../components/Row";
 import { EmptyState } from "../components/ui";
-import { browsableCatalogs, catalogDisplayName } from "../lib/catalogs";
-import { dedupRows, useCatalogRows } from "../lib/rows";
-import { useAddons } from "../lib/store";
+import { catalogTypes, looksAnime, typeLabel } from "../lib/catalogs";
+import { roomCatalogs } from "../lib/rooms";
+import { type RowState, leadRow, useCatalogRows } from "../lib/rows";
+import { useAddons, useSettings } from "../lib/store";
 import { useView } from "../lib/view";
 import type { MetaPreview } from "../lib/types";
-import { RowSkeletons } from "./Home";
 
 export function DiscoverView() {
   const { addons } = useAddons();
-  const { openMeta, openFilter, setView } = useView();
-  const catalogs = useMemo(() => browsableCatalogs(addons), [addons]);
-  const { rows, loadMore } = useCatalogRows(catalogs);
+  const { settings } = useSettings();
+  const { openMeta, openBrowse, setView } = useView();
+  const hideAnime = settings?.hideAnime ?? false;
+  const showAdult = settings?.showAdult ?? false;
+  const catalogs = useMemo(
+    () => roomCatalogs(addons, "home", { hideAnime, showAdult }),
+    [addons, hideAnime, showAdult],
+  );
+  const { rows, loadMore, request, version } = useCatalogRows(catalogs);
 
   if (catalogs.length === 0) {
     return (
@@ -36,56 +41,49 @@ export function DiscoverView() {
     );
   }
 
-  const first = rows.get(catalogs[0]?.key ?? "");
+  // an anime catalog filed under series, found out once it loaded
+  const keep = hideAnime ? (state: RowState) => !looksAnime(state.items.map((m) => m.id)) : undefined;
+  const lead = leadRow(catalogs, rows, keep) ?? catalogs[0];
+  const first = rows.get(lead.key);
   const featured = (first?.items ?? []).filter((m) => m.background || m.poster).slice(0, 8);
   const reserved = new Set(featured.map((m) => m.id));
-  const ordered = catalogs
-    .map((c) => ({ key: c.key, state: rows.get(c.key) }))
-    .filter((r): r is { key: string; state: NonNullable<typeof r.state> } => !!r.state);
-  const deduped = dedupRows(ordered, reserved);
-  const genreType = catalogs.find((c) => c.catalog.type === "movie")?.catalog.type ?? catalogs[0].catalog.type;
+  const types = catalogTypes(catalogs);
+  const rowProps = {
+    rows,
+    request,
+    loadMore,
+    version,
+    reserved,
+    keep,
+    onOpen: openMeta,
+    kicker: (ref: (typeof catalogs)[number]) =>
+      `${ref.addon.manifest.name} · ${typeLabel(ref.catalog.type)}`,
+  };
 
   return (
     <main className="flex-1 overflow-y-auto px-12 pb-20 pt-20">
       <div className="flex flex-col gap-14">
         <FeaturedBanner items={featured} onOpen={(m) => openMeta(m)} />
-        {deduped.length === 0 && <RowSkeletons count={3} />}
-        {deduped.slice(0, 1).map(({ key, state, items }) => (
-          <DiscoverRail key={key} rowKey={key} state={state} items={items} loadMore={loadMore} openMeta={openMeta} />
+        <CatalogRows refs={[lead]} {...rowProps} />
+        {types.map((type) => (
+          <GenreTiles key={type} type={type} />
         ))}
-        <GenreTiles onPick={(genre) => openFilter(genreType, genre)} />
-        {deduped.slice(1).map(({ key, state, items }) => (
-          <DiscoverRail key={key} rowKey={key} state={state} items={items} loadMore={loadMore} openMeta={openMeta} />
-        ))}
+        <div className="flex justify-center">
+          <button
+            onClick={() => openBrowse({ type: types[0], extra: [] })}
+            className="flex h-10 items-center gap-2 rounded-full border border-edge-soft px-5 text-[13px] font-medium text-ink-muted transition-colors hover:border-ink hover:text-ink"
+          >
+            <LayoutGrid size={15} />
+            Browse everything
+          </button>
+        </div>
+        <CatalogRows
+          refs={catalogs.filter((c) => c !== lead)}
+          {...rowProps}
+          reserved={new Set([...reserved, ...(first?.items ?? []).slice(0, 20).map((m) => m.id)])}
+        />
       </div>
     </main>
-  );
-}
-
-function DiscoverRail({
-  rowKey,
-  state,
-  items,
-  loadMore,
-  openMeta,
-}: {
-  rowKey: string;
-  state: { ref: { addon: { manifest: { name: string } }; catalog: { type: string; id: string; name?: string | null } } };
-  items: MetaPreview[];
-  loadMore: (key: string) => void;
-  openMeta: (preview: MetaPreview) => void;
-}) {
-  return (
-    <Row
-      title={catalogDisplayName(state.ref.catalog as never)}
-      kicker={`${state.ref.addon.manifest.name} · ${state.ref.catalog.type}`}
-      min={148}
-      onEndReached={() => loadMore(rowKey)}
-    >
-      {items.map((meta, i) => (
-        <PickCard key={`${meta.id}-${i}`} meta={meta} onClick={() => openMeta(meta)} />
-      ))}
-    </Row>
   );
 }
 

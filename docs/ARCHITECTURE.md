@@ -243,8 +243,13 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
 
 - Addons: `addon_preview { url }` → Descriptor (fetch + parse, not persisted — feeds the
   confirm dialog) · `addon_add { url }` → Descriptor · `addon_remove { transportUrl }` ·
-  `addon_list()` → Descriptor[] (built-ins first, then the user's addons)
-- Content: `catalog_load { args: { transportUrl, type, id, extra } }` → `{ metas }` ·
+  `addon_list()` → Descriptor[] (built-ins first, then the user's addons; while
+  `showAdult` is off, without adult genre options or adult-named catalogs)
+- Content: `catalog_load { args: { transportUrl, type, id, extra, force? } }` →
+  `{ metas }` (only from an addon in effect, for a catalog and extras it declares; while
+  `showAdult` is off, never an addon flagged adult, an adult option or an adult-named
+  catalog, and titles with adult genres are dropped; pages cached in memory for 15 min,
+  256 at most, `force` skips the cache) ·
   `meta_get { type, id }` → `{ meta, asked, errors }` (first successful Meta across
   supporting addons; an anime id — `kitsu:`, `mal:`, `anilist:`, `anidb:` — that finds
   none under its type is retried as series, movie and anime, never re-asking an addon that
@@ -385,7 +390,7 @@ Reserved key map — names are fixed now; each key is added only when its featur
 | Scope | Keys (existing **bold**) |
 | --- | --- |
 | Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
-| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, `showAdult` (the single adult flag and age gate, also used by the marketplace), `hideP2pAddons`, `homeRows`, **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages; later normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
+| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, **`showAdult`** (the single adult flag and age gate, also used by the marketplace; matched by `zeiler_addon::is_adult_text`), `hideP2pAddons`, **`homeRows`** (`{order, hidden, renamed: [{key, name}]}`, keyed without transport URLs), **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages; later normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
 | Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, **`builtinKitsu`**, **`builtinOpensubtitles`** |
 
 A settings file from before `builtinKitsu` and `builtinOpensubtitles` existed takes them
@@ -580,7 +585,8 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
 The frontend navigates with a frame stack (`src/lib/view.tsx`). Every switch over
 `RootView` or `Frame` kinds ends in `unreachable(x)`, so a new kind that is not handled
 everywhere fails `tsc`. Reserved now, unreachable from the UI until their milestones:
-root view `live`; frames `browse` (catalog browser) and `addon-detail` (marketplace).
+root view `live` and the frame `addon-detail` (marketplace). The frame `browse` (the
+catalog browser, `src/views/Browse.tsx`) is in use since M8 and replaced `filter`.
 Reserved Settings section ids: `account`, `playback` (`subtitles` is in use since M6:
 Settings → Subtitles & audio).
 

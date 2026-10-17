@@ -10,6 +10,7 @@ use zeiler_engine::{Engine, EngineConfig};
 use zeiler_player::{Player, PlayerBackend};
 
 use crate::error::IpcError;
+use crate::home_rows::HomeRows;
 use crate::persist::{read_json, write_json};
 use crate::settings_groups::{
     AudioSettings, KeyError, SettingsObject, SubtitleSettings, survives, with_key,
@@ -47,6 +48,12 @@ pub struct Settings {
     pub hide_anime: bool,
     /// Hide the (placeholder) Live TV entry from navigation.
     pub hide_live_tv: bool,
+    /// Show adult catalogs, genres and titles (an addon flagged adult, and whatever
+    /// `zeiler_addon::is_adult_text` matches). Off by default; turning it on asks the
+    /// user to confirm their age.
+    pub show_adult: bool,
+    /// Home's catalog rows as the user arranged them (`home_rows.rs`).
+    pub home_rows: HomeRows,
     /// Use the built-in Cinemeta metadata addon (catalogs, details, episode lists).
     /// Metadata only — it serves no streams.
     pub builtin_cinemeta: bool,
@@ -83,6 +90,8 @@ impl Default for Settings {
             instant_play: false,
             hide_anime: false,
             hide_live_tv: false,
+            show_adult: false,
+            home_rows: HomeRows::default(),
             builtin_cinemeta: true,
             builtin_kitsu: true,
             builtin_opensubtitles: true,

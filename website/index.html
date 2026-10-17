@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <!--csp-->
+    <title>Zeiler — a free, open-source desktop client for Stremio addons</title>
+    <meta name="description" content="Zeiler is a free, open-source desktop client for the Stremio addon ecosystem, built in Rust, for Windows, macOS and Linux. It hosts, indexes and ships no media: you add your own addons.">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#0f1b2d">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+    <link rel="canonical" href="https://zeiler.io/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Zeiler">
+    <meta property="og:title" content="Zeiler — a free, open-source desktop client for Stremio addons">
+    <meta property="og:description" content="Built in Rust for Windows, macOS and Linux. Zeiler hosts no media: you bring your own addons.">
+    <meta property="og:url" content="https://zeiler.io/">
+    <meta property="og:image" content="https://zeiler.io/og.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <script type="module" src="/src/home.ts"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="./" aria-label="Zeiler home">
+          <img src="/favicon.svg" alt="" width="32" height="32">
+          <span>Zeiler</span>
+        </a>
+        <nav aria-label="Main">
+          <ul class="nav">
+            <li><a href="#tour">Tour</a></li>
+            <li><a href="download/">Download</a></li>
+            <li><a href="https://github.com/malhaniah/zeiler">GitHub</a></li>
+          </ul>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="wrap hero-inner">
+          <div class="hero-copy">
+            <p class="eyebrow">For Windows, macOS and Linux · open source</p>
+            <h1 id="hero-title">A free desktop client for the Stremio addon ecosystem.</h1>
+            <p class="lede">Browse catalogs, keep your place and watch on a real player, all from the addons you choose. Open source, built in Rust, and speaking the open Stremio addon protocol.</p>
+            <div class="cta" id="cta"><!--release:cta--></div>
+          </div>
+          <figure class="hero-shot window">
+            <img src="/tour/home.webp" width="2880" height="1800" alt="Zeiler’s Home screen: a featured title over abstract artwork, the sidebar, and a Continue Watching row of posters with progress bars and notes such as “S1 E3 · 29 min left”.">
+          </figure>
+        </div>
+      </section>
+
+      <section class="pledge" aria-labelledby="pledge-title">
+        <div class="wrap pledge-inner">
+          <h2 id="pledge-title" class="visually-hidden">What Zeiler is, and isn’t</h2>
+          <p class="pledge-quote">Zeiler hosts no media, indexes no media, and ships no content addon. You bring your own addons; Zeiler is just the boat.</p>
+          <p>Out of the box it only knows a few built-in <em>metadata and subtitle</em> addons — Cinemeta, Anime Kitsu and OpenSubtitles v3 — so there is something to browse. None of them serves streams, and each can be turned off.</p>
+        </div>
+      </section>
+
+      <section class="tour" id="tour" aria-labelledby="tour-title">
+        <div class="wrap">
+          <h2 id="tour-title" class="section-title">A quick tour</h2>
+          <p class="section-lede">Screens from Zeiler 0.2, with invented titles and placeholder artwork. What you see in yours depends on the addons you add.</p>
+
+          <article class="feature" aria-labelledby="f-player">
+            <div class="feature-copy">
+              <h3 id="f-player">A real player</h3>
+              <p>Everything plays on Zeiler’s own player screen: play and pause, seeking, volume, audio and subtitle tracks, and fullscreen, all from the keyboard too.</p>
+              <ul class="checks">
+                <li><strong>Windows:</strong> video plays right inside the Zeiler window. Nothing else to install.</li>
+                <li><strong>macOS and Linux:</strong> video plays in an <a href="https://mpv.io">mpv</a> window that Zeiler drives with the same controls. Built-in playback for macOS comes next.</li>
+                <li>A built-in torrent engine and mpv-based playback: no external streaming server, browser or Node runtime.</li>
+              </ul>
+            </div>
+            <figure class="window">
+              <img src="/tour/player.webp" width="2880" height="1800" loading="lazy" alt="The player mid-episode at 23:41 of 52:08, with a subtitle line, the seek bar, and play, volume, Audio, Subtitles, speed and fullscreen controls.">
+            </figure>
+          </article>
+
+          <article class="feature" aria-labelledby="f-library">
+            <div class="feature-copy">
+              <h3 id="f-library">Your library, and Continue Watching</h3>
+              <p>Zeiler remembers what you watch, and picks up where you stopped.</p>
+              <ul class="checks">
+                <li><strong>Continue Watching</strong> on Home and in My Library. Finish an episode and it moves on to the next one.</li>
+                <li><strong>My Library</strong> has three tabs: Library (with sorting), Continue Watching and History.</li>
+                <li><strong>Watched marks</strong> per episode, per season or for the whole title, and <strong>Resume from 12:34</strong> when you come back.</li>
+                <li>Progress is saved by Zeiler itself, in a format compatible with Stremio’s own library.</li>
+              </ul>
+            </div>
+            <figure class="window">
+              <img src="/tour/library.webp" width="2880" height="1800" loading="lazy" alt="My Library on its Library tab: filters for anime, movies and series, sort options, and a grid of saved titles with progress bars, dates added and a Watched badge.">
+            </figure>
+          </article>
+
+          <article class="feature" aria-labelledby="f-subs">
+            <div class="feature-copy">
+              <h3 id="f-subs">Subtitles and audio, your way</h3>
+              <ul class="checks">
+                <li>Subtitles from the video, from your subtitle addons and from OpenSubtitles, picked automatically in your preferred languages.</li>
+                <li>Load a subtitle file from your computer, or drop one on the window.</li>
+                <li>Adjust subtitle delay, size and style, and audio delay and speed. Zeiler remembers your choices per show.</li>
+                <li>Subtitles in older encodings are converted automatically, and you can pick another encoding if the text still looks wrong.</li>
+              </ul>
+            </div>
+            <figure class="window">
+              <img src="/tour/subtitles.webp" width="2880" height="1800" loading="lazy" alt="The player’s subtitle menu: language filters, tabs for In the video, Addons and Files, and tracks from the video, from OpenSubtitles v3 and from a loaded .srt file.">
+            </figure>
+          </article>
+
+          <article class="feature" aria-labelledby="f-addons">
+            <div class="feature-copy">
+              <h3 id="f-addons">Bring your own addons</h3>
+              <p>Paste any addon’s manifest URL on the Addons page. Zeiler ships no stream or content addon, and endorses none.</p>
+              <ul class="checks">
+                <li>The built-ins only ever provide metadata or subtitles, never streams: <strong>Cinemeta</strong> for catalogs, details and episode lists, <strong>Anime Kitsu</strong> for anime, and <strong>OpenSubtitles v3</strong> for subtitles.</li>
+                <li>Each built-in can be switched off in Settings → Content, which also says what each one sends where.</li>
+              </ul>
+            </div>
+            <figure class="window">
+              <img src="/tour/addons.webp" width="2880" height="1800" loading="lazy" alt="The Addons page: a field for an addon’s manifest URL, the built-in Cinemeta, Anime Kitsu and OpenSubtitles v3, and two user-added addons for local media, each with a Remove button.">
+            </figure>
+          </article>
+
+          <article class="feature" aria-labelledby="f-updates">
+            <div class="feature-copy">
+              <h3 id="f-updates">Keeps itself up to date</h3>
+              <p>Zeiler checks for new versions on its own and downloads them in the background. An update installs the next time you open Zeiler, never in the middle of a film, or right away if you ask. Every update is signed, and Zeiler checks the signature before it installs anything.</p>
+              <p>Zeiler is free software under the GPL-3.0. Its addon client, streaming engine and playback are Rust crates, with a thin TypeScript interface in a Tauri 2 shell. <a href="https://github.com/malhaniah/zeiler">Read the source on GitHub</a>.</p>
+            </div>
+            <figure class="window">
+              <img src="/tour/updates.webp" width="2880" height="1800" loading="lazy" alt="Settings, About: the Install updates automatically switch turned on, an update ready to install with a Restart and update now button, and a matching notice in the corner.">
+            </figure>
+          </article>
+        </div>
+      </section>
+
+      <section class="platforms" aria-labelledby="platforms-title">
+        <div class="wrap">
+          <h2 id="platforms-title" class="section-title">Playback on each system</h2>
+          <p class="section-lede">Where videos play is a setting: built in where Zeiler has it, or in your own mpv window.</p>
+          <ul class="platform-grid">
+            <li class="platform">
+              <h3>Windows 10 and 11</h3>
+              <p class="platform-status">Built in</p>
+              <p>Video plays inside the Zeiler window, with libmpv shipped alongside. If you prefer your own mpv window, that’s a setting.</p>
+            </li>
+            <li class="platform">
+              <h3>macOS 12 and later</h3>
+              <p class="platform-status">mpv window · built-in coming</p>
+              <p>Install <a href="https://mpv.io">mpv</a> (<code>brew install mpv</code>); Zeiler finds it and controls it from its own player screen.</p>
+            </li>
+            <li class="platform">
+              <h3>Linux</h3>
+              <p class="platform-status">mpv window</p>
+              <p>The <code>.deb</code> pulls in mpv for you. With the <code>.rpm</code> or the AppImage, install mpv from your distro.</p>
+            </li>
+          </ul>
+          <figure class="window platform-shot">
+            <img src="/tour/settings.webp" width="2880" height="1800" loading="lazy" alt="Settings, Player and quality: “Where videos play” set to Auto, which plays inside Zeiler and falls back to mpv, with Built-in and External mpv as the other choices.">
+          </figure>
+        </div>
+      </section>
+
+      <section class="faq" aria-labelledby="faq-title">
+        <div class="wrap narrow">
+          <h2 id="faq-title" class="section-title">Questions</h2>
+          <details>
+            <summary>Does Zeiler come with anything to watch?</summary>
+            <p>No. Zeiler hosts no media, indexes no media and ships no content addon. It is a client for the open Stremio addon protocol: what you can watch depends entirely on the addons you add.</p>
+          </details>
+          <details>
+            <summary>Why does Windows or macOS warn me when I open it?</summary>
+            <p>The builds aren’t code-signed or notarized yet. On Windows, if SmartScreen warns, choose <strong>More info → Run anyway</strong>. On macOS, right-click Zeiler → <strong>Open</strong> the first time, or allow it under System Settings → Privacy &amp; Security.</p>
+          </details>
+          <details>
+            <summary>Do I need mpv?</summary>
+            <p>On Windows, no: playback is built in. On macOS and Linux, yes, for now: Zeiler finds mpv in the usual places, or you can set its path in Settings.</p>
+          </details>
+          <details>
+            <summary>I used Sailor. What happens to it?</summary>
+            <p>Zeiler was called Sailor up to version 0.1.2. Sailor installs update to Zeiler on their own and keep your addons and settings. On macOS the updated app keeps the name <code>Sailor.app</code>: rename it to <code>Zeiler.app</code>, or replace it with the new download.</p>
+          </details>
+          <details>
+            <summary>Is Zeiler made by Stremio?</summary>
+            <p>No. Zeiler is an independent project and is not affiliated with or endorsed by Stremio (Smart Code Ltd). It speaks the same open addon protocol.</p>
+          </details>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <p><span data-release-line><!--release:line--></span> · <a href="download/">All downloads</a></p>
+        <p>Zeiler is free software under the <a href="https://github.com/malhaniah/zeiler/blob/main/LICENSE">GNU GPL v3.0</a>. <a href="https://github.com/malhaniah/zeiler">Source code</a> · <a href="https://github.com/malhaniah/zeiler/issues">Report a problem</a></p>
+        <p class="fine">Zeiler is an independent project and is not affiliated with or endorsed by Stremio (Smart Code Ltd). Screenshots use placeholder artwork.</p>
+      </div>
+    </footer>
+    <!--release:data-->
+  </body>
+</html>

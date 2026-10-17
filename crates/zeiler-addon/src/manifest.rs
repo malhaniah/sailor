@@ -190,6 +190,48 @@ impl ManifestCatalog {
     pub fn supports_extra(&self, name: &str) -> bool {
         self.extra_props().iter().any(|p| p.name == name)
     }
+
+    /// The extras that make this catalog loadable with no user input, as stremio-core's
+    /// Discover does: each required prop takes its first option. `None` when a required
+    /// prop has no options to pick from (`search`, `lastVideosIds`, …), so the catalog
+    /// can't be shown as a row; an empty list when nothing is required.
+    pub fn default_extra(&self) -> Option<Vec<ExtraValue>> {
+        self.extra_props()
+            .into_iter()
+            .filter(|p| p.is_required)
+            .map(|p| {
+                p.options.first().map(|first| ExtraValue {
+                    name: p.name.clone(),
+                    value: first.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Shown as a row (or in Browse) with [`default_extra`](Self::default_extra). Wider
+    /// than [`is_browsable`](Self::is_browsable): Cinemeta's "New" needs a year, which
+    /// its options supply.
+    pub fn is_boardable(&self) -> bool {
+        self.default_extra().is_some()
+    }
+
+    /// Keep only the extra options `keep` accepts (the legacy short form has none).
+    pub fn retain_options(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        if let ManifestExtra::Full { props } = &mut self.extra {
+            for prop in props {
+                prop.options.retain(|option| keep(option));
+            }
+        }
+    }
+
+    /// The props a filter UI offers: those with options to choose from, except the
+    /// paging and free-text ones.
+    pub fn filter_props(&self) -> Vec<ExtraProp> {
+        self.extra_props()
+            .into_iter()
+            .filter(|p| !p.options.is_empty() && p.name != "search" && p.name != "skip")
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -459,6 +501,54 @@ mod tests {
         assert!(m.types.is_empty());
         assert_eq!(m.resources.len(), 1);
         assert_eq!(m.catalogs.len(), 1);
+    }
+
+    #[test]
+    fn default_and_filter_extras_follow_the_bundled_cinemeta_and_kitsu_snapshots() {
+        let catalog = |json: &str, r#type: &str, id: &str| -> ManifestCatalog {
+            parse(json)
+                .catalogs
+                .into_iter()
+                .find(|c| c.r#type == r#type && c.id == id)
+                .unwrap_or_else(|| panic!("no {type}/{id}"))
+        };
+        let cinemeta = include_str!("../../../src-tauri/builtin/cinemeta-manifest.json");
+        let kitsu = include_str!("../../../src-tauri/builtin/kitsu-manifest.json");
+
+        // "New" needs a year: its first option, so it can be a row
+        let year = catalog(cinemeta, "movie", "year");
+        assert!(!year.is_browsable());
+        assert!(year.is_boardable());
+        let default = year.default_extra().unwrap();
+        assert_eq!(default.len(), 1);
+        assert_eq!(default[0].name, "genre");
+        assert!(default[0].value.chars().all(|c| c.is_ascii_digit()));
+        assert!(year.is_extra_supported(&default));
+
+        // nothing required: loadable as is
+        let top = catalog(cinemeta, "movie", "top");
+        assert_eq!(top.default_extra(), Some(Vec::new()));
+        let names: Vec<_> = top.filter_props().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["genre"], "search and skip are not filters");
+
+        // a required list of ids, or a required search: never a row
+        assert_eq!(
+            catalog(cinemeta, "series", "last-videos").default_extra(),
+            None
+        );
+        let search_only = catalog(kitsu, "anime", "kitsu-anime-list");
+        assert!(!search_only.is_boardable());
+        assert!(search_only.filter_props().is_empty());
+        assert!(
+            catalog(kitsu, "anime", "kitsu-anime-trending")
+                .filter_props()
+                .is_empty()
+        );
+        assert!(
+            !catalog(kitsu, "anime", "kitsu-anime-popular").filter_props()[0]
+                .options
+                .is_empty()
+        );
     }
 
     #[test]

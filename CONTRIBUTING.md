@@ -37,7 +37,7 @@ npm install
 npm run tauri dev
 ```
 
-### Built-in playback (Windows)
+### Built-in playback (Windows, macOS)
 
 Built-in playback (libmpv in-process, video under the webview) is the `embedded` cargo
 feature. Windows release builds have it on; plain `npm run tauri dev` builds leave it off

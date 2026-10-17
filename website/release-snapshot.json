@@ -1,0 +1,101 @@
+{
+  "tag_name": "v0.2.1",
+  "name": "Zeiler v0.2.1",
+  "published_at": "2026-10-16T19:14:50Z",
+  "html_url": "https://github.com/malhaniah/zeiler/releases/tag/v0.2.1",
+  "draft": false,
+  "prerelease": false,
+  "body": "Zeiler — a free, open-source (GPL-3.0) desktop client for the Stremio addon ecosystem. Zeiler hosts no media, indexes no media, and ships no content addon: add your own stream addons on the Addons page.\n\n**Playback:** on Windows, videos play right inside Zeiler — nothing else to install (mpv stays optional, for anyone who prefers their own mpv window). On macOS and Linux, Zeiler plays videos in an mpv window and gives you full controls on its player screen, so install mpv there; built-in playback for macOS is coming. Installed copies update themselves automatically.\n\n**Sailor is now Zeiler.** Sailor installs update to Zeiler on their own and keep your addons and settings. On Windows the update also removes Sailor. On macOS the app keeps the name `Sailor.app` in Applications: rename it to `Zeiler.app`, or replace it with the new `.dmg`.\n\n### Windows\nDownload the `*-setup.exe` installer and run it (installs per-user, no admin). Builds are unsigned, so SmartScreen may warn: choose **More info → Run anyway**. Playback is built in. Optional: to play in your own mpv window instead (Settings → Player → External mpv), install mpv with `winget install shinchiro.mpv`.\n\nThe built-in player uses libmpv (mpv: LGPL-2.1-or-later) with FFmpeg (built as LGPL-3.0-or-later), shipped as `libmpv-2.dll` beside `zeiler.exe`. Installed with it in `licenses\\`: the licence texts, the notices of the libraries inside it (`libmpv-THIRD-PARTY.txt`), and its versions, provenance and source offer (`libmpv-NOTICE.txt`). The source offer is also in [THIRD-PARTY-NOTICES.md](https://github.com/malhaniah/zeiler/blob/main/THIRD-PARTY-NOTICES.md).\n\n### macOS\nDownload the `.dmg` matching your Mac (`aarch64` = Apple Silicon, `x64` = Intel) and drag Zeiler to Applications. Builds are not notarized: the first time, right-click Zeiler → **Open**, or allow it under System Settings → Privacy & Security. Install mpv with `brew install mpv`.\n\n### Linux\n- Debian/Ubuntu: `sudo apt install ./Zeiler_*_amd64.deb` (pulls in mpv automatically)\n- Fedora/openSUSE: install the `.rpm`, plus mpv (Fedora: from RPM Fusion)\n- Anything else: make the `.AppImage` executable and run it; install mpv from your distro",
+  "assets": [
+    {
+      "name": "latest.json",
+      "size": 8052,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/latest.json",
+      "digest": "sha256:24a65721df98699dc011c27bcb1b44e535a2f5b4e04a5cf54774daddf4dfed8d"
+    },
+    {
+      "name": "Zeiler-0.2.1-1.x86_64.rpm",
+      "size": 10261526,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler-0.2.1-1.x86_64.rpm",
+      "digest": "sha256:f49238f0202162ba2ec1442794f41ad21660c7513577b9b809ffbfffe61dd3e2"
+    },
+    {
+      "name": "Zeiler-0.2.1-1.x86_64.rpm.sig",
+      "size": 432,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler-0.2.1-1.x86_64.rpm.sig",
+      "digest": "sha256:1d81575a9524407e974fd03f0bf4cc764efcb7af4ac554e28d4ab5f46940875c"
+    },
+    {
+      "name": "Zeiler_0.2.1_aarch64.app.tar.gz",
+      "size": 8671663,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_aarch64.app.tar.gz",
+      "digest": "sha256:5712114f7f28b5196eb38ae84103a5ebcbadc4ed4be811850d7f9c0a2d2c12ae"
+    },
+    {
+      "name": "Zeiler_0.2.1_aarch64.app.tar.gz.sig",
+      "size": 424,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_aarch64.app.tar.gz.sig",
+      "digest": "sha256:c49453909bbf87cb2d536058841138159e9d23bfbd27a6e672f76ca070adda9d"
+    },
+    {
+      "name": "Zeiler_0.2.1_aarch64.dmg",
+      "size": 8439266,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_aarch64.dmg",
+      "digest": "sha256:cff83fdfecf6987a2ab5aec5748c214f858403ad33b08595a0c2db7d763ff27b"
+    },
+    {
+      "name": "Zeiler_0.2.1_amd64.AppImage",
+      "size": 89811448,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_amd64.AppImage",
+      "digest": "sha256:b0efc8f2dacb56e0a3ca72202f543ea5ece28d7db01ca25dc4c87c6dca331162"
+    },
+    {
+      "name": "Zeiler_0.2.1_amd64.AppImage.sig",
+      "size": 436,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_amd64.AppImage.sig",
+      "digest": "sha256:c736ba428ace1daae4e38a712a413e2ba41f3344587cda37b0c7073b73fbdd9a"
+    },
+    {
+      "name": "Zeiler_0.2.1_amd64.deb",
+      "size": 10256920,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_amd64.deb",
+      "digest": "sha256:beae6bc42a886c61b61479e1cdcf7ae85d5cd5e4959554590ae6b70f8a0ed974"
+    },
+    {
+      "name": "Zeiler_0.2.1_amd64.deb.sig",
+      "size": 428,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_amd64.deb.sig",
+      "digest": "sha256:67cfa0de891932bca6e5de7d773c9fb651c8cd1d04cb9f9ba5e4a24d2071fc71"
+    },
+    {
+      "name": "Zeiler_0.2.1_x64-setup.exe",
+      "size": 38374702,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_x64-setup.exe",
+      "digest": "sha256:cb7c17271f555c06fcdc19a21b0a302d6f4ce901b1de413ddbe98af2f2626cae"
+    },
+    {
+      "name": "Zeiler_0.2.1_x64-setup.exe.sig",
+      "size": 436,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_x64-setup.exe.sig",
+      "digest": "sha256:c674c352d54eeccf9155d0156c13ed18cbabcafb12fb831fccc211d23a505cd9"
+    },
+    {
+      "name": "Zeiler_0.2.1_x64.app.tar.gz",
+      "size": 9475399,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_x64.app.tar.gz",
+      "digest": "sha256:1bf4f147217cf8083ae22461b247f3e7003347f6a9219100fbcbf033fd111211"
+    },
+    {
+      "name": "Zeiler_0.2.1_x64.app.tar.gz.sig",
+      "size": 424,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_x64.app.tar.gz.sig",
+      "digest": "sha256:a94358eda1bbe667317f8d563c6e596f32b8a3608b662608c65fc944f5c0b595"
+    },
+    {
+      "name": "Zeiler_0.2.1_x64.dmg",
+      "size": 9332503,
+      "browser_download_url": "https://github.com/malhaniah/zeiler/releases/download/v0.2.1/Zeiler_0.2.1_x64.dmg",
+      "digest": "sha256:5ba0ceb925d4eb48a30609d4d5f1208f5c529f9ed49bcf1d980dd998c7078131"
+    }
+  ]
+}

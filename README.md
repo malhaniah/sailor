@@ -9,7 +9,7 @@ Zeiler is a self-contained media client that speaks the open [Stremio addon prot
 
 ## What it is
 
-- **Self-contained** — a built-in torrent streaming engine and mpv-based playback (built into the window on Windows); no external streaming server, no browser, no Node runtime required.
+- **Self-contained** — a built-in torrent streaming engine and mpv-based playback (built into the window on Windows and macOS); no external streaming server, no browser, no Node runtime required.
 - **Bring your own addons** — paste any addon manifest URL. Zeiler ships no stream or content addon and endorses none. For browsing out of the box, a few *metadata and subtitle* addons are built in — Cinemeta (catalogs, details, episode lists), Anime Kitsu (anime catalogs and details) and OpenSubtitles v3 (subtitles) — none serves streams, and each can be turned off in Settings.
 - **Updates itself** — signed updates install automatically the next time you open Zeiler.
 - **Rust core** — the addon protocol client, streaming engine, and playback orchestration are Rust crates; the UI is a thin TypeScript layer in a Tauri 2 shell.
@@ -56,9 +56,10 @@ removes Sailor. On macOS the updated app keeps its old name in Applications: ren
 | --- | --- |
 | `crates/zeiler-addon` | Stremio addon-protocol client (manifests, catalogs, meta, streams, subtitles) |
 | `crates/zeiler-engine` | Built-in BitTorrent streaming engine (librqbit) exposing local HTTP streams |
-| `crates/zeiler-player` | Playback: embedded libmpv (Windows), or the user's mpv remote-controlled over JSON IPC |
+| `crates/zeiler-player` | Playback: embedded libmpv (Windows, macOS), or the user's mpv remote-controlled over JSON IPC |
 | `src-tauri` | Tauri 2 shell wiring the core to the UI |
 | `src/` | TypeScript/React frontend |
+| `website/` | The download website for zeiler.io (static, Vite) — see [website/README.md](website/README.md) |
 
 ## Building from source
 
@@ -71,8 +72,8 @@ npm install
 npm run tauri dev
 ```
 
-Built-in playback on Windows is the `embedded` cargo feature and needs the pinned libmpv
-first — see [CONTRIBUTING.md](CONTRIBUTING.md#built-in-playback-windows). Release bundles:
+Built-in playback on Windows and macOS is the `embedded` cargo feature and needs the
+pinned libmpv first — see [CONTRIBUTING.md](CONTRIBUTING.md#built-in-playback-windows-macos). Release bundles:
 `npm run tauri build`. Architecture notes live in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); third-party attribution in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

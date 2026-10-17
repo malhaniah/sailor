@@ -67,7 +67,11 @@ Adapted files:
   schedule after fullscreen and window changes
 - `src/index.css`, `src/lib/theme.ts` — design tokens and theme presets
 - `src/lib/view.tsx`, `src/components/{ui,cards,Row,Hero,Poster,GenreTiles,LibraryCard}.tsx`,
-  `src/views/{Discover,Filter}.tsx` — navigation model and UI recipes
+  `src/views/{Discover,Browse}.tsx` — navigation model and UI recipes
+- `crates/zeiler-addon/src/adult.rs` — the adult-content term lists (`adult-filter.ts`)
+- `src/lib/home-customization.ts` — Home row order, hiding and renaming
+- `src/lib/rooms.ts`, `src/lib/catalogs.ts` (`isAnimeCatalog`) — which rows go to Home
+  and which to the Anime room
 
 ```text
 MIT License
