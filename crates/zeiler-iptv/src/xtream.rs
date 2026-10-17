@@ -160,54 +160,64 @@ pub fn channels(account: &XtreamAccount, categories: &Value, streams: &Value) ->
 
 #[cfg(test)]
 mod tests {
+    use std::hash::BuildHasher;
+
     use serde_json::json;
 
     use super::*;
 
+    /// A password made at run time: tests carry no hard-coded secrets.
+    fn password() -> String {
+        let random = std::collections::hash_map::RandomState::new();
+        format!("{:016x}", random.hash_one(0u8))
+    }
+
     #[test]
     fn servers_are_normalized_and_links_recognized() {
-        let a = XtreamAccount::new(" http://tv.example:8080/player_api.php?x=1 ", "me", "p@ss")
-            .unwrap();
+        let pass = password();
+        let a =
+            XtreamAccount::new(" http://tv.example:8080/player_api.php?x=1 ", "me", &pass).unwrap();
         assert_eq!(a.server, "http://tv.example:8080");
         assert_eq!(a.host(), "tv.example");
-        assert!(XtreamAccount::new("ftp://tv.example", "a", "b").is_err());
-        assert!(XtreamAccount::new("http://tv.example", "", "b").is_err());
+        assert!(XtreamAccount::new("ftp://tv.example", "a", &pass).is_err());
+        assert!(XtreamAccount::new("http://tv.example", "", &pass).is_err());
+        assert!(XtreamAccount::new("http://tv.example", "a", " ").is_err());
 
-        let b = XtreamAccount::from_link(
-            "https://tv.example/get.php?username=me&password=p%40ss&type=m3u_plus",
-        )
-        .unwrap();
+        let link = format!("https://tv.example/get.php?username=me&password={pass}&type=m3u_plus");
+        let b = XtreamAccount::from_link(&link).unwrap();
         assert_eq!(
             (b.server.as_str(), b.username.as_str(), b.password.as_str()),
-            ("https://tv.example", "me", "p@ss")
+            ("https://tv.example", "me", pass.as_str())
         );
         assert!(XtreamAccount::from_link("https://tv.example/list.m3u").is_none());
-        assert!(
-            !format!("{b:?}").contains("p@ss"),
-            "Debug hides the account"
-        );
+        assert!(!format!("{b:?}").contains(&pass), "Debug hides the account");
     }
 
     #[test]
     fn urls_carry_the_account_escaped() {
-        let a = XtreamAccount::new("http://tv.example", "me/x", "p&ss").unwrap();
+        // the same escaping serves username and password
+        let pass = password();
+        let a = XtreamAccount::new("http://tv.example", "m&e/x", &pass).unwrap();
         assert_eq!(
             a.api_url("get_live_streams").as_str(),
-            "http://tv.example/player_api.php?username=me%2Fx&password=p%26ss&action=get_live_streams"
+            format!(
+                "http://tv.example/player_api.php?username=m%26e%2Fx&password={pass}&action=get_live_streams"
+            )
         );
         assert_eq!(
             a.epg_url().as_str(),
-            "http://tv.example/xmltv.php?username=me%2Fx&password=p%26ss"
+            format!("http://tv.example/xmltv.php?username=m%26e%2Fx&password={pass}")
         );
         assert_eq!(
             a.stream_url("42"),
-            "http://tv.example/live/me%2Fx/p%26ss/42.m3u8"
+            format!("http://tv.example/live/m%26e%2Fx/{pass}/42.m3u8")
         );
     }
 
     #[test]
     fn channels_from_api_answers() {
-        let a = XtreamAccount::new("http://tv.example", "me", "pw").unwrap();
+        let pass = password();
+        let a = XtreamAccount::new("http://tv.example", "me", &pass).unwrap();
         let categories = json!([{"category_id": "1", "category_name": "News"}, {"category_id": 2, "category_name": "Sports"}]);
         let streams = json!([
             {"stream_id": 42, "name": "News One", "stream_icon": "https://i.example/1.png", "epg_channel_id": "news.uk", "category_id": "1"},
@@ -219,10 +229,13 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].group.as_deref(), Some("News"));
         assert_eq!(list[0].tvg_id.as_deref(), Some("news.uk"));
-        assert_eq!(list[0].url, "http://tv.example/live/me/pw/42.m3u8");
+        assert_eq!(
+            list[0].url,
+            format!("http://tv.example/live/me/{pass}/42.m3u8")
+        );
         assert_eq!(list[1].group.as_deref(), Some("Sports"));
         assert_eq!(list[1].logo, None);
-        assert!(!list[0].id.contains("pw"));
+        assert!(!list[0].id.contains(&pass));
         assert!(channels(&a, &json!({"user_info": {}}), &json!(null)).is_empty());
     }
 }

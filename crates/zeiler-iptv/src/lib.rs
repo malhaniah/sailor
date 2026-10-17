@@ -11,7 +11,7 @@ pub mod m3u;
 pub mod xmltv;
 pub mod xtream;
 
-pub use fetch::{EPG_MAX_BYTES, IptvClient, PLAYLIST_MAX_BYTES};
+pub use fetch::{Access, EPG_MAX_BYTES, IptvClient, PLAYLIST_MAX_BYTES, unencrypted};
 pub use xmltv::Program;
 pub use xtream::XtreamAccount;
 

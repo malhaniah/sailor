@@ -416,7 +416,7 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   `player_embedded_set_property { name, value }` · `player_embedded_command { args }`
 - Live TV (the user's IPTV, see Security posture): `iptv_sources()` →
   `[{id, name, kind, host, hasEpg, favorites, storage}]` · `iptv_source_add { source:
-  {name, kind: m3u|xtream, url?, epgUrl?, xtream?, userAgent?} }` (checked by loading
+  {name, kind: m3u|xtream, url?, epgUrl?, xtream?, userAgent?, allowHttp?} }` (checked by loading
   its channels once) · `iptv_source_remove { id }` · `iptv_channels { id, force? }` →
   `{channels: [{id, name, logo, group, tvgId}], groups}` (6 h memory cache) ·
   `iptv_epg { id, tvgIds, fromMs, toMs }` → programmes per guide id (the guide is read
@@ -819,7 +819,9 @@ is up; leaving the player pops the history entry it pushed.
   `account/secrets.rs` `KeyringStore`), or
   for one run to memory when the keychain fails — never to a file. The webview gets
   channel ids, names, logos and groups; a channel's stream URL only from `iptv_resolve`,
-  straight into the one-shot player launch (marked `live`). Errors never quote a URL,
+  straight into the one-shot player launch (marked `live`). Addresses are fetched over
+  https only, also across redirects, unless the user accepted plain http for that
+  source when adding it (`allowHttp`: the account would travel unencrypted). Errors never quote a URL,
   redirects send no Referer, and the player logs a stream as scheme and host only
   (`redact_url`; external mpv's own "Playing: <url>" line is silenced).
 - Playback goes through the in-memory one-shot handoff, never the location hash: stream

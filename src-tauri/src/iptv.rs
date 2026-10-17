@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
-use zeiler_iptv::{Channel, IptvClient, IptvError, Program, XtreamAccount, xtream};
+use zeiler_iptv::{Access, Channel, IptvClient, IptvError, Program, XtreamAccount, xtream};
 
 use crate::error::IpcError;
 use crate::persist::JsonStore;
@@ -53,8 +53,21 @@ pub struct IptvSource {
     pub has_epg: bool,
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// The user accepted that this source's addresses use plain http, which sends the
+    /// account unencrypted; without it only https is fetched.
+    #[serde(default)]
+    pub allow_http: bool,
     #[serde(default)]
     pub favorites: Vec<String>,
+}
+
+impl IptvSource {
+    pub fn access(&self) -> Access<'_> {
+        Access {
+            user_agent: self.user_agent.as_deref(),
+            allow_http: self.allow_http,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,7 +243,7 @@ impl IptvState {
         &self,
         kind: SourceKind,
         secret: &SourceSecret,
-        user_agent: Option<&str>,
+        access: Access<'_>,
     ) -> Result<(Vec<Channel>, Option<String>), IpcError> {
         match kind {
             SourceKind::M3u => {
@@ -243,7 +256,7 @@ impl IptvState {
                     })?;
                 let playlist = self
                     .client
-                    .playlist(&url, user_agent)
+                    .playlist(&url, access)
                     .await
                     .map_err(iptv_error)?;
                 Ok((playlist.channels, playlist.epg_url))
@@ -257,8 +270,8 @@ impl IptvState {
                     account.api_url("get_live_streams"),
                 );
                 let (categories, streams) = tokio::try_join!(
-                    self.client.json(&categories_url, user_agent),
-                    self.client.json(&streams_url, user_agent),
+                    self.client.json(&categories_url, access),
+                    self.client.json(&streams_url, access),
                 )
                 .map_err(iptv_error)?;
                 let channels = tokio::task::spawn_blocking(move || {
@@ -294,9 +307,7 @@ impl IptvState {
         }
         let source = self.source(id).await?;
         let secret = self.secret(id).await?;
-        let (channels, playlist_epg) = self
-            .fetch(source.kind, &secret, source.user_agent.as_deref())
-            .await?;
+        let (channels, playlist_epg) = self.fetch(source.kind, &secret, source.access()).await?;
         let has_epg = secret.guide_url(playlist_epg.as_deref()).is_some();
         let list = Arc::new(channels);
         // the guide kept only the old list's channels (or a failure): read it again
@@ -409,7 +420,7 @@ impl IptvState {
             .client
             .guide(
                 &url,
-                source.user_agent.as_deref(),
+                source.access(),
                 now_ms - GUIDE_BEHIND_MS,
                 now_ms + GUIDE_AHEAD_MS,
                 wanted,

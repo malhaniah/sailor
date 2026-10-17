@@ -410,6 +410,11 @@ function AddSource({
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [userAgent, setUserAgent] = useState("");
+  const [allowHttp, setAllowHttp] = useState(false);
+  // an address over plain http sends the account unencrypted: only with consent
+  const usesHttp = [kind === "m3u" ? url : server, epgUrl].some((a) =>
+    /^\s*http:\/\//i.test(a),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -425,6 +430,7 @@ function AddSource({
         xtream: kind === "xtream" ? { server, username, password } : undefined,
         epgUrl: epgUrl || undefined,
         userAgent: userAgent || undefined,
+        allowHttp: usesHttp && allowHttp,
       });
       onAdded(added);
     } catch (e) {
@@ -463,7 +469,7 @@ function AddSource({
         ) : (
           <>
             <Field label="Server">
-              <input value={server} onChange={(e) => setServer(e.target.value)} required type="url" placeholder="http://provider.example:8080" className={inputClass} />
+              <input value={server} onChange={(e) => setServer(e.target.value)} required type="url" placeholder="https://provider.example" className={inputClass} />
             </Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Username">
@@ -491,12 +497,27 @@ function AddSource({
           addresses and the account are kept in this computer's keychain, not in Zeiler's
           files. Zeiler loads the channel list once now to check it.
         </p>
+        {usesHttp && (
+          <label className="flex items-start gap-2.5 rounded-xl bg-elevated/60 px-3.5 py-3 text-[13px] leading-relaxed text-ink-muted">
+            <input
+              type="checkbox"
+              checked={allowHttp}
+              onChange={(e) => setAllowHttp(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              This address uses http, which is not encrypted: your account travels in plain
+              text and others on the network can read it. Allow it only if the provider has
+              no https address.
+            </span>
+          </label>
+        )}
         {error && <p className="text-[13px] text-danger">{error}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onClose} className="h-10 rounded-full border border-edge-soft px-5 text-[13px] font-medium text-ink-muted hover:border-ink hover:text-ink">
             Cancel
           </button>
-          <button type="submit" disabled={busy} className="h-10 rounded-full bg-ink px-5 text-[13px] font-semibold text-canvas disabled:opacity-60">
+          <button type="submit" disabled={busy || (usesHttp && !allowHttp)} className="h-10 rounded-full bg-ink px-5 text-[13px] font-semibold text-canvas disabled:opacity-60">
             {busy ? "Checking…" : "Add"}
           </button>
         </div>

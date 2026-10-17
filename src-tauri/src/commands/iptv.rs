@@ -75,6 +75,9 @@ pub struct SourceInput {
     pub xtream: Option<XtreamInput>,
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// The user accepted that an http address sends the account unencrypted.
+    #[serde(default)]
+    pub allow_http: bool,
 }
 
 fn http_url(text: &str, what: &str) -> Result<Url, IpcError> {
@@ -86,6 +89,25 @@ fn http_url(text: &str, what: &str) -> Result<Url, IpcError> {
 
 /// The checked secret, the host to show and the user agent.
 fn parse_input(input: &SourceInput) -> Result<(SourceSecret, String, Option<String>), IpcError> {
+    let (secret, host, user_agent) = parse_addresses(input)?;
+    // an account in a plain-http address travels unencrypted: only with the user's
+    // explicit consent (the fetches refuse http without it too)
+    let http = [secret.url.as_deref(), secret.epg_url.as_deref()]
+        .into_iter()
+        .flatten()
+        .chain(secret.xtream.as_ref().map(|x| x.server.as_str()))
+        .any(|u| u.starts_with("http:"));
+    if http && !input.allow_http {
+        return Err(IpcError::InvalidInput(
+            zeiler_iptv::unencrypted().to_string(),
+        ));
+    }
+    Ok((secret, host, user_agent))
+}
+
+fn parse_addresses(
+    input: &SourceInput,
+) -> Result<(SourceSecret, String, Option<String>), IpcError> {
     let epg_url = match input
         .epg_url
         .as_deref()
@@ -163,9 +185,11 @@ pub async fn iptv_source_add(
         )));
     }
     let (secret, host, user_agent) = parse_input(&source)?;
-    let (channels, playlist_epg) = state
-        .fetch(source.kind, &secret, user_agent.as_deref())
-        .await?;
+    let access = zeiler_iptv::Access {
+        user_agent: user_agent.as_deref(),
+        allow_http: source.allow_http,
+    };
+    let (channels, playlist_epg) = state.fetch(source.kind, &secret, access).await?;
     if channels.is_empty() {
         return Err(IpcError::Addon(
             "That source has no channels Zeiler can play.".into(),
@@ -182,6 +206,7 @@ pub async fn iptv_source_add(
         host,
         has_epg,
         user_agent,
+        allow_http: source.allow_http,
         favorites: Vec::new(),
     };
     let stored = entry.clone();
@@ -373,7 +398,15 @@ pub async fn iptv_resolve(
 
 #[cfg(test)]
 mod tests {
+    use std::hash::BuildHasher;
+
     use super::*;
+
+    /// A password made at run time: tests carry no hard-coded secrets.
+    fn password() -> String {
+        let random = std::collections::hash_map::RandomState::new();
+        format!("{:016x}", random.hash_one(0u8))
+    }
 
     fn input(kind: SourceKind) -> SourceInput {
         SourceInput {
@@ -383,19 +416,23 @@ mod tests {
             epg_url: None,
             xtream: None,
             user_agent: None,
+            allow_http: false,
         }
     }
 
     #[test]
     fn m3u_input_needs_an_http_address_and_keeps_it_secret() {
         let mut m3u = input(SourceKind::M3u);
-        m3u.url = Some(" https://tv.example/get.php?username=me&password=pw ".into());
+        let pass = password();
+        m3u.url = Some(format!(
+            " https://tv.example/get.php?username=me&password={pass} "
+        ));
         m3u.epg_url = Some("https://tv.example/epg.xml.gz".into());
         m3u.user_agent = Some("VLC/3.0".into());
         let (secret, host, ua) = parse_input(&m3u).unwrap();
         assert_eq!(host, "tv.example", "only the host is shown");
         assert_eq!(ua.as_deref(), Some("VLC/3.0"));
-        assert!(secret.url.unwrap().contains("password=pw"));
+        assert!(secret.url.unwrap().contains(&format!("password={pass}")));
 
         for bad in [
             "file:///etc/passwd",
@@ -406,8 +443,21 @@ mod tests {
             m3u.url = Some(bad.into());
             assert!(parse_input(&m3u).is_err(), "{bad}");
         }
-        m3u.url = Some("http://tv.example/a.m3u".into());
+        m3u.url = Some("https://tv.example/a.m3u".into());
         m3u.epg_url = Some("ftp://x".into());
+        assert!(parse_input(&m3u).is_err());
+        m3u.epg_url = None;
+
+        // plain http only with the user's consent, for the playlist or its guide
+        m3u.url = Some("http://tv.example/a.m3u".into());
+        assert!(
+            matches!(parse_input(&m3u), Err(IpcError::InvalidInput(m)) if m.contains("unencrypted"))
+        );
+        m3u.allow_http = true;
+        assert!(parse_input(&m3u).is_ok());
+        m3u.allow_http = false;
+        m3u.url = Some("https://tv.example/a.m3u".into());
+        m3u.epg_url = Some("http://tv.example/epg.xml".into());
         assert!(parse_input(&m3u).is_err());
         m3u.epg_url = None;
         m3u.user_agent = Some("a\nb".into());
@@ -421,8 +471,10 @@ mod tests {
         x.xtream = Some(XtreamInput {
             server: "http://tv.example:8080/".into(),
             username: "me".into(),
-            password: "pw".into(),
+            password: password(),
         });
+        assert!(parse_input(&x).is_err(), "an http server needs consent");
+        x.allow_http = true;
         let (secret, host, _) = parse_input(&x).unwrap();
         assert_eq!(host, "tv.example");
         let account = secret.xtream.unwrap();
@@ -432,14 +484,15 @@ mod tests {
 
     #[test]
     fn a_secret_round_trips_and_its_debug_hides_the_account() {
+        let pass = password();
         let secret = SourceSecret {
             url: None,
             epg_url: None,
-            xtream: Some(XtreamAccount::new("http://tv.example", "me", "pw").unwrap()),
+            xtream: Some(XtreamAccount::new("https://tv.example", "me", &pass).unwrap()),
         };
         let raw = serde_json::to_string(&secret).unwrap();
         let back: SourceSecret = serde_json::from_str(&raw).unwrap();
         assert_eq!(back.xtream, secret.xtream);
-        assert!(!format!("{:?}", secret.xtream).contains("pw"));
+        assert!(!format!("{:?}", secret.xtream).contains(&pass));
     }
 }

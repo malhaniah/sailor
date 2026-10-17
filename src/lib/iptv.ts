@@ -26,6 +26,8 @@ export interface IptvSourceInput {
   epgUrl?: string;
   xtream?: { server: string; username: string; password: string };
   userAgent?: string;
+  /** the user accepted that an http address sends the account unencrypted */
+  allowHttp?: boolean;
 }
 
 export interface IptvChannel {

@@ -27,37 +27,67 @@ const JSON_MAX_BYTES: usize = 40 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// How a source may be fetched.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Access<'a> {
+    /// Sent instead of Zeiler's own (some providers only answer certain players).
+    pub user_agent: Option<&'a str>,
+    /// The user accepted that this source's addresses use plain http, which sends the
+    /// account (in the URL) unencrypted. Without it, only https is fetched, and a
+    /// redirect to http is refused.
+    pub allow_http: bool,
+}
+
 pub struct IptvClient {
-    http: reqwest::Client,
+    /// https only, also across redirects
+    https_only: reqwest::Client,
+    /// http too, for a source whose user accepted it
+    http_allowed: reqwest::Client,
+}
+
+fn client(https_only: bool) -> Result<reqwest::Client, IptvError> {
+    let redirect = if https_only {
+        reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 5 {
+                attempt.error("too many redirects")
+            } else if attempt.url().scheme() != "https" {
+                attempt.error("a redirect to an unencrypted address")
+            } else {
+                attempt.follow()
+            }
+        })
+    } else {
+        reqwest::redirect::Policy::limited(5)
+    };
+    reqwest::Client::builder()
+        .user_agent(concat!("Zeiler/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+        .https_only(https_only)
+        .redirect(redirect)
+        // a redirect would otherwise send the previous URL (with its account in the
+        // query) to the next host as the Referer
+        .referer(false)
+        .build()
+        .map_err(|e| {
+            IptvError::Network(format!(
+                "Could not start the IPTV client: {}",
+                e.without_url()
+            ))
+        })
 }
 
 impl IptvClient {
     pub fn new() -> Result<Self, IptvError> {
-        let http = reqwest::Client::builder()
-            .user_agent(concat!("Zeiler/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(TOTAL_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::limited(5))
-            // a redirect would otherwise send the previous URL (with its account in the
-            // query) to the next host as the Referer
-            .referer(false)
-            .build()
-            .map_err(|e| {
-                IptvError::Network(format!(
-                    "Could not start the IPTV client: {}",
-                    e.without_url()
-                ))
-            })?;
-        Ok(Self { http })
+        Ok(Self {
+            https_only: client(true)?,
+            http_allowed: client(false)?,
+        })
     }
 
     /// A playlist, from an http(s) URL.
-    pub async fn playlist(
-        &self,
-        url: &Url,
-        user_agent: Option<&str>,
-    ) -> Result<Playlist, IptvError> {
-        let bytes = self.get(url, user_agent, PLAYLIST_MAX_BYTES).await?;
+    pub async fn playlist(&self, url: &Url, access: Access<'_>) -> Result<Playlist, IptvError> {
+        let bytes = self.get(url, access, PLAYLIST_MAX_BYTES).await?;
         blocking(move || {
             let bytes = unpack(bytes, PLAYLIST_MAX_BYTES)?;
             let text = String::from_utf8_lossy(&bytes);
@@ -82,18 +112,18 @@ impl IptvClient {
     pub async fn guide(
         &self,
         url: &Url,
-        user_agent: Option<&str>,
+        access: Access<'_>,
         from_ms: i64,
         to_ms: i64,
         wanted: HashSet<String>,
     ) -> Result<HashMap<String, Vec<Program>>, IptvError> {
-        let bytes = self.get(url, user_agent, EPG_MAX_BYTES).await?;
+        let bytes = self.get(url, access, EPG_MAX_BYTES).await?;
         blocking(move || Ok(parse_guide(&bytes, from_ms, to_ms, Some(&wanted)))).await
     }
 
     /// A JSON answer (Xtream's API).
-    pub async fn json(&self, url: &Url, user_agent: Option<&str>) -> Result<Value, IptvError> {
-        let bytes = self.get(url, user_agent, JSON_MAX_BYTES).await?;
+    pub async fn json(&self, url: &Url, access: Access<'_>) -> Result<Value, IptvError> {
+        let bytes = self.get(url, access, JSON_MAX_BYTES).await?;
         blocking(move || {
             serde_json::from_slice(&bytes).map_err(|_| {
                 IptvError::Source("The server did not answer like an Xtream Codes server.".into())
@@ -102,19 +132,19 @@ impl IptvClient {
         .await
     }
 
-    async fn get(
-        &self,
-        url: &Url,
-        user_agent: Option<&str>,
-        cap: usize,
-    ) -> Result<Vec<u8>, IptvError> {
-        if !matches!(url.scheme(), "http" | "https") {
-            return Err(IptvError::Invalid(
-                "Only http and https addresses can be used.".into(),
-            ));
-        }
-        let mut request = self.http.get(url.clone());
-        if let Some(agent) = user_agent.filter(|a| !a.trim().is_empty()) {
+    async fn get(&self, url: &Url, access: Access<'_>, cap: usize) -> Result<Vec<u8>, IptvError> {
+        let http = match url.scheme() {
+            "https" => &self.https_only,
+            "http" if access.allow_http => &self.http_allowed,
+            "http" => return Err(unencrypted()),
+            _ => {
+                return Err(IptvError::Invalid(
+                    "Only http and https addresses can be used.".into(),
+                ));
+            }
+        };
+        let mut request = http.get(url.clone());
+        if let Some(agent) = access.user_agent.filter(|a| !a.trim().is_empty()) {
             request = request.header(reqwest::header::USER_AGENT, agent.trim());
         }
         let mut response = request.send().await.map_err(network)?;
@@ -158,6 +188,13 @@ pub(crate) fn parse_guide(
     } else {
         xmltv::parse_window(bytes, from_ms, to_ms, wanted)
     }
+}
+
+/// The error for an http address the user hasn't accepted.
+pub fn unencrypted() -> IptvError {
+    IptvError::Invalid(
+        "This address uses http, which would send your account unencrypted. Use the provider's https address, or allow unencrypted http for this playlist.".into(),
+    )
 }
 
 fn is_gzip(bytes: &[u8]) -> bool {
@@ -238,6 +275,26 @@ mod tests {
         let parsed = parse_guide(&packed, from, from + 86_400_000, None);
         assert_eq!(parsed["a"][0].title, "News");
         assert_eq!(parse_guide(guide, from, from + 86_400_000, None), parsed);
+    }
+
+    #[tokio::test]
+    async fn http_is_refused_without_the_users_consent_before_anything_is_sent() {
+        let client = IptvClient::new().unwrap();
+        // a closed port: with consent the request would be tried and fail to connect
+        let url = Url::parse("http://127.0.0.1:9/list.m3u").unwrap();
+        let refused = client.playlist(&url, Access::default()).await.unwrap_err();
+        assert!(matches!(refused, IptvError::Invalid(m) if m.contains("unencrypted")));
+        let tried = client
+            .playlist(
+                &url,
+                Access {
+                    allow_http: true,
+                    ..Access::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(tried, IptvError::Network(_)));
     }
 
     #[test]
