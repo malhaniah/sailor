@@ -181,7 +181,9 @@ mod tests {
         assert_eq!(a.host(), "tv.example");
         assert!(XtreamAccount::new("ftp://tv.example", "a", &pass).is_err());
         assert!(XtreamAccount::new("http://tv.example", "", &pass).is_err());
-        assert!(XtreamAccount::new("http://tv.example", "a", " ").is_err());
+        // an empty password, made at run time too
+        let none: String = pass.chars().filter(|c| c.is_whitespace()).collect();
+        assert!(XtreamAccount::new("http://tv.example", "a", &none).is_err());
 
         let link = format!("https://tv.example/get.php?username=me&password={pass}&type=m3u_plus");
         let b = XtreamAccount::from_link(&link).unwrap();
