@@ -1,6 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AddonStreams,
+  AddonUpdate,
+  DeepLinkStatus,
+  DirectoryCategory,
+  DirectoryQuery,
+  InstallPreview,
+  MarketDetail,
+  MarketPage,
   CatalogResponse,
   Descriptor,
   IpcError,
@@ -24,11 +31,37 @@ export function errorKind(error: unknown): string | undefined {
   return undefined;
 }
 
-export const addonPreview = (url: string) => invoke<Descriptor>("addon_preview", { url });
-export const addonAdd = (url: string) => invoke<Descriptor>("addon_add", { url });
+/** `listingKey`: the directory listing the install started from (compared with the live
+ * manifest). */
+export const addonPreview = (url: string, listingKey?: string | null) =>
+  invoke<InstallPreview>("addon_preview", { url, listingKey: listingKey ?? null });
+/** Only from the install confirmation. `replace`: an installed addon's transport URL that
+ * this one takes the place of (keeping its position). */
+export const addonAdd = (url: string, replace?: string | null) =>
+  invoke<Descriptor>("addon_add", { url, replace: replace ?? null });
 export const addonRemove = (transportUrl: string) =>
   invoke<void>("addon_remove", { transportUrl });
 export const addonList = () => invoke<Descriptor[]>("addon_list");
+/** `order`: every user addon's transport URL exactly once; resolves to addon_list. */
+export const addonReorder = (order: string[]) => invoke<Descriptor[]>("addon_reorder", { order });
+export const addonCheckUpdates = (force: boolean) =>
+  invoke<AddonUpdate[]>("addon_check_updates", { force });
+/** One-click update; rejects with kind "conflict" when capabilities changed (review it). */
+export const addonRefresh = (transportUrl: string) =>
+  invoke<Descriptor>("addon_refresh", { transportUrl });
+
+export const marketplaceList = (query: DirectoryQuery, page: number, limit: number) =>
+  invoke<MarketPage>("marketplace_list", { query, page, limit });
+export const marketplaceCategories = () => invoke<DirectoryCategory[]>("marketplace_categories");
+export const marketplaceDetail = (key: string) => invoke<MarketDetail>("marketplace_detail", { key });
+export const marketplaceRefresh = () => invoke<void>("marketplace_refresh");
+
+export const deeplinkTakePending = () => invoke<string | null>("deeplink_take_pending");
+export const deeplinkStremioStatus = () => invoke<DeepLinkStatus>("deeplink_stremio_status");
+export const deeplinkSetStremio = (enabled: boolean) =>
+  invoke<DeepLinkStatus>("deeplink_set_stremio", { enabled });
+/** Emitted by Rust with a stremio:// link the OS handed to Zeiler. */
+export const STREMIO_LINK = "deeplink://stremio";
 
 export const catalogLoad = (args: {
   transportUrl: string;

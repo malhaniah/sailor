@@ -13,7 +13,8 @@ use crate::error::IpcError;
 use crate::home_rows::HomeRows;
 use crate::persist::{read_json, write_json};
 use crate::settings_groups::{
-    AudioSettings, KeyError, SettingsObject, SkipSettings, SubtitleSettings, survives, with_key,
+    AudioSettings, KeyError, MarketplaceSources, SettingsObject, SkipSettings, SubtitleSettings,
+    survives, with_key,
 };
 
 /// Device settings, persisted as `settings.json` and mirrored wholesale to the UI (so
@@ -82,6 +83,17 @@ pub struct Settings {
     pub binge_watching: bool,
     /// How many seconds before the end the Up Next card shows (5–60).
     pub up_next_seconds: u32,
+    /// Browse third-party addon directories on the Addons page. Off until the user opts
+    /// in: nothing is fetched from a directory before that.
+    pub marketplace_enabled: bool,
+    /// Which directories the marketplace lists.
+    pub marketplace_sources: MarketplaceSources,
+    /// Hide addons that declare P2P from the marketplace (they are flagged either way).
+    pub hide_p2p_addons: bool,
+    /// Zeiler handles `stremio://` addon links (Windows and Linux; registered with the
+    /// OS when switched on, unregistered when switched off). A link only ever opens
+    /// the install confirmation.
+    pub stremio_deep_link: bool,
 }
 
 impl Default for Settings {
@@ -109,6 +121,10 @@ impl Default for Settings {
             skip: SkipSettings::default(),
             binge_watching: true,
             up_next_seconds: 15,
+            marketplace_enabled: false,
+            marketplace_sources: MarketplaceSources::default(),
+            hide_p2p_addons: false,
+            stremio_deep_link: false,
         }
     }
 }
@@ -527,6 +543,46 @@ mod tests {
         assert!(
             patched
                 .patched(json!({"theme": "dusk", "subtitles": {"autoLoad": "x"}}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn marketplace_keys_default_off_and_read_per_key() {
+        let defaults = Settings::default();
+        assert!(!defaults.marketplace_enabled && !defaults.show_adult);
+        assert!(!defaults.hide_p2p_addons && !defaults.stremio_deep_link);
+        assert!(defaults.marketplace_sources.stremio_addons_net);
+        let value = serde_json::to_value(&defaults).unwrap();
+        assert_eq!(value["marketplaceEnabled"], false);
+        assert_eq!(
+            value["marketplaceSources"],
+            json!({"stremioAddonsNet": true, "stremioCatalog": true})
+        );
+        assert_eq!(value["showAdult"], false);
+
+        let stored: Settings = serde_json::from_value(json!({
+            "marketplaceEnabled": true,
+            "marketplaceSources": {"stremioAddonsNet": "no", "stremioCatalog": false},
+            "showAdult": "yes"
+        }))
+        .unwrap();
+        assert!(stored.marketplace_enabled);
+        assert!(
+            stored.marketplace_sources.stremio_addons_net,
+            "bad field → default"
+        );
+        assert!(!stored.marketplace_sources.stremio_catalog);
+        assert!(!stored.show_adult);
+
+        let patched = defaults
+            .patched(json!({"marketplaceSources": {"stremioCatalog": false}}))
+            .unwrap();
+        assert!(patched.marketplace_sources.stremio_addons_net);
+        assert!(!patched.marketplace_sources.stremio_catalog);
+        assert!(
+            defaults
+                .patched(json!({"marketplaceSources": {"other": true}}))
                 .is_err()
         );
     }

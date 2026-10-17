@@ -49,7 +49,7 @@ export type Frame =
   // the catalog browser: a type, optionally one addon's catalog and its filters (kept in
   // the frame, so Back restores them); the transport URL never leaves memory
   | BrowseFrame
-  // reserved: marketplace addon detail, keyed into the directory index
+  // a marketplace listing, keyed into the directory index by manifest id
   | { kind: "addon-detail"; key: string };
 
 export interface BrowseFrame {
@@ -104,6 +104,7 @@ interface ViewCtx {
   /** Browse `type` filtered to one genre (its first catalog that has the genre). */
   openFilter: (type: string, genre: string) => void;
   openPicker: (meta: MetaItem, video: Video | null) => void;
+  openAddonDetail: (key: string) => void;
   goBack: () => void;
 }
 
@@ -160,6 +161,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       openFilter: (type, genre) =>
         push({ kind: "browse", type, extra: [{ name: "genre", value: genre }] }),
       openPicker: (meta, video) => push({ kind: "picker", meta, video }),
+      openAddonDetail: (key) => push({ kind: "addon-detail", key }),
     };
   }, [stack, push, setView, goBack, updateBrowse]);
 

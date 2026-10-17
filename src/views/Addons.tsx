@@ -1,52 +1,29 @@
 import { useState } from "react";
-import { AddonLogo } from "../components/cards";
-import { Badge, EmptyState, ErrorNote, Modal, Spinner } from "../components/ui";
-import { addonAdd, addonPreview, addonRemove, errorMessage } from "../lib/ipc";
-import { useAddons } from "../lib/store";
-import type { Descriptor, ManifestResource } from "../lib/types";
+import { ErrorNote } from "../components/ui";
+import { requestInstall } from "../lib/install-request";
+import { BrowseTab } from "./addons/BrowseTab";
+import { BuiltInTab } from "./addons/BuiltInTab";
+import { InstalledTab } from "./addons/InstalledTab";
 
-function resourceName(resource: ManifestResource): string {
-  return typeof resource === "string" ? resource : resource.name;
-}
+type Tab = "installed" | "builtIn" | "browse";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "installed", label: "Installed" },
+  { id: "builtIn", label: "Built-in" },
+  { id: "browse", label: "Browse" },
+];
+
+// the tab survives leaving the page (the detail frame unmounts nothing, Home does)
+let lastTab: Tab = "installed";
 
 export function AddonsView() {
-  const { addons, reload } = useAddons();
+  const [tab, setTabState] = useState<Tab>(lastTab);
   const [url, setUrl] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<Descriptor | null>(null);
-  const [installing, setInstalling] = useState(false);
-
-  async function fetchPreview() {
-    const input = url.trim();
-    if (!input) return;
-    setBusy(true);
-    setError(null);
-    try {
-      setPreview(await addonPreview(input));
-    } catch (e) {
-      setError(errorMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function install() {
-    if (!preview) return;
-    setInstalling(true);
-    setError(null);
-    try {
-      await addonAdd(preview.transportUrl);
-      await reload();
-      setPreview(null);
-      setUrl("");
-    } catch (e) {
-      setError(errorMessage(e));
-      setPreview(null);
-    } finally {
-      setInstalling(false);
-    }
-  }
+  const [note, setNote] = useState<string | null>(null);
+  const setTab = (next: Tab) => {
+    lastTab = next;
+    setTabState(next);
+  };
 
   return (
     <main className="flex-1 overflow-y-auto px-12 pb-20 pt-28">
@@ -59,11 +36,11 @@ export function AddonsView() {
             Addons
           </h1>
           <p className="max-w-2xl text-[15px] leading-relaxed text-ink-muted">
-            Zeiler ships no addons. Paste the manifest URL of an addon you trust — it ends in{" "}
+            Zeiler ships no stream addons. Paste the address of an addon you trust (it ends in{" "}
             <code className="rounded-md bg-elevated px-1.5 py-0.5 font-mono text-[12.5px]">
               /manifest.json
-            </code>{" "}
-            (stremio:// links work too).
+            </code>
+            ; stremio:// links and setup-page links work too), or browse the directory.
           </p>
         </header>
 
@@ -71,7 +48,11 @@ export function AddonsView() {
           className="flex gap-3"
           onSubmit={(e) => {
             e.preventDefault();
-            void fetchPreview();
+            const input = url.trim();
+            if (!input) return;
+            setNote(null);
+            if (requestInstall({ url: input, source: "pasted" })) setUrl("");
+            else setNote("Finish or cancel the open install first.");
           }}
         >
           <input
@@ -82,148 +63,33 @@ export function AddonsView() {
           />
           <button
             type="submit"
-            disabled={busy || !url.trim()}
+            disabled={!url.trim()}
             className="flex h-12 shrink-0 items-center rounded-xl bg-ink px-6 text-[13.5px] font-semibold text-canvas transition-transform hover:scale-[1.02] active:scale-[0.97] disabled:opacity-50"
           >
-            {busy ? "Fetching…" : "Add addon"}
+            Add addon
           </button>
         </form>
+        {note && <ErrorNote message={note} />}
 
-        {error && <ErrorNote message={error} />}
+        <div role="group" aria-label="Addon views" className="-mb-2 flex gap-1 border-b border-edge-soft">
+          {TABS.map(({ id, label }) => (
+            <button
+              key={id}
+              aria-pressed={tab === id}
+              onClick={() => setTab(id)}
+              className={`-mb-px border-b-2 px-4 pb-3 pt-1 text-[14.5px] font-medium transition-colors ${
+                tab === id ? "border-accent text-ink" : "border-transparent text-ink-muted hover:text-ink"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-        {addons.length === 0 ? (
-          <EmptyState title="No addons installed">
-            Catalogs, metadata, streams and subtitles all come from addons you choose to
-            install.
-          </EmptyState>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {addons.map((addon) => (
-              <AddonCard
-                key={addon.transportUrl}
-                addon={addon}
-                onRemove={async () => {
-                  await addonRemove(addon.transportUrl);
-                  await reload();
-                }}
-              />
-            ))}
-          </div>
-        )}
+        {tab === "installed" && <InstalledTab />}
+        {tab === "builtIn" && <BuiltInTab />}
+        {tab === "browse" && <BrowseTab />}
       </div>
-
-      {preview && (
-        <Modal title="Install this addon?" onClose={() => setPreview(null)} wide>
-          <AddonSummary addon={preview} />
-          <div className="mt-6 flex justify-end gap-3">
-            <button
-              className="flex h-10 items-center rounded-xl border border-edge-soft px-4 text-[12.5px] font-medium text-ink-muted transition-colors hover:border-edge hover:text-ink"
-              onClick={() => setPreview(null)}
-            >
-              Cancel
-            </button>
-            <button
-              className="flex h-10 items-center rounded-xl bg-ink px-5 text-[13.5px] font-semibold text-canvas transition-transform hover:scale-[1.02] active:scale-[0.97] disabled:opacity-50"
-              disabled={installing}
-              onClick={() => void install()}
-            >
-              {installing ? <Spinner /> : "Install"}
-            </button>
-          </div>
-        </Modal>
-      )}
     </main>
-  );
-}
-
-function AddonSummary({ addon }: { addon: Descriptor }) {
-  const m = addon.manifest;
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-4">
-        <AddonLogo name={m.name} logo={m.logo} size={48} />
-        <div>
-          <div className="text-[16px] font-semibold text-ink">
-            {m.name}{" "}
-            {m.version && <span className="text-[12px] font-normal text-ink-subtle">v{m.version}</span>}
-          </div>
-          <div className="text-[12px] text-ink-subtle">{m.id}</div>
-        </div>
-      </div>
-      {m.description && (
-        <p className="text-[13.5px] leading-relaxed text-ink-muted">{m.description}</p>
-      )}
-      <div className="flex flex-wrap gap-1.5">
-        {[...new Set(m.resources.map(resourceName))].map((r) => (
-          <Badge key={r} tone="good">
-            {r}
-          </Badge>
-        ))}
-        {m.types.map((t) => (
-          <Badge key={t}>{t}</Badge>
-        ))}
-        {m.catalogs.length > 0 && <Badge>{m.catalogs.length} catalogs</Badge>}
-      </div>
-      {(m.behaviorHints.p2p || m.behaviorHints.adult || m.behaviorHints.configurable) && (
-        <div className="flex flex-wrap gap-1.5">
-          {m.behaviorHints.p2p && <Badge tone="warn">P2P — your IP is visible to peers</Badge>}
-          {m.behaviorHints.adult && <Badge tone="warn">adult content</Badge>}
-          {m.behaviorHints.configurable && <Badge>configurable</Badge>}
-        </div>
-      )}
-      <div className="break-all rounded-xl bg-canvas/60 px-3 py-2 font-mono text-[11.5px] text-ink-subtle">
-        {addon.transportUrl}
-      </div>
-      <p className="text-[12px] leading-relaxed text-ink-subtle">
-        Addons are third-party services. Zeiler only talks to this URL on your behalf; install
-        it only if you trust its operator.
-      </p>
-    </div>
-  );
-}
-
-function AddonCard({ addon, onRemove }: { addon: Descriptor; onRemove: () => Promise<void> }) {
-  const [removing, setRemoving] = useState(false);
-  const m = addon.manifest;
-  return (
-    <div className="flex items-center gap-4 rounded-2xl border border-edge-soft bg-elevated/40 px-5 py-4">
-      <AddonLogo name={m.name} logo={m.logo} size={44} />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[14.5px] font-medium text-ink">
-          {m.name}{" "}
-          {m.version && <span className="text-[11.5px] font-normal text-ink-subtle">v{m.version}</span>}
-        </div>
-        <div className="truncate font-mono text-[11px] text-ink-subtle">{addon.transportUrl}</div>
-      </div>
-      <div className="hidden flex-wrap justify-end gap-1.5 md:flex">
-        {[...new Set(m.resources.map(resourceName))].map((r) => (
-          <Badge key={r}>{r}</Badge>
-        ))}
-        {m.behaviorHints.p2p && <Badge tone="warn">p2p</Badge>}
-      </div>
-      {addon.flags.protected ? (
-        <span
-          title="Built into Zeiler: metadata or subtitles, never streams. Turn it off in Settings → Content."
-          className="shrink-0 rounded-full bg-accent/15 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-accent"
-        >
-          Built-in
-        </span>
-      ) : (
-      <button
-        disabled={removing}
-        onClick={async () => {
-          setRemoving(true);
-          try {
-            await onRemove();
-          } finally {
-            setRemoving(false);
-          }
-        }}
-        className="flex h-9 shrink-0 items-center rounded-lg border border-edge px-3.5 text-[12.5px] font-semibold text-ink-muted transition-colors hover:border-danger/40 hover:bg-danger/10 hover:text-[oklch(0.75_0.12_25)] disabled:opacity-50"
-      >
-        Remove
-      </button>
-      )}
-    </div>
   );
 }

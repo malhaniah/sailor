@@ -84,16 +84,39 @@ pub fn validate_transport_url(url: &Url) -> Result<(), AddonError> {
 }
 
 /// Normalize user-pasted input into a transport URL. Accepts `stremio://host/.../manifest.json`
-/// (rewritten to https, keeping host:port, path and query) as well as plain http(s) URLs.
+/// (rewritten to https, keeping host:port, path and query) as well as plain http(s) URLs,
+/// and the links people actually copy: an addon's configure page (`…/configure`,
+/// `…/#/configure`), a trailing `/`, or the addon's base URL without `/manifest.json`
+/// (appended). The rules follow Harbor's `parseAddonUrl` (src/lib/addon-store.ts, MIT).
 pub fn normalize_transport_input(input: &str) -> Result<Url, AddonError> {
     let trimmed = input.trim();
-    let rewritten = if let Some(rest) = trimmed.strip_prefix("stremio://") {
-        format!("https://{rest}")
-    } else {
-        trimmed.to_string()
+    let rewritten = match trimmed.get(..10) {
+        Some(scheme) if scheme.eq_ignore_ascii_case("stremio://") => {
+            format!("https://{}", &trimmed[10..])
+        }
+        _ => trimmed.to_string(),
     };
-    let url = Url::parse(&rewritten)
+    let mut url = Url::parse(&rewritten)
         .map_err(|e| AddonError::InvalidTransportUrl(format!("not a valid URL: {e}")))?;
+    // check the scheme before touching the path, so the error names the real problem
+    if !matches!(url.scheme(), "http" | "https") {
+        validate_transport_url(&url)?;
+    }
+    // a configure page routed in the fragment (single-page apps): `#/configure`
+    if let Some(fragment) = url.fragment() {
+        let route = fragment.trim_matches('/');
+        if route.is_empty() || route == "configure" {
+            url.set_fragment(None);
+        }
+    }
+    let mut path = url.path().trim_end_matches('/').to_string();
+    if let Some(base) = path.strip_suffix("/configure") {
+        path = base.to_string();
+    }
+    if !path.ends_with(MANIFEST_PATH) {
+        path.push_str(MANIFEST_PATH);
+    }
+    url.set_path(&path);
     validate_transport_url(&url)?;
     Ok(url)
 }
@@ -246,6 +269,83 @@ mod tests {
         let url =
             normalize_transport_input("stremio://127.0.0.1:7000/manifest.json?cfg=1").unwrap();
         assert_eq!(url.as_str(), "https://127.0.0.1:7000/manifest.json?cfg=1");
+    }
+
+    #[test]
+    fn normalizes_the_links_people_copy() {
+        let cases = [
+            (
+                "https://a.example/manifest.json",
+                "https://a.example/manifest.json",
+            ),
+            (
+                "  https://a.example/manifest.json\n",
+                "https://a.example/manifest.json",
+            ),
+            (
+                "https://a.example/configure",
+                "https://a.example/manifest.json",
+            ),
+            (
+                "https://a.example/configure/",
+                "https://a.example/manifest.json",
+            ),
+            (
+                "https://a.example/#/configure",
+                "https://a.example/manifest.json",
+            ),
+            (
+                "https://a.example/cfg/#/configure/",
+                "https://a.example/cfg/manifest.json",
+            ),
+            (
+                "https://a.example/abc%7B%7D/configure",
+                "https://a.example/abc%7B%7D/manifest.json",
+            ),
+            ("https://a.example", "https://a.example/manifest.json"),
+            ("https://a.example/", "https://a.example/manifest.json"),
+            (
+                "https://a.example/sub/path/",
+                "https://a.example/sub/path/manifest.json",
+            ),
+            (
+                "https://a.example/sub?key=1",
+                "https://a.example/sub/manifest.json?key=1",
+            ),
+            (
+                "STREMIO://a.example:8080/x/manifest.json",
+                "https://a.example:8080/x/manifest.json",
+            ),
+            (
+                "stremio://a.example/configure",
+                "https://a.example/manifest.json",
+            ),
+        ];
+        for (input, expected) in cases {
+            let url = normalize_transport_input(input)
+                .unwrap_or_else(|e| panic!("{input} should normalize: {e}"));
+            assert_eq!(url.as_str(), expected, "{input}");
+        }
+    }
+
+    #[test]
+    fn normalizing_still_refuses_other_schemes_and_garbage() {
+        for input in [
+            "ftp://a.example/manifest.json",
+            "file:///etc/passwd",
+            "not a url",
+            "",
+        ] {
+            assert!(
+                matches!(
+                    normalize_transport_input(input),
+                    Err(AddonError::InvalidTransportUrl(_))
+                ),
+                "{input}"
+            );
+        }
+        let err = normalize_transport_input("ftp://a.example/x").unwrap_err();
+        assert!(err.to_string().contains("scheme"), "{err}");
     }
 
     #[test]

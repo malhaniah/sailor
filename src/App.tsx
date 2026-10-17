@@ -6,7 +6,6 @@ import { UpdateBanner } from "./chrome/UpdateBanner";
 import { LibraryProvider } from "./lib/library";
 import { subscribePickerRequests } from "./lib/playback-handoff";
 import { StoreProvider, useSettings } from "./lib/store";
-import { EmptyState } from "./components/ui";
 import {
   type Frame,
   type RootView,
@@ -17,6 +16,8 @@ import {
 } from "./lib/view";
 import { AddonsView } from "./views/Addons";
 import { BrowseView } from "./views/Browse";
+import { AddonDetailView } from "./views/addons/AddonDetail";
+import { InstallHost } from "./views/addons/InstallDialog";
 import { DetailView } from "./views/Detail";
 import { DiscoverView } from "./views/Discover";
 import { HomeView } from "./views/Home";
@@ -72,6 +73,7 @@ function Shell() {
       <Topbar />
       <SearchOverlay />
       <UpdateBanner />
+      <InstallHost />
     </div>
   );
 }
@@ -146,14 +148,6 @@ function isOverlay(frame: Frame): boolean {
   }
 }
 
-/** Placeholder for a reserved navigation name; nothing navigates here yet. */
-function ReservedView({ title }: { title: string }) {
-  return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-canvas px-12">
-      <EmptyState title={title}>Not in Zeiler yet.</EmptyState>
-    </div>
-  );
-}
 
 function OverlayFrame({ frame }: { frame: Frame }) {
   switch (frame.kind) {
@@ -170,7 +164,7 @@ function OverlayFrame({ frame }: { frame: Frame }) {
     case "browse":
       return <BrowseView frame={frame} />;
     case "addon-detail":
-      return <ReservedView title="Addon" />;
+      return <AddonDetailView listingKey={frame.key} />;
     // root views render in RootViewHost
     case "home":
     case "discover":

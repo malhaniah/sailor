@@ -9,7 +9,9 @@
 //! mirror Stremio's reference implementation (stremio-core, MIT) without depending on it.
 
 mod adult;
+mod changes;
 mod client;
+pub mod directory;
 mod error;
 mod fanout;
 mod manifest;
@@ -19,6 +21,7 @@ mod subfile;
 mod videohash;
 
 pub use adult::{is_adult_manifest, is_adult_meta, is_adult_text, without_adult_options};
+pub use changes::{ManifestChanges, manifest_changes};
 pub use client::{AddonClient, MAX_RESPONSE_BYTES};
 // encoding overrides are named by encoding_rs labels (`Encoding::for_label`)
 pub use encoding_rs::Encoding;

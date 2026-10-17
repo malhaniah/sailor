@@ -13,6 +13,11 @@ default content sources, scrapers, or anything that turns Zeiler itself into a c
 source will be declined regardless of code quality. Features that help users manage
 addons *they* choose to install are always welcome.
 
+The opt-in addon directory (Addons → Browse) lists what third-party directories list,
+labelled "not reviewed by Zeiler". Curated, featured, recommended or pre-selected
+addons are declined there too: the only orderings are the directory's own stars, listing
+date, or name, and every install goes through the confirmation dialog.
+
 The single exception is metadata and subtitles. Zeiler builds in Cinemeta (catalogs,
 details, episode lists), Anime Kitsu (anime catalogs and details) and OpenSubtitles v3
 (subtitles), and users can turn each one off in Settings → Content. Any built-in must be

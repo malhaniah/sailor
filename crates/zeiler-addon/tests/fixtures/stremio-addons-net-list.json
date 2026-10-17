@@ -1,0 +1,116 @@
+{
+  "addons": [
+    {
+      "uuid": "00000000-0000-4000-8000-000000000001",
+      "url": "https://stremio-addons.net/addons/example-subs",
+      "manifestUrl": "https://subs.example.org/manifest.json",
+      "manifest": {
+        "id": "org.example.subs",
+        "name": "Example Subtitles",
+        "version": "1.2.0",
+        "description": "Subtitles in many languages.",
+        "logo": "/images/logo.png",
+        "types": ["movie", "series"],
+        "resources": ["subtitles"],
+        "idPrefixes": ["tt"],
+        "catalogs": []
+      },
+      "slug": "example-subs",
+      "stars": 120,
+      "categories": [{ "name": "subtitles", "slug": "subtitles" }],
+      "configureUrl": null,
+      "createdAt": "2026-10-10T08:00:00.000Z",
+      "updatedAt": "2026-10-11T08:00:00.000Z"
+    },
+    {
+      "uuid": "00000000-0000-4000-8000-000000000002",
+      "url": "https://stremio-addons.net/addons/example-streams",
+      "manifestUrl": "https://streams.example.org/manifest.json",
+      "manifest": {
+        "id": "org.example.streams",
+        "name": "Example Streams",
+        "version": "0.0.15",
+        "description": "Peer-to-peer streams for testing.",
+        "types": ["movie", "series"],
+        "resources": [{ "name": "stream", "types": ["movie", "series", "anime"], "idPrefixes": ["tt"] }],
+        "catalogs": [],
+        "behaviorHints": { "p2p": true, "configurable": true, "configurationRequired": false }
+      },
+      "slug": "example-streams",
+      "stars": 900,
+      "categories": [{ "name": "torrents", "slug": "torrents" }],
+      "configureUrl": "https://streams.example.org/configure",
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2026-07-07T19:10:31.388Z",
+      "instances": []
+    },
+    {
+      "uuid": "00000000-0000-4000-8000-000000000003",
+      "url": "https://stremio-addons.net/addons/example-mirror",
+      "manifestUrl": "https://mirror.example.org/manifest.json",
+      "manifest": {
+        "id": "org.example.mirror-streams",
+        "name": "Example Mirror",
+        "types": ["movie"],
+        "resources": ["stream"],
+        "catalogs": [],
+        "behaviorHints": { "configurationRequired": true }
+      },
+      "slug": "example-mirror",
+      "stars": 50,
+      "categories": [],
+      "createdAt": "2025-03-01T00:00:00.000Z"
+    },
+    {
+      "uuid": "00000000-0000-4000-8000-000000000004",
+      "manifestUrl": "https://night.example.org/manifest.json",
+      "manifest": {
+        "id": "org.example.night",
+        "name": "Night Channel",
+        "types": ["tv"],
+        "resources": ["stream"],
+        "catalogs": []
+      },
+      "slug": "night-channel",
+      "stars": 10,
+      "categories": [{ "name": "nsfw", "slug": "nsfw" }],
+      "createdAt": "2026-09-01T00:00:00.000Z"
+    },
+    {
+      "uuid": "00000000-0000-4000-8000-000000000005",
+      "manifestUrl": "https://meta.example.org/manifest.json",
+      "manifest": {
+        "id": "org.example.meta",
+        "name": "Example Meta",
+        "types": ["movie"],
+        "resources": ["catalog", "meta"],
+        "catalogs": [{ "type": "movie", "id": "top", "name": "Top" }]
+      },
+      "slug": "../bad",
+      "stars": "lots",
+      "categories": null,
+      "createdAt": "2025-06-01T00:00:00.000Z"
+    },
+    { "uuid": "no-manifest", "manifestUrl": "https://gone.example.org/manifest.json", "manifest": null },
+    {
+      "uuid": "bad-url",
+      "manifestUrl": "not a url",
+      "manifest": { "id": "org.example.badurl", "name": "Bad URL" }
+    },
+    {
+      "uuid": "not-a-manifest-url",
+      "manifestUrl": "https://page.example.org/addon",
+      "manifest": { "id": "org.example.page", "name": "Page" }
+    },
+    42,
+    "garbage"
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 100,
+    "total": 612,
+    "totalPages": 7,
+    "hasNextPage": true,
+    "hasPreviousPage": false
+  }
+}

@@ -246,3 +246,62 @@ async fn catalog_only_setup_has_no_meta_but_movie_streams_work() {
         groups[0].error
     );
 }
+
+#[tokio::test]
+#[ignore = "network"]
+async fn cinemeta_community_addon_catalog_lists_addons_without_flags() {
+    use zeiler_addon::directory::{DirectorySource, fetch_addon_catalog};
+    let client = AddonClient::new().unwrap();
+    let entries = fetch_addon_catalog(
+        &client,
+        &cinemeta(),
+        "community",
+        DirectorySource::StremioCommunity,
+    )
+    .await
+    .unwrap();
+    assert!(entries.len() >= 10, "got {} listings", entries.len());
+    let json = serde_json::to_value(&entries[0]).unwrap();
+    assert!(json.get("flags").is_none());
+}
+
+#[tokio::test]
+#[ignore = "network"]
+async fn stremio_addons_net_index_and_categories_parse() {
+    use zeiler_addon::directory::{
+        STREMIO_ADDONS_NET_API, fetch_stremio_addons_net_categories,
+        fetch_stremio_addons_net_detail, fetch_stremio_addons_net_page,
+    };
+    let client = AddonClient::new().unwrap();
+    let api = Url::parse(STREMIO_ADDONS_NET_API).unwrap();
+    let page = fetch_stremio_addons_net_page(&client, &api, 1, 20, false)
+        .await
+        .unwrap();
+    assert!(
+        page.addons.len() >= 10,
+        "got {} listings",
+        page.addons.len()
+    );
+    assert!(page.pagination.has_next_page);
+    let slug = page.addons[0].slug.clone().unwrap();
+    let entries: Vec<_> = page
+        .addons
+        .into_iter()
+        .filter_map(|a| a.into_entry())
+        .collect();
+    assert!(entries.len() >= 10);
+    // nsfw=exclude: nothing filed as adult comes back
+    assert!(
+        entries
+            .iter()
+            .all(|e| e.categories.iter().all(|c| c.slug != "nsfw"))
+    );
+    let categories = fetch_stremio_addons_net_categories(&client, &api)
+        .await
+        .unwrap();
+    assert!(categories.iter().any(|c| c.slug == "subtitles"));
+    let detail = fetch_stremio_addons_net_detail(&client, &api, &slug)
+        .await
+        .unwrap();
+    assert!(detail.manifest.is_some());
+}
