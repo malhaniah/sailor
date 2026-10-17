@@ -282,9 +282,9 @@ async fn failures_are_empty_and_not_cached() {
     assert_eq!(
         server.requests(),
         [
-            "/introdb/v4/media?imdb_id=tt1&season=1&episode=1",
-            "/introdb/v4/media?imdb_id=tt1&season=1&episode=1",
-            "/introdb/v4/media?imdb_id=tt2",
+            "/introdb/v4/media?imdb_id=tt1&season=1&episode=1&duration_ms=3000000",
+            "/introdb/v4/media?imdb_id=tt1&season=1&episode=1&duration_ms=3000000",
+            "/introdb/v4/media?imdb_id=tt2&duration_ms=3000000",
             "/kitsu/api/edge/anime/3/mappings?filter%5BexternalSite%5D=myanimelist%2Fanime",
         ]
     );
@@ -308,9 +308,8 @@ async fn theintrodb_answers_for_imdb_and_tmdb_ids() {
     ])
     .await;
     let client = server.client();
-    let episode = client
-        .segments(&route("tt0903747", "tt0903747:1:1").unwrap(), 3480.0)
-        .await;
+    let breaking_bad = route("tt0903747", "tt0903747:1:1").unwrap();
+    let episode = client.segments(&breaking_bad, 3480.0).await;
     let spans: Vec<_> = episode
         .iter()
         .map(|s| (s.kind, s.start_sec, s.end_sec, s.source))
@@ -322,9 +321,22 @@ async fn theintrodb_answers_for_imdb_and_tmdb_ids() {
             (SegmentKind::Outro, 3431.0, 3480.0, SegmentSource::IntroDb),
         ]
     );
-    let movie = client
-        .segments(&route("tmdb:278", "tmdb:278").unwrap(), 8520.0)
-        .await;
+    let shawshank = route("tmdb:278", "tmdb:278").unwrap();
+    let movie = client.segments(&shawshank, 8520.0).await;
     assert_eq!(movie.len(), 1);
     assert_eq!((movie[0].start_sec, movie[0].end_sec), (8300.0, 8520.0));
+    // the same length again is cached; another cut (or none known) is asked anew
+    client.segments(&breaking_bad, 3480.4).await;
+    client.segments(&shawshank, 8820.0).await;
+    client.segments(&shawshank, 0.0).await;
+    assert_eq!(
+        server.requests(),
+        [
+            "/introdb/v4/media?imdb_id=tt0903747&season=1&episode=1&duration_ms=3480000",
+            "/introdb/v4/media?tmdb_id=278&duration_ms=8520000",
+            "/introdb/v4/media?tmdb_id=278&duration_ms=8820000",
+            "/introdb/v4/media?tmdb_id=278",
+        ],
+        "an unknown length sends no duration_ms (0 would pick the version of unknown length)"
+    );
 }

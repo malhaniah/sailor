@@ -281,9 +281,11 @@ run `sub-add` (see "Validation policy").
   ids, with season and episode from the video id; anything else is not looked up. It
   runs once per file, when its duration is first known, and only while
   `skip.onlineLookup` is on (Settings discloses what is sent). Answers, negative ones
-  too, are cached (256 entries; AniSkip's per episode length); a failure is an empty
-  list and is not cached; 8 s per request, 1 MiB per answer, never waited on. An open
-  start or end is the start or end of the video; segments are clamped to the duration.
+  too, are cached (256 entries) per video length, for both services: AniSkip matches
+  submissions by episode length, and TheIntroDB gets `duration_ms` to pick the release
+  version (theatrical, extended cut…) closest to it. A failure is an empty list and is
+  not cached; 8 s per request, 1 MiB per answer, never waited on. An open start or end
+  is the start or end of the video; segments are clamped to the duration.
   Without an answer the UI classifies the file's chapter names (`src/lib/skip.ts`,
   Harbor's rules). With a next episode and no credits found, the last 90 s count as
   credits (only for a video at least 4.5 min long).
