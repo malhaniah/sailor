@@ -6,6 +6,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  base:'/website/',
   // don't hide Rust compiler output
   clearScreen: false,
   server: {
