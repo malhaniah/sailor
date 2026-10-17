@@ -7028,6 +7028,7 @@ dependencies = [
  "zeiler-addon",
  "zeiler-engine",
  "zeiler-player",
+ "zeiler-skip",
 ]
 
 [[package]]
@@ -7092,6 +7093,19 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "zeiler-skip"
+version = "0.2.1"
+dependencies = [
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

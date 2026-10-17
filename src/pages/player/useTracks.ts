@@ -27,6 +27,9 @@
  *   video, unless the file before it ended in a redirect. Until Play again starts the
  *   launch anew, nothing here picks, applies or remembers the title's choices for it,
  *   and the title's stream and addon subtitles are not offered.
+ * - **Next episode.** `launch` is the session's current one: when the next episode loads
+ *   in the same player (a new run), the addons are asked again for its video, with its
+ *   own hints, and its stream's subtitles are offered.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerLaunch } from "../../lib/playback-handoff";
@@ -100,6 +103,8 @@ export interface AudioEntry {
 }
 
 export interface Tracks {
+  /** another file than the launched one plays (opened in external mpv's own window) */
+  foreign: boolean;
   subtitles: SubtitleEntry[];
   /** the addons' list: not asked yet, being asked, answered */
   listing: "idle" | "loading" | "done";
@@ -214,11 +219,23 @@ export function useTracks({
   }, [meta]);
 
   const listingRef = useRef<Tracks["listing"]>("idle");
+  // Another video (the next episode) has another list: forget the previous one, and an
+  // answer for it that is still on its way. (Before the effect below that asks again.)
+  const listedFor = useRef(0);
+  const queryKey = query ? JSON.stringify(query) : null;
+  useEffect(() => {
+    listedFor.current += 1;
+    listingRef.current = "idle";
+    setListing("idle");
+    setGroups([]);
+  }, [queryKey]);
   const list = useCallback(() => {
     if (!query || foreignRef.current || listingRef.current !== "idle") return;
     listingRef.current = "loading";
     setListing("loading");
+    const asked = listedFor.current;
     const done = (result: AddonSubtitles[]) => {
+      if (asked !== listedFor.current) return;
       listingRef.current = "done";
       if (!mounted.current) return;
       setGroups(result);
@@ -227,6 +244,7 @@ export function useTracks({
     subtitlesGet(query)
       .then(done)
       .catch((e) => {
+        if (asked !== listedFor.current) return;
         done([]);
         if (mounted.current) setNotice(`Could not ask for subtitles: ${errorMessage(e)}`);
       });
@@ -558,6 +576,7 @@ export function useTracks({
   useRemembered(settled, mpv.speed, titlePrefs?.rate ?? 1, (v) => remember({ rate: v === 1 ? null : v }));
 
   return {
+    foreign,
     subtitles,
     // (the addons were asked about the title, not another file)
     listing: foreign ? "idle" : listing,

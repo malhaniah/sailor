@@ -1,4 +1,4 @@
-//! The nested settings groups — `subtitles{}` and `audio{}` — and the per-key lenient
+//! The nested settings groups — `subtitles{}`, `audio{}` and `skip{}` — and the per-key lenient
 //! reading they share with [`Settings`](crate::state::Settings).
 //!
 //! Every settings object (the top level and each group) is read the same way: start
@@ -313,6 +313,43 @@ impl AudioSettings {
 
 settings_object!(AudioSettings, "audio");
 
+/// `skip{}`: skipping intros, recaps and credits (the player's skip button, and
+/// skipping by itself).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(remote = "Self", rename_all = "camelCase", default)]
+pub struct SkipSettings {
+    /// Show a Skip button while an intro, recap or credits play.
+    pub show_button: bool,
+    /// Skip these by themselves (with an Undo). Off by default: a segment can be
+    /// wrong for the cut being played.
+    pub auto_skip_intro: bool,
+    pub auto_skip_recap: bool,
+    pub auto_skip_credits: bool,
+    /// Ask AniSkip (anime, through a Kitsu id mapping) and TheIntroDB (IMDb and TMDB
+    /// titles) where they are. Off: only the file's own chapter names count.
+    pub online_lookup: bool,
+}
+
+impl Default for SkipSettings {
+    fn default() -> Self {
+        Self {
+            show_button: true,
+            auto_skip_intro: false,
+            auto_skip_recap: false,
+            auto_skip_credits: false,
+            online_lookup: true,
+        }
+    }
+}
+
+impl SkipSettings {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+settings_object!(SkipSettings, "skip");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +380,24 @@ mod tests {
             serde_json::to_value(AudioSettings::default()).unwrap(),
             json!({"langs": [], "animeLangs": ["ja"]})
         );
+    }
+
+    #[test]
+    fn skipping_by_itself_is_off_by_default() {
+        assert_eq!(
+            serde_json::to_value(SkipSettings::default()).unwrap(),
+            json!({
+                "showButton": true,
+                "autoSkipIntro": false,
+                "autoSkipRecap": false,
+                "autoSkipCredits": false,
+                "onlineLookup": true
+            })
+        );
+        let stored: SkipSettings =
+            serde_json::from_value(json!({"autoSkipIntro": true, "onlineLookup": "no"})).unwrap();
+        assert!(stored.auto_skip_intro);
+        assert!(stored.online_lookup, "bad value → its default");
     }
 
     #[test]

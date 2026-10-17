@@ -3,7 +3,7 @@
  * properties — position, duration, pause, buffering — live in the playback clock
  * (`playback-clock.ts`) instead.
  */
-import type { MpvTrack, PlayerEvent } from "../../lib/player-ipc";
+import type { MpvChapter, MpvTrack, PlayerEvent } from "../../lib/player-ipc";
 
 export interface MpvState {
   eofReached: boolean;
@@ -17,6 +17,7 @@ export interface MpvState {
   audioDelay: number;
   mediaTitle: string | null;
   tracks: MpvTrack[];
+  chapters: MpvChapter[];
   aid: string;
   sid: string;
   vid: string;
@@ -31,6 +32,7 @@ export const INITIAL_MPV: MpvState = {
   audioDelay: 0,
   mediaTitle: null,
   tracks: [],
+  chapters: [],
   aid: "auto",
   sid: "auto",
   vid: "auto",
@@ -38,7 +40,7 @@ export const INITIAL_MPV: MpvState = {
 
 export function mpvReducer(state: MpvState, event: PlayerEvent): MpvState {
   if (event.type === "start-file") {
-    return { ...state, eofReached: false, tracks: [] };
+    return { ...state, eofReached: false, tracks: [], chapters: [] };
   }
   if (event.type !== "property") return state;
   const v = event.value;
@@ -59,6 +61,8 @@ export function mpvReducer(state: MpvState, event: PlayerEvent): MpvState {
       return typeof v === "string" ? { ...state, mediaTitle: v } : state;
     case "track-list":
       return Array.isArray(v) ? { ...state, tracks: v as MpvTrack[] } : state;
+    case "chapter-list":
+      return { ...state, chapters: Array.isArray(v) ? (v as MpvChapter[]) : [] };
     case "aid":
       return { ...state, aid: String(v) };
     case "sid":
