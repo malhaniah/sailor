@@ -21,7 +21,8 @@ the meta's video order and next video (`types/resource/meta_item.rs`), marking v
 watched (`models/meta_details.rs`), the library update and view rules
 (`models/ctx/update_library.rs`, `models/library_with_filters.rs`), and ports its **stremio-watched-bitfield** codec. The
 adapted files (`src/types.rs`, `src/library.rs`, `src/watched.rs`) keep a pointer to
-this notice.
+this notice. The player's next episode (`src/lib/next-video.ts`) follows the same video
+order and next-video rules, and keeps the pointer too.
 
 ```text
 MIT License
@@ -65,6 +66,14 @@ Adapted files:
   GL functions from `dlsym`, and redraws on the main queue
 - `src/pages/player/surface-sync.ts` — re-asserting the video surface on a kick
   schedule after fullscreen and window changes
+- `crates/zeiler-skip/src/{lib,aniskip,introdb}.rs` — the AniSkip and TheIntroDB
+  lookups (`src/lib/skip-intro/{aniskip,theintrodb}.ts`): the Kitsu → MyAnimeList
+  mapping, request parameters, skip-type mapping, open start/end handling
+- `src/lib/skip.ts` — the chapter-title classifier, source priority and the active
+  segment's end guard (`src/lib/skip-intro/{chapters,index}.ts`)
+- `src/pages/player/SkipLayer.tsx` — the skip pill and the Up Next card
+  (`skip-pill.tsx`, `skip-pill-container.tsx`), and `useNextEpisode.ts` — the
+  end-of-episode rule (`use-auto-next-episode.ts`)
 - `src/index.css`, `src/lib/theme.ts` — design tokens and theme presets
 - `src/lib/view.tsx`, `src/components/{ui,cards,Row,Hero,Poster,GenreTiles,LibraryCard}.tsx`,
   `src/views/{Discover,Browse}.tsx` — navigation model and UI recipes

@@ -60,6 +60,15 @@ export function BackButton({ onClick }: { onClick: () => void }) {
   );
 }
 
+/** "Next episode" on the Playback finished card. */
+export function NextButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button className="rounded-md bg-elevated px-4 py-2 text-sm hover:bg-raised" onClick={onClick} title="n">
+      Next episode →
+    </button>
+  );
+}
+
 /** Escape leaves the screen (the app shell underneath ignores keys while the player is up). */
 function useEscape(onEscape: () => void) {
   useEffect(() => {

@@ -30,6 +30,7 @@ import {
   launchBackdrop,
   launchLabels,
   mediaSubtitle,
+  NextButton,
   Spinner,
 } from "./states";
 import { TorrentStats } from "./TorrentStats";
@@ -52,6 +53,7 @@ export function ExternalRemote({
   onBack,
   onStop,
   onPlayAgain,
+  onNext,
 }: {
   launch: PlayerLaunch;
   phase: Phase;
@@ -66,6 +68,8 @@ export function ExternalRemote({
   onBack: () => void;
   onStop: () => Promise<void>;
   onPlayAgain: () => void;
+  /** play the next episode (null: there is none) */
+  onNext: (() => void) | null;
 }) {
   const [stopping, setStopping] = useState(false);
   const ended = phase.kind === "ended";
@@ -122,6 +126,7 @@ export function ExternalRemote({
             >
               ↺ Replay
             </button>
+            {onNext && <NextButton onClick={onNext} />}
             <BackButton onClick={onBack} />
           </div>
         </CenterCard>

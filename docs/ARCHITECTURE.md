@@ -28,6 +28,7 @@ zeiler/
     zeiler-addon/         # Stremio addon protocol: types, URL builder, HTTP client, fan-out
     zeiler-engine/        # librqbit session + local stream endpoint for the player
     zeiler-player/        # player session: external mpv over JSON IPC; embedded libmpv (feature)
+    zeiler-skip/          # skip segments (intro/recap/credits) from AniSkip and TheIntroDB
   src-tauri/              # Tauri shell: commands, state, config, capabilities
   docs/  scripts/  .github/workflows/
 ```
@@ -236,6 +237,50 @@ run `sub-add` (see "Validation policy").
   Audio: tracks by language with title, channels (Stereo, 5.1, 7.1), codec and
   Default/File, and the audio delay. Both work the same on either backend.
 
+## Skip and next episode
+
+- **Skip segments.** `skip_segments_get` (`src-tauri/src/commands/skip.rs`,
+  `crates/zeiler-skip`) asks AniSkip for `kitsu:`/`mal:` video ids (a Kitsu id is mapped
+  to MyAnimeList's through Kitsu's own mappings first) and TheIntroDB for `tt…`/`tmdb:`
+  ids, with season and episode from the video id; anything else is not looked up. It
+  runs once per file, when its duration is first known, and only while
+  `skip.onlineLookup` is on (Settings discloses what is sent). Answers, negative ones
+  too, are cached (256 entries; AniSkip's per episode length); a failure is an empty
+  list and is not cached; 8 s per request, 1 MiB per answer, never waited on. An open
+  start or end is the start or end of the video; segments are clamped to the duration.
+  Without an answer the UI classifies the file's chapter names (`src/lib/skip.ts`,
+  Harbor's rules). With a next episode and no credits found, the last 90 s count as
+  credits (only for a video at least 4.5 min long).
+- **The pill and skipping by itself** (`useSkip.ts`, `SkipLayer.tsx`). While a segment
+  plays (until 0.75 s before its end) a Skip pill shows (unless `skip.showButton` is
+  off); Enter takes it. Credits with a next episode say "Next Episode" and play it.
+  `skip.autoSkipIntro/Recap/Credits` (all off by default) skip once per segment per
+  file, only when playback enters it by playing on (never after a seek), only for
+  AniSkip/TheIntroDB segments or a chapter named exactly for it, never the synthetic
+  credits, with an Undo toast for 5 s; credits skipped by themselves play the next
+  episode when there is one. An online answer arrives after playback started, so a
+  segment it brings counts as entered while playback is in its first 10 s, unless the
+  user seeked in the file. With external mpv the offer also shows in
+  mpv's window (`player_osd_prompt`: `show-text`, and Enter bound in a forced input
+  section of its own that sends `script-message zeiler-skip`, back as a
+  `client-message`; disabling the section restores the user's binding).
+- **Next episode** (`useNextEpisode.ts`, `src/lib/next-video.ts`). The video after the
+  current one by stremio-core's order and `next_video` rules (the same as
+  `zeiler_account::next_video_id`). In the last 90 s (or when the credits start, or on
+  n), the addons are asked for its streams; a stream from the same addon (or the meta's
+  own streams) with the same non-empty `bingeGroup` continues this one and loads in the
+  same player: `player_load` with the new video's context (its progress is tracked;
+  the replaced file's is closed first), after `engine_resolve` for a torrent; the old
+  torrent is removed once the new file is asked for, unless it is the same torrent. The
+  page stays: the session counts the load as a new run (the subtitle hook takes its file
+  as the title's own and asks the addons again with the new stream's hints) and from
+  then on plays the new launch. Without a continuing stream the player is left and the
+  next episode's stream picker opens (it replaces the picker the player came from).
+  The Up Next card shows in the last `upNextSeconds` (15) and, with `bingeWatching`
+  (on), counts down to the end, where the next episode plays by itself; closing the card
+  stops that for this episode. Keys: n / p (and the media keys) for the next and the
+  previous episode.
+
 ## Tauri IPC surface
 
 Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list matches the
@@ -284,6 +329,10 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   (style fields, applied live) ·
   `player_prefs_get { metaId }` → `{ metaId, subLang, audioLang, subDelaySec, rate }`
   or null · `player_prefs_set { metaId, patch }` → the same
+- Skip (see "Skip and next episode"): `skip_segments_get { query: { metaId, videoId,
+  durationSec } }` → `[{ kind: "intro" | "recap" | "outro", startSec, endSec, source:
+  "aniskip" | "introdb" }]` · `player_osd_prompt { kind: "intro" | "recap" | "outro" |
+  "next" | null }` (external mpv's in-window prompt; a no-op for built-in playback)
 - Deprecated player aliases (one release; `commands/mpv/aliases.rs`; the UI no longer
   calls any of them): `player_status()` →
   `{ available, path? }` (= `player_backends().external`) ·
@@ -382,15 +431,17 @@ go here.
 The groups so far: `subtitles { langs, autoLoad, style { scale, font, bold, color,
 outlineColor, outlineSize, borderStyle, backColor, shadowOffset, pos, marginY,
 assOverride } }` (style values are mpv's, checked by the player's property rules; every
-style field `null` by default) and `audio { langs, animeLangs }` (`animeLangs` defaults
-to `["ja"]`).
+style field `null` by default), `audio { langs, animeLangs }` (`animeLangs` defaults
+to `["ja"]`) and `skip { showButton, autoSkipIntro, autoSkipRecap, autoSkipCredits,
+onlineLookup }` (auto-skip off, the rest on), plus the top-level `bingeWatching` (on)
+and `upNextSeconds` (15, 5–60).
 
 Reserved key map — names are fixed now; each key is added only when its feature ships:
 
 | Scope | Keys (existing **bold**) |
 | --- | --- |
 | Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
-| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, **`showAdult`** (the single adult flag and age gate, also used by the marketplace; matched by `zeiler_addon::is_adult_text`), `hideP2pAddons`, **`homeRows`** (`{order, hidden, renamed: [{key, name}]}`, keyed without transport URLs), **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages; later normalize, volume max), `skip{}` (intro/outro auto-skip), `bingeWatching`, `upNextSeconds` |
+| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, **`showAdult`** (the single adult flag and age gate, also used by the marketplace; matched by `zeiler_addon::is_adult_text`), `hideP2pAddons`, **`homeRows`** (`{order, hidden, renamed: [{key, name}]}`, keyed without transport URLs), **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages; later normalize, volume max), **`skip{}`** (skip button, auto-skip, online lookups), **`bingeWatching`**, **`upNextSeconds`** |
 | Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, **`builtinKitsu`**, **`builtinOpensubtitles`** |
 
 A settings file from before `builtinKitsu` and `builtinOpensubtitles` existed takes them
@@ -604,6 +655,8 @@ is up; leaving the player pops the history entry it pushed.
   only; no capability grants the webview its commands. Player property writes, reads and
   commands pass the allow-list tables in `commands/mpv/validate.rs`; stream URLs,
   headers and tokens reach mpv over its private IPC connection, never argv.
+- Skip lookups go only to AniSkip, Kitsu and TheIntroDB (fixed hosts, from Rust, behind
+  a setting); the in-window skip prompt sends fixed mpv commands only.
 - Subtitle downloads are http(s) only and capped (10 MiB, also unpacked); archives, web
   pages and any text that does not start as a subtitle format (an mpv EDL, a CUE sheet,
   a playlist) are refused, because a saved file is local to mpv; files land under the

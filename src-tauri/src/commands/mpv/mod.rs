@@ -26,6 +26,7 @@
 //! The pre-M2 command names stay as thin aliases for one release (`aliases.rs`).
 
 pub mod aliases;
+pub mod osd;
 pub mod subtitles;
 pub mod validate;
 

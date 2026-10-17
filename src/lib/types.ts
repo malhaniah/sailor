@@ -207,6 +207,23 @@ export interface Settings {
   subtitles: SubtitleSettings;
   /** Rust `settings_groups::AudioSettings`. */
   audio: AudioSettings;
+  /** Rust `settings_groups::SkipSettings`. */
+  skip: SkipSettings;
+  /** Play the next episode by itself when one ends. */
+  bingeWatching: boolean;
+  /** Seconds before the end the Up Next card shows, 5–60. */
+  upNextSeconds: number;
+}
+
+export interface SkipSettings {
+  /** Show a Skip button during intros, recaps and credits. */
+  showButton: boolean;
+  /** Skip these by themselves (with an Undo); off by default. */
+  autoSkipIntro: boolean;
+  autoSkipRecap: boolean;
+  autoSkipCredits: boolean;
+  /** Ask AniSkip and TheIntroDB where they are (else only the file's chapter names). */
+  onlineLookup: boolean;
 }
 
 /** Row keys are `catalogKey`s (src/lib/catalogs.ts), never transport URLs. Each list is

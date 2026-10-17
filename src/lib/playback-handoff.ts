@@ -121,6 +121,70 @@ export function launchForStream({
   transportUrl: string | null;
   addonName: string | null;
 }): PlayerLaunch | null {
+  const launchMeta: LaunchMeta = {
+    type: meta.type,
+    id: meta.id,
+    name: meta.name,
+    poster: meta.poster ?? null,
+    posterShape: meta.posterShape,
+    background: meta.background ?? null,
+    videos: meta.videos,
+    behaviorHints: {
+      ...meta.behaviorHints,
+      defaultVideoId: meta.behaviorHints.defaultVideoId ?? null,
+    },
+  };
+  return buildLaunch({
+    meta: launchMeta,
+    video,
+    stream,
+    transportUrl,
+    addonName,
+    live: meta.behaviorHints.isLive || meta.type === "tv",
+  });
+}
+
+/**
+ * The launch for another video of the title now playing (the next episode, with a
+ * stream that continues the current one), for `player_load` in the same player. Null
+ * when the stream is not one the Player can play.
+ */
+export function launchForVideo(
+  current: PlayerLaunch,
+  {
+    video,
+    stream,
+    transportUrl,
+    addonName,
+  }: { video: Video; stream: Stream; transportUrl: string | null; addonName: string | null },
+): PlayerLaunch | null {
+  if (!current.meta) return null;
+  const next = buildLaunch({
+    meta: current.meta,
+    video,
+    stream,
+    transportUrl,
+    addonName,
+    live: current.live,
+  });
+  return next ? { ...next, backend: current.backend } : null;
+}
+
+function buildLaunch({
+  meta,
+  video,
+  stream,
+  transportUrl,
+  addonName,
+  live,
+}: {
+  meta: LaunchMeta;
+  video: Video | null;
+  stream: Stream;
+  transportUrl: string | null;
+  addonName: string | null;
+  live: boolean;
+}): PlayerLaunch | null {
   const hints = stream.behaviorHints;
   let source: LaunchSource;
   if (stream.url) {
@@ -157,19 +221,7 @@ export function launchForStream({
     source,
     title,
     startAtSec: null,
-    meta: {
-      type: meta.type,
-      id: meta.id,
-      name: meta.name,
-      poster: meta.poster ?? null,
-      posterShape: meta.posterShape,
-      background: meta.background ?? null,
-      videos: meta.videos,
-      behaviorHints: {
-        ...meta.behaviorHints,
-        defaultVideoId: meta.behaviorHints.defaultVideoId ?? null,
-      },
-    },
+    meta,
     video: video
       ? {
           id: video.id,
@@ -191,8 +243,25 @@ export function launchForStream({
     },
     transportUrl,
     addonName,
-    live: meta.behaviorHints.isLive || meta.type === "tv",
+    live,
     backend: "auto",
+  };
+}
+
+/** A meta item good enough for the stream picker, from a launch's meta (the picker shows
+ * the video's own title and art; the fields a launch does not carry stay empty). */
+export function metaItemForLaunch(meta: LaunchMeta): MetaItem {
+  return {
+    id: meta.id,
+    type: meta.type,
+    name: meta.name,
+    poster: meta.poster,
+    background: meta.background,
+    posterShape: meta.posterShape,
+    genres: [],
+    links: [],
+    videos: meta.videos,
+    behaviorHints: { ...meta.behaviorHints, isLive: false },
   };
 }
 
@@ -302,6 +371,23 @@ export function subscribeLaunchFailures(listener: (id: string) => void): () => v
   failureListeners.add(listener);
   return () => {
     failureListeners.delete(listener);
+  };
+}
+
+const pickerListeners = new Set<(meta: MetaItem, video: Video) => void>();
+
+/** The Player asks the app shell underneath it to open the stream picker for another
+ * video of the title (the next episode, when no stream continues the current one). Call
+ * it as the player is left: the shell shows the picker once it is back on screen. */
+export function requestPicker(meta: MetaItem, video: Video): void {
+  for (const listener of [...pickerListeners]) listener(meta, video);
+}
+
+/** Subscribes to picker requests (the app shell); returns the unsubscribe function. */
+export function subscribePickerRequests(listener: (meta: MetaItem, video: Video) => void): () => void {
+  pickerListeners.add(listener);
+  return () => {
+    pickerListeners.delete(listener);
   };
 }
 

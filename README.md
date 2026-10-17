@@ -21,9 +21,13 @@ Early development: addon install/manage, catalog browsing, search, metadata/epis
 stream fan-out, a built-in torrent engine, Zeiler's own player screen, a local library
 that remembers where you stopped (Continue Watching, resume, watched marks), and
 subtitles in your languages from the video, your subtitle addons or a file — picked
-automatically, with delay, encoding and style controls and per-show memory. On Windows
-and macOS, videos play inside the Zeiler window (built-in libmpv). On Linux they play in
-an mpv window that Zeiler controls with the same full set of controls.
+automatically, with delay, encoding and style controls and per-show memory. Intros,
+recaps and credits can be skipped (by themselves too, with an Undo), and the next
+episode plays from the same source when one ends (skip times come from AniSkip and
+TheIntroDB, which then learn which title and episode you play; Settings → Player & quality
+turns that off). On Windows and macOS, videos play inside the Zeiler window (built-in
+libmpv). On Linux they play in an mpv window that Zeiler controls with the same full set
+of controls.
 
 ## Install
 
