@@ -37,8 +37,16 @@ use crate::state::Settings;
 /// - `slang` (unless `sid` is `no`): the title's remembered subtitle language, then the
 ///   preferred subtitle languages.
 ///
+/// - `secondary-sid=no`: a second subtitle is picked per file (a track id of the file
+///   before would pick some other track of this one);
+/// - `volume-max`: the loudest the volume slider goes (`audio.volumeMax`), when it is
+///   not mpv's own default (130), so external mpv otherwise keeps the user's config.
+///
 /// An empty language list is not sent, so external mpv keeps the user's own
 /// `alang`/`slang`.
+/// mpv's own `volume-max`.
+const MPV_VOLUME_MAX: u32 = 130;
+
 pub(crate) fn player_options(
     settings: &Settings,
     context: Option<&PlaybackContext>,
@@ -76,6 +84,13 @@ pub(crate) fn player_options(
         if !list.is_empty() {
             options.push((name.to_string(), list));
         }
+    }
+    options.push(("secondary-sid".to_string(), "no".to_string()));
+    if settings.audio.volume_max != MPV_VOLUME_MAX {
+        options.push((
+            "volume-max".to_string(),
+            settings.audio.volume_max.to_string(),
+        ));
     }
     options
 }
@@ -182,7 +197,14 @@ mod tests {
     fn mpv_selects_what_the_user_chose_from_the_start() {
         let mut settings = Settings::default();
         // nothing chosen: subtitles may show (sid auto), no language lists sent
-        assert_eq!(options(&settings, None, None), pairs(&[("sid", "auto")]));
+        assert_eq!(
+            options(&settings, None, None),
+            pairs(&[("sid", "auto"), ("secondary-sid", "no")])
+        );
+        // a ceiling other than mpv's own goes along (mpv's own leaves external mpv's)
+        settings.audio.volume_max = 200;
+        assert!(options(&settings, None, None).contains(&("volume-max".into(), "200".into())));
+        settings.audio.volume_max = 130;
 
         settings.subtitles.langs = vec!["en".into()];
         settings.audio.langs = vec!["de".into()];
@@ -192,7 +214,8 @@ mod tests {
             pairs(&[
                 ("sid", "auto"),
                 ("alang", "de,ger,deu"),
-                ("slang", "en,eng")
+                ("slang", "en,eng"),
+                ("secondary-sid", "no")
             ])
         );
         // anime uses its own audio list (["ja"] by default)
@@ -213,7 +236,8 @@ mod tests {
             pairs(&[
                 ("sid", "auto"),
                 ("alang", "ja,jpn,de,ger,deu"),
-                ("slang", "ar,ara,en,eng")
+                ("slang", "ar,ara,en,eng"),
+                ("secondary-sid", "no")
             ])
         );
 
@@ -224,14 +248,22 @@ mod tests {
         };
         assert_eq!(
             options(&settings, Some(&show), Some(&off)),
-            pairs(&[("sid", "no"), ("alang", "ja,jpn,de,ger,deu")])
+            pairs(&[
+                ("sid", "no"),
+                ("alang", "ja,jpn,de,ger,deu"),
+                ("secondary-sid", "no")
+            ])
         );
 
         // automatic subtitles off: none shows, unless the title has a remembered one
         settings.subtitles.auto_load = false;
         assert_eq!(
             options(&settings, Some(&show), None),
-            pairs(&[("sid", "no"), ("alang", "de,ger,deu")])
+            pairs(&[
+                ("sid", "no"),
+                ("alang", "de,ger,deu"),
+                ("secondary-sid", "no")
+            ])
         );
         assert_eq!(
             options(&settings, Some(&show), Some(&remembered))[0],

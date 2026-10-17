@@ -20,6 +20,8 @@ export interface MpvState {
   chapters: MpvChapter[];
   aid: string;
   sid: string;
+  /** the second subtitle shown above the first (`secondary-sid`) */
+  secondarySid: string;
   vid: string;
 }
 
@@ -35,6 +37,7 @@ export const INITIAL_MPV: MpvState = {
   chapters: [],
   aid: "auto",
   sid: "auto",
+  secondarySid: "no",
   vid: "auto",
 };
 
@@ -67,6 +70,8 @@ export function mpvReducer(state: MpvState, event: PlayerEvent): MpvState {
       return { ...state, aid: String(v) };
     case "sid":
       return { ...state, sid: String(v) };
+    case "secondary-sid":
+      return { ...state, secondarySid: String(v) };
     case "vid":
       return { ...state, vid: String(v) };
     default:

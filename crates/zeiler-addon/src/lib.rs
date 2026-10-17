@@ -16,6 +16,7 @@ mod manifest;
 mod request;
 mod resource;
 mod subfile;
+mod videohash;
 
 pub use adult::{is_adult_manifest, is_adult_meta, is_adult_text, without_adult_options};
 pub use client::{AddonClient, MAX_RESPONSE_BYTES};
@@ -43,3 +44,4 @@ pub use subfile::{
     MAX_SUBTITLE_BYTES, SubtitleError, SubtitleFile, SubtitleFormat, decode_subtitle,
     fetch_subtitle,
 };
+pub use videohash::{HashTarget, VideoHash, VideoHashError, VideoHasher, hash_of};

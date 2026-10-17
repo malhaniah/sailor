@@ -1,12 +1,13 @@
 /**
  * The audio menu: the file's audio tracks by language, with their title, channel layout
- * (Stereo, 5.1, 7.1), codec and Default/File flags, and the audio delay. The track
+ * (Stereo, 5.1, 7.1), codec and Default/File flags, the audio delay, and volume
+ * normalization (quiet dialogue up, loud scenes down; saved for every video). The track
  * picked is remembered for the title, so the next episode starts with the same
  * language.
  */
 import { AudioLines } from "lucide-react";
 import { playerSetProperty } from "../../lib/player-ipc";
-import { DelayRow, PanelHeading, PopupMenu } from "./menu";
+import { Choice, DelayRow, PanelHeading, PopupMenu } from "./menu";
 import type { MpvState } from "./mpv-state";
 import type { Tracks } from "./useTracks";
 
@@ -54,6 +55,25 @@ export function AudioMenu({ tracks, mpv }: { tracks: Tracks; mpv: MpvState }) {
               onChange={(v) => void playerSetProperty("audio-delay", v).catch(() => undefined)}
               hint="Positive plays the sound later."
             />
+            {tracks.normalize !== null && (
+              <div className="flex items-center gap-2 px-3 py-1.5">
+                <span
+                  className="w-[4.5rem] shrink-0 text-xs text-ink-subtle"
+                  title="Quiet dialogue louder, loud scenes quieter"
+                >
+                  Normalize
+                </span>
+                <Choice
+                  label="Normalize volume"
+                  value={tracks.normalize ? "on" : "off"}
+                  options={[
+                    { value: "off", label: "Off" },
+                    { value: "on", label: "On" },
+                  ]}
+                  onChange={(v) => tracks.setNormalize(v === "on")}
+                />
+              </div>
+            )}
           </div>
         </div>
       )}

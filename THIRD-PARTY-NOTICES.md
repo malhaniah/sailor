@@ -71,6 +71,9 @@ Adapted files:
 - `src/pages/player/SkipLayer.tsx` — the skip pill and the Up Next card
   (`skip-pill.tsx`, `skip-pill-container.tsx`), and `useNextEpisode.ts` — the
   end-of-episode rule (`use-auto-next-episode.ts`)
+- `src/pages/player/StatsOverlay.tsx` — the stats overlay's property list
+  (`stats-overlay.tsx`), and `src-tauri/src/commands/mpv/audio.rs` — the volume
+  normalization filter's values (`mpv.ts`)
 - `src/index.css`, `src/lib/theme.ts` — design tokens and theme presets
 - `src/lib/view.tsx`, `src/components/{ui,cards,Row,Hero,Poster,GenreTiles,LibraryCard}.tsx`,
   `src/views/{Discover,Browse}.tsx` — navigation model and UI recipes

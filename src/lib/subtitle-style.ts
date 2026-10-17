@@ -57,7 +57,54 @@ export const STYLE_CHOICES = {
     { value: 92, label: "Raised" },
     { value: 82, label: "Higher" },
   ],
+  // sub-font-size, in mpv's scaled pixels (55 by default); `scale` multiplies it
+  fontSize: [
+    { value: null, label: "Default" },
+    { value: 44, label: "44" },
+    { value: 55, label: "55" },
+    { value: 66, label: "66" },
+    { value: 80, label: "80" },
+  ],
+  alignX: [
+    { value: null, label: "Default" },
+    { value: "left", label: "Left" },
+    { value: "center", label: "Center" },
+    { value: "right", label: "Right" },
+  ],
+  alignY: [
+    { value: null, label: "Default" },
+    { value: "top", label: "Top" },
+    { value: "center", label: "Middle" },
+    { value: "bottom", label: "Bottom" },
+  ],
 } as const;
+
+export type Shadow = "default" | "none" | "soft" | "strong";
+
+/** The shadow behind the text: its offset and colour together. */
+export function shadowOf(style: SubtitleStyle): Shadow {
+  if (style.shadowOffset == null && style.shadowColor == null) return "default";
+  if (style.shadowOffset === 0) return "none";
+  return (style.shadowOffset ?? 0) >= 2.5 ? "strong" : "soft";
+}
+
+/** The patch for a shadow choice. mpv's shadow colour is its box colour too
+ * (`sub-shadow-color` is another name for `sub-back-color`), so with the Box background
+ * only the offset changes and the box keeps its colour. */
+export function shadowPatch(shadow: Shadow, style: SubtitleStyle): Partial<SubtitleStyle> {
+  const box = backgroundOf(style) === "box";
+  const color = (c: string) => (box ? {} : { shadowColor: c });
+  switch (shadow) {
+    case "default":
+      return { shadowOffset: null, shadowColor: null };
+    case "none":
+      return { shadowOffset: 0, shadowColor: null };
+    case "soft":
+      return { shadowOffset: 1.5, ...color("#80000000") };
+    case "strong":
+      return { shadowOffset: 2.5, ...color("#FF000000") };
+  }
+}
 
 export type Background = "default" | "outline" | "box";
 
@@ -74,13 +121,15 @@ export function backgroundPatch(background: Background): Partial<SubtitleStyle> 
     case "outline":
       return { borderStyle: "outline-and-shadow", backColor: null };
     case "box":
-      return { borderStyle: "background-box", backColor: BOX_COLOR };
+      // (the box colour is mpv's shadow colour too: a shadow colour would replace it)
+      return { borderStyle: "background-box", backColor: BOX_COLOR, shadowColor: null };
   }
 }
 
 /** Every field unset: mpv's own look (or external mpv's config). */
 export const NO_STYLE: SubtitleStyle = {
   scale: null,
+  fontSize: null,
   font: null,
   bold: null,
   color: null,
@@ -89,8 +138,11 @@ export const NO_STYLE: SubtitleStyle = {
   borderStyle: null,
   backColor: null,
   shadowOffset: null,
+  shadowColor: null,
   pos: null,
   marginY: null,
+  alignX: null,
+  alignY: null,
   assOverride: null,
 };
 
@@ -107,7 +159,7 @@ export function cssColor(mpv: string | null, fallback: string): string {
 /** The preview text's CSS for `style`, in a box of `height` pixels. */
 export function previewStyle(style: SubtitleStyle, height: number): CSSProperties {
   // mpv's default text is 55 "scaled pixels" of a 720-pixel-high video, its outline 1.65
-  const size = height * (55 / 720) * (style.scale ?? 1);
+  const size = height * ((style.fontSize ?? 55) / 720) * (style.scale ?? 1);
   const outlineSize = style.outlineSize ?? 1.65;
   const outline = outlineSize > 0 ? Math.max(0.8, outlineSize * (height / 720) * 2) : 0;
   const outlineColor = cssColor(style.outlineColor, "#000000");
@@ -118,7 +170,16 @@ export function previewStyle(style: SubtitleStyle, height: number): CSSPropertie
         ...[-1, 0, 1].flatMap((x) => [-1, 0, 1].map((y) => [x, y])).filter(([x, y]) => x || y),
       ]
         .map(([x, y]) => `${(x * outline).toFixed(1)}px ${(y * outline).toFixed(1)}px 0 ${outlineColor}`)
+        .concat(
+          (style.shadowOffset ?? 0) > 0
+            ? [
+                `${((style.shadowOffset ?? 0) * (height / 720) * 2).toFixed(1)}px ${((style.shadowOffset ?? 0) * (height / 720) * 2).toFixed(1)}px 0 ${cssColor(style.shadowColor, "rgba(0,0,0,0.5)")}`,
+              ]
+            : [],
+        )
         .join(", ");
+  const alignY = style.alignY ?? "bottom";
+  const alignX = style.alignX ?? "center";
   return {
     fontFamily: style.font ?? "sans-serif",
     fontWeight: style.bold ? 700 : 500,
@@ -127,7 +188,13 @@ export function previewStyle(style: SubtitleStyle, height: number): CSSPropertie
     textShadow: outline > 0 ? shadows : "none",
     background: box ? cssColor(style.backColor ?? BOX_COLOR, "rgba(0,0,0,0.6)") : "transparent",
     padding: box ? "0.1em 0.35em" : 0,
+    textAlign: alignX,
     // sub-pos 100 is the bottom, lower values move the text up
-    bottom: `${Math.max(2, (100 - (style.pos ?? 100)) + 5)}%`,
+    ...(alignY === "top"
+      ? { top: "5%" }
+      : alignY === "center"
+        ? { top: "50%", transform: "translateY(-50%)" }
+        : { bottom: `${Math.max(2, (100 - (style.pos ?? 100)) + 5)}%` }),
+    ...(alignX === "left" ? { left: "4%" } : alignX === "right" ? { right: "4%" } : {}),
   };
 }

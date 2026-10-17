@@ -2,9 +2,10 @@
  * The subtitle menu: every subtitle the file, the stream, the subtitle addons and the
  * user's own files offer, by language (preferred first) and by source, plus Off/On,
  * "Load from file…", the encoding of an added subtitle, the delay, and a quick style
- * (size, position, background) that applies at once and is saved. Every action goes
- * through the player API, so it works the same for the built-in player and external
- * mpv. Keys: s next subtitle, z/x delay −/+0.1 s.
+ * (size, position, background) that applies at once and is saved, and a second
+ * subtitle shown above the first (`secondary-sid`, e.g. two languages at once). Every
+ * action goes through the player API, so it works the same for the built-in player and
+ * external mpv. Keys: s next subtitle, c next second subtitle, z/x delay −/+0.1 s.
  */
 import { AlertTriangle, Captions, FileUp } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -34,7 +35,7 @@ export function SubtitleMenu({ tracks, mpv }: { tracks: Tracks; mpv: MpvState })
           Subtitles
         </>
       }
-      title="Subtitles (s next, z/x delay)"
+      title="Subtitles (s next, c second, z/x delay)"
       width="w-[25rem]"
       onOpen={tracks.ensureListed}
     >
@@ -152,6 +153,9 @@ function SubtitlePanel({ tracks, mpv }: { tracks: Tracks; mpv: MpvState }) {
           hint="z / x: −0.1 s / +0.1 s. Positive shows subtitles later."
         />
         {tracks.style && <QuickStyle style={tracks.style} onChange={tracks.setStyle} />}
+        {tracks.secondaryChoices.length > 0 && (
+          <SecondaryPicker tracks={tracks} secondarySid={mpv.secondarySid} />
+        )}
       </div>
     </div>
   );
@@ -213,6 +217,34 @@ function EntryRow({ entry, onPick }: { entry: SubtitleEntry; onPick: () => void 
         )}
       </span>
     </button>
+  );
+}
+
+/** A second subtitle above the first: one already in the player (in the video, or added
+ * from an addon or a file). */
+function SecondaryPicker({ tracks, secondarySid }: { tracks: Tracks; secondarySid: string }) {
+  const current = tracks.secondaryChoices.find((e) => String(e.trackId) === secondarySid);
+  return (
+    <label className="flex items-center gap-2 px-3 py-1.5" title="c: next second subtitle">
+      <span className="w-[4.5rem] shrink-0 text-xs text-ink-subtle">Second</span>
+      <select
+        aria-label="Second subtitle"
+        value={current ? String(current.trackId) : ""}
+        onChange={(e) => {
+          const picked = tracks.secondaryChoices.find((c) => String(c.trackId) === e.target.value);
+          tracks.selectSecondary(picked ?? null);
+        }}
+        className="h-7 min-w-0 flex-1 rounded-md border border-edge bg-canvas px-1.5 text-[11.5px] text-ink outline-none"
+      >
+        <option value="">None</option>
+        {tracks.secondaryChoices.map((e) => (
+          <option key={e.key} value={String(e.trackId)}>
+            {e.title}
+            {e.lang && languageName(e.lang) !== e.title ? ` (${languageName(e.lang)})` : ""}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
