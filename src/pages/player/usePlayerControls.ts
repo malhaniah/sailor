@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { playerCommand, playerSetProperty } from "../../lib/player-ipc";
 import type { MpvState } from "./mpv-state";
+import { useLive } from "./live";
 import type { PlaybackClock } from "./playback-clock";
 
 export const SEEK_STEP_SEC = 5;
@@ -203,6 +204,8 @@ export function usePlayerKeys({
   onFullscreen: (() => void) | null;
   onBack: () => void;
 }) {
+  // live TV: nothing to seek in, no speed (the controls hide them too)
+  const live = useLive();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -226,6 +229,7 @@ export function usePlayerKeys({
         return;
       }
       if (!controls) return;
+      if (live && ["ArrowLeft", "ArrowRight", "[", "]"].includes(e.key)) return;
       switch (e.key) {
         case " ":
           // no page scroll, and a button focused by an earlier click must not click again
@@ -274,5 +278,5 @@ export function usePlayerKeys({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [controls, onFullscreen, onBack]);
+  }, [controls, onFullscreen, onBack, live]);
 }

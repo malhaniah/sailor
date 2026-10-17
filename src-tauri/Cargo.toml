@@ -22,6 +22,7 @@ tauri-plugin-deep-link = { workspace = true }
 zeiler-account = { workspace = true }
 zeiler-addon = { workspace = true }
 zeiler-engine = { workspace = true }
+zeiler-iptv = { workspace = true }
 zeiler-player = { workspace = true }
 zeiler-skip = { workspace = true }
 serde = { workspace = true }

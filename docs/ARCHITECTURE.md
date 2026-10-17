@@ -29,6 +29,7 @@ zeiler/
     zeiler-account/       # library items, progress rules, watched bitfield (stremio-core compatible)
     zeiler-addon/         # Stremio addon protocol: types, URL builder, HTTP client, fan-out
     zeiler-engine/        # librqbit session + local stream endpoint for the player
+    zeiler-iptv/          # user IPTV: M3U and Xtream channel lists, XMLTV guides
     zeiler-player/        # player session: external mpv over JSON IPC; embedded libmpv (feature)
     zeiler-skip/          # skip segments (intro/recap/credits) from AniSkip and TheIntroDB
     zeiler-sync/          # opt-in Stremio account: API client + library/addon sync rules
@@ -413,6 +414,16 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   `player_embedded_start { request }` (start embedded, no fallback) ·
   `player_embedded_stop()` (stops only an embedded session) ·
   `player_embedded_set_property { name, value }` · `player_embedded_command { args }`
+- Live TV (the user's IPTV, see Security posture): `iptv_sources()` →
+  `[{id, name, kind, host, hasEpg, favorites, storage}]` · `iptv_source_add { source:
+  {name, kind: m3u|xtream, url?, epgUrl?, xtream?, userAgent?, allowHttp?} }` (checked by loading
+  its channels once) · `iptv_source_remove { id }` · `iptv_channels { id, force? }` →
+  `{channels: [{id, name, logo, group, tvgId}], groups}` (6 h memory cache) ·
+  `iptv_epg { id, tvgIds, fromMs, toMs }` → programmes per guide id (the guide is read
+  downloaded whole, up to 100 MB, then unpacked and parsed as a stream, keeping only the
+  source's channels a day ahead, for 1 h; one download per source at a time, a failure
+  remembered for 5 min) · `iptv_favorite_set { id, channelId, on }` ·
+  `iptv_resolve { sourceId, channelId }` → PlaybackRequest (http(s) only)
 - Library (see "Library and progress"): `library_list { query: { filter:
   "continueWatching" | "library" | "history", sort?, type?, limit? } }` → LibraryEntry[] ·
   `library_get { id, videos? }` → `{ entry, watchedVideoIds }` or null ·
@@ -495,6 +506,8 @@ temporary folder and renames it into place. The primary and the active profile c
 be deleted. Avatars are PNG, JPEG, WebP or GIF (checked by their bytes), 512 KB at
 most, resized in the UI and returned as `data:` URLs. The first such store is
 the library, `library.json` (`{ version, uid, items }`, see "Library and progress").
+`iptv.json` (`{ version, sources }`: names, hosts, user agents, favourites — the
+addresses and accounts are in the OS keychain) holds the profile's IPTV sources.
 
 Built-in addons are a table in `src-tauri/src/builtin.rs` (transport URL, compiled-in
 manifest snapshot from `src-tauri/builtin/`, an enabled-by-settings predicate): Cinemeta,
@@ -800,6 +813,17 @@ is up; leaving the player pops the history entry it pushed.
   settings or IPC, and is never logged; the password crosses IPC once in a password
   sign-in and is wiped after the call; only the user's id, email, avatar URL and premium
   date are kept from the user object.
+- IPTV sources (`src-tauri/src/iptv.rs`): `iptv.json` holds only names, hosts, user
+  agents and favourites; playlist and guide URLs and Xtream accounts go to the OS
+  keychain (`src-tauri/src/secrets.rs`, IPTV's memory fallback over M12's
+  `account/secrets.rs` `KeyringStore`), or
+  for one run to memory when the keychain fails — never to a file. The webview gets
+  channel ids, names, logos and groups; a channel's stream URL only from `iptv_resolve`,
+  straight into the one-shot player launch (marked `live`). Addresses are fetched over
+  https only, also across redirects, unless the user accepted plain http for that
+  source when adding it (`allowHttp`: the account would travel unencrypted). Errors never quote a URL,
+  redirects send no Referer, and the player logs a stream as scheme and host only
+  (`redact_url`; external mpv's own "Playing: <url>" line is silenced).
 - Playback goes through the in-memory one-shot handoff, never the location hash: stream
   URLs, headers and transport URLs stay out of the history stack, and release builds
   ignore URL-carrying player params.

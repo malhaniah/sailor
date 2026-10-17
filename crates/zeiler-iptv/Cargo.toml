@@ -1,0 +1,21 @@
+[package]
+name = "zeiler-iptv"
+description = "User-supplied IPTV for Zeiler: M3U playlists, Xtream Codes, XMLTV guides"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+percent-encoding = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+flate2 = { workspace = true }
+quick-xml = { workspace = true }
+# guides in other encodings than UTF-8 (Latin-1 ones exist)
+encoding_rs = { workspace = true }

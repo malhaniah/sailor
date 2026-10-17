@@ -86,6 +86,10 @@ pub fn ipc_args(endpoint: &str) -> Vec<String> {
         // put the stream URL (and any token in it) on yt-dlp's command line. Same
         // policy as the embedded core; everything else in the user's config stays.
         "--ytdl=no".into(),
+        // mpv's terminal output shares Zeiler's stdout, and it names the stream
+        // ("Playing: <url>", "Failed to open <url>"), whose URL can carry an account
+        // (IPTV streams): Zeiler follows mpv over IPC, not its terminal
+        "--really-quiet".into(),
     ]
 }
 

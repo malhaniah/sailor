@@ -93,6 +93,11 @@ Adapted files:
   and masked addresses (`install-modal.tsx`, `addon-detail.tsx`)
 - `src/views/profiles/*` — the "Who's watching?" picker layout and the avatar resize to
   a small WebP (`picker-modal`, `avatar-utils.ts`)
+- `crates/zeiler-iptv/src/{m3u,xmltv,xtream,fetch}.rs`, `src-tauri/src/iptv.rs` — M3U
+  attribute parsing and the divider filter, the XMLTV time format, Xtream URL shapes,
+  IPTV size limits, cache times and error messages
+- `src/views/LivePlaylists.tsx` — the Live room's playlist layout (sources, groups,
+  channel grid with now/next)
 
 ```text
 MIT License
