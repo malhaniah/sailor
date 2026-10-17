@@ -9,6 +9,7 @@ import {
   Sparkles,
   Tv,
 } from "lucide-react";
+import zeilerLogo from "../assets/zeiler-logo-white.png";
 import { useSettings } from "../lib/store";
 import { type RootView, useView } from "../lib/view";
 import { ProfileChip } from "../views/profiles/ProfileChip";
@@ -43,7 +44,12 @@ export function Sidebar() {
         data-tauri-drag-region
         className="flex h-20 shrink-0 items-center justify-center gap-2 px-3 text-ink lg:justify-start lg:px-6"
       >
-        <span className="pointer-events-none text-[30px] leading-none lg:text-[32px]">⛵</span>
+        <img
+          src={zeilerLogo}
+          alt=""
+          draggable={false}
+          className="pointer-events-none h-10 w-10 shrink-0 select-none lg:h-11 lg:w-11"
+        />
         <span className="pointer-events-none hidden font-display text-[30px] font-medium tracking-tight lg:inline">
           Zeiler
         </span>

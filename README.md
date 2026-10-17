@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="app-icon.png" alt="" width="128" height="128">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/zeiler-logo-white.png">
+    <img src="assets/brand/zeiler-logo-black.png" alt="" width="160" height="160">
+  </picture>
 </p>
 
 <h1 align="center">Zeiler</h1>
