@@ -85,6 +85,25 @@ jobs:
         run: >-
           cargo clippy -p zeiler -p zeiler-player --all-targets --locked
           --features zeiler/embedded -- -D warnings
+      # macOS: the shell's render-API surface too. Check mode never links, hence
+      # ZEILER_SKIP_LIBMPV_CHECK; the tests link Homebrew's libmpv (the app bundles its
+      # own, see the libmpv-macos workflow and scripts/fetch-libmpv.mjs).
+      - name: Clippy, embedded player and shell (macOS)
+        if: runner.os == 'macOS'
+        env:
+          ZEILER_SKIP_LIBMPV_CHECK: "1"
+        run: >-
+          cargo clippy -p zeiler -p zeiler-player --all-targets --locked
+          --features zeiler/embedded -- -D warnings
+      - name: Test, embedded player and shell (macOS)
+        if: runner.os == 'macOS'
+        env:
+          ZEILER_SKIP_LIBMPV_CHECK: "1"
+        run: |
+          brew install mpv
+          export LIBRARY_PATH="$(brew --prefix)/lib"
+          cargo test -p zeiler-player --features embedded --locked
+          cargo test -p zeiler --features embedded --locked
       - name: Test, embedded player (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

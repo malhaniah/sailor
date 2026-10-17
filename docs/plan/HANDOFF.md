@@ -37,12 +37,13 @@ v0.2.0 the same day.
 | (M11 PR) | M11 | Local profiles. `profiles.json` plus `profiles/<id>/` folders (addons, library, per-title choices, `prefs.json`, avatar); first run copies (never moves) the per-user files and the profile keys of `settings.json` into the primary profile; a damaged `profiles.json` adopts the folders on disk. `settings_get` still returns device settings merged with the active profile's keys (`PROFILE_KEYS` in `profiles.rs`, which already names M7's `skip`, `bingeWatching`, `upNextSeconds` and M8's `homeRows`). Switching swaps addons, settings, library and player choices in place (`JsonStore::switch_to`), refused while a player runs; the UI remounts its shell keyed by the profile. Argon2id PIN (4–8 digits, backoff after three wrong tries; a convenience lock, files not encrypted), avatars checked by magic bytes (512 KB), "Who's watching?" picker at launch with several profiles or a PIN (a locked profile mounts nothing until its PIN), sidebar profile chip, Settings → Profiles & account. Two reviews with an adversarial refuter; the confirmed findings fixed (a profile stayed unlocked after switching away, the launch picker wasn't modal, a failed switch could be half-applied, addon writes could race a switch, a failed first-run copy was never retried, the update cache crossed profiles, among others) |
 | (M12 PR) | M12 | Stremio account, per profile and opt-in. New crate `crates/zeiler-sync` (the account API client: login, loginWithToken, link codes, getUser, logout, addonCollectionGet/Set, datastoreMeta/Get/Put; HTTPS only, no redirects, URL-free errors; plus the pure rules: stremio-core's library plan and merge, `rebase_addon_op` for Add/Remove/Reorder, never pushing a built-in) tested only against mock servers and recorded shapes. `src-tauri/src/account/`: the session key in the OS keychain via `keyring` 3.6 (memory when not remembered or when the keychain fails, never a file), `account.json` per profile, background sync (launch, 15 min, a minute after local changes, Sync now), addon pushes after every add/remove/replace/reorder/refresh, `addonsLocked` after a failed pull. UI: Settings → Profiles & account → Stremio account (browser sign-in with code and polling, then email and password; the sign-in's addon question; sync switches; privacy text). CI and release install `libdbus-1-dev` for the Secret Service backend. Also changes M11: PIN buttons show only on the active profile (the PIN is set there). Two reviews with an adversarial refuter: all 16 findings confirmed (3 in part) and fixed or listed below (a lock-order deadlock, the link poll restarting on re-render, pulls undoing unsent changes, another account's library uploaded, protected/loopback entries imported, keychain session left after deleting a profile, among others) |
 | M9-B PR | M9 (B) | User IPTV. `crates/zeiler-iptv`: M3U (`#EXTINF` attributes, `#EXTGRP`, `#EXTVLCOPT` user agent and referrer, `url-tvg`, divider rows dropped, stable non-reversible channel ids), Xtream Codes (`player_api.php`, `/live/u/p/id.m3u8`, `xmltv.php`) and XMLTV (quick-xml stream, gzip by magic bytes, only now−2 h…now+24 h kept), with size caps (80 MB playlists, 100 MB guides) and errors that never quote a URL. `src-tauri/src/secrets.rs`: IPTV's secrets on M12's keychain store (`account/secrets.rs` `KeyringStore`, UTF-8 bytes) with a memory fallback, never plaintext on disk; keyring calls run off the async runtime. `iptv.json` is per profile: `profile_select` switches it and clears the IPTV caches. `iptv.rs` + `commands/iptv.rs`: `iptv.json` under the profile dir holds no secrets; channels cached 6 h, guides 1 h; `iptv_resolve` hands a channel's stream to the one-shot launch, marked `live`; https only (also across redirects) unless the user accepted plain http for that source (`allowHttp`, asked in the add form). CodeQL's checks drove that and the test fixtures' run-time passwords. Live room tabs: Addon channels and Your playlists (`LivePlaylists.tsx`: sources, add form for M3U or Xtream, groups, search, favourites, now/next). The player's `live` flag (`src/pages/player/live.ts`, read by `ControlsBar`): no seek bar, time, speed menu or seek/speed keys; a LIVE badge; no stream URL on the error card). Also: the player now logs a URL as scheme and host only (`redact_url`; Xtream puts the account in the path) and external mpv runs `--really-quiet` (it printed "Playing: <url>"). Two reviews, each refuting its own findings; confirmed and fixed: guide downloads piling up (one per source at a time, failures cached 5 min, UI debounced), the account in logs and in the Referer on redirects, the guide's global cap (now only the source's channels, 96 per channel), non-UTF-8 guides (decoded by encoding_rs), programmes without `stop`, titles with commas, channel ids that changed with URL tokens, real channels taken for dividers, a removed source re-cached, `hasEpg` frozen at add, keychain secrets as UTF-16, Debug of inputs with accounts; a check of the fixes found six more (mpv's fallback launcher, Refresh keeping a stale guide, a failed channel reload retried per request, a removal racing the cache, unbalanced quotes, UTF-16 declared without a BOM), also fixed |
+| PR #21 | M13 | Built-in playback on macOS. libmpv's render API draws into an `NSOpenGLView` under the WKWebView (`commands/mpv/macos.rs`, a port of Harbor's `mpv_render_mac.rs`; the page's physical px become points, a new core takes the surface over from the one it replaces, the webview's `drawsBackground` goes back on when it is removed). `zeiler-player`'s `Surface::RenderApi(host)` with a `RenderHost` (`render.rs`): the render context is created before the first load and freed before `quit`, and holds the core so it can never be destroyed under it. libmpv, FFmpeg (LGPL, Secure Transport, VideoToolbox, dav1d), libplacebo and the libass stack are built from pinned sources (`scripts/build-libmpv-macos.sh`, macOS 12.0, `@rpath`, ad-hoc signed) in the `libmpv-macos` workflow, mirrored with their sources on the `libmpv-macos-0.41.0` pre-release, fetched by `fetch-libmpv.mjs`, bundled under `Contents/Frameworks`, and checked by `scripts/check-macos-app.sh` (release.yml and the workflow). macOS CI: clippy with `ZEILER_SKIP_LIBMPV_CHECK`, tests against Homebrew's libmpv. Two reviews with adversarial refuters; eleven findings confirmed and fixed (among them Swift objects built for the build machine's macOS); the rest are follow-ups below |
 
 ## Decisions already made by the owner
 
 - **Player work:** this plan owns all of it (embedded, skip, subtitles). Embedded runs on
-  Windows now and comes to macOS later (M13). Linux keeps mpv in its own window, with full
-  controls in Zeiler.
+  Windows and, since M13, macOS. Linux keeps mpv in its own window, with full controls in
+  Zeiler (M14 was prototyped and stopped, see below).
 - **Marketplace:** lists all community addons, labelled "not reviewed by Zeiler". Adult
   addons are hidden by default. Every install still goes through the confirmation dialog.
 - **Built-in addons:** metadata and subtitles only (Cinemeta, OpenSubtitles v3, an anime
@@ -72,8 +73,8 @@ docs/ARCHITECTURE.md.
 | ~~M10~~ | Marketplace | Done (see above). Open: macOS `stremio://` needs an owner decision (a static scheme in tauri.conf.json claims it at all times; runtime registration is unsupported there) |
 | ~~M11~~ | Local profiles | Done (see above) |
 | ~~M12~~ | Stremio account | Done (see above). Left for later (account-profile.json): playback progress pushed every 180 s while playing (it goes with the next sync), an exit flush, `getUser` at startup (email and premium refreshed only at sign-in), sync on window focus, `logout { removeSyncedData }` (sign-out keeps the library), shared sessions between profiles (`shareWith`), sign-in from the sidebar chip, a sign-in nudge in the Library, a "From your Stremio account" badge and greyed-out account entries Zeiler can't use (they are simply not imported), an ignored live test with a test account, and keeping queued addon changes across a restart. **Owner sign-off needed** (critique §4 M12) on the new privacy text in README ("Privacy") and ARCHITECTURE ("Account sync", security posture) |
-| M13 | macOS built-in playback | Render-API NSOpenGLView port of Harbor's `mpv_render_mac.rs` (geometry in points), bundled `@rpath` dylibs |
-| M14 | Optional | Linux embedded, only if a GtkGLArea prototype works first |
+| M13 | macOS built-in playback | Done in PR #21 (see the table above) |
+| M14 | Optional | Linux embedded: prototyped, not implemented. See "M14 prototype" below |
 
 The M6 leftovers (player-ui.json steps 4(f), 6, 7 and 12) are done; see their row
 above. Still left from M6, on purpose: pre-adding unselected subtitles per language
@@ -135,6 +136,49 @@ ZEILER_SKIP_LIBMPV_CHECK=1 cargo clippy --target x86_64-pc-windows-gnu -p zeiler
 Never run `cargo update` in a feature commit. The lockfile pins `rust-ini` 0.21.1 on
 purpose; see the comment in `Cargo.toml`.
 
+## M14 prototype (Linux embedded): stopped
+
+The plan allowed M14 only if a GtkGLArea prototype worked first. It half works, so M14 was
+not implemented. The prototype is on the branch `claude/m14-gtkglarea-prototype`
+(`prototypes/linux-gl-overlay/`, with its workflow `m14-prototype.yml`; not for merging):
+a GTK window with a `GtkOverlay`, a `GtkGLArea` under a `WebKitWebView` with a transparent
+background, libmpv's render API into the GL area, a page that paints a red box and leaves
+the rest transparent, and a solid green lavfi video. It runs in CI on ubuntu-24.04 (WebKitGTK
+4.1, mpv 0.37, Xvfb, Mesa llvmpipe) and checks two pixels of a screenshot.
+
+- **The composition works.** GL content in the `GtkGLArea` shows through the transparent
+  page, and the page draws on top, in every run with WebKitGTK's default (accelerated)
+  compositing: a plain GL clear came out blue under the red box each time.
+- **mpv's frames do not, reliably.** With mpv rendering, about a quarter of identical runs
+  showed the green video under the red box; the rest showed black from the very first
+  frame to the last. mpv's log (VO configured, textures, FBO format, frame drops) and the
+  GL state at the first render (context, framebuffer, scissor, blend, colour mask) are the
+  same in green and black runs, and creating the render context at the first render
+  instead of at realize did not help (0 of 8). With `WEBKIT_DISABLE_COMPOSITING_MODE=1` the
+  page itself stopped painting.
+- Found on the way: the GL loader must match GDK's context (GLX on X11, EGL on Wayland).
+  WebKitGTK initializes EGL in the process, and asking EGL for a GLX context's functions
+  gives entry points that draw nothing.
+- **What could not be checked here** (macOS machine, Linux only in CI): a real GPU and
+  driver (Mesa, NVIDIA), Wayland, a desktop compositor, vaapi interop. The black frames may
+  be an llvmpipe/Xvfb artefact; Celluloid drives mpv the same way on real desktops.
+- **Before implementing M14:** run the prototype on a real Linux desktop (X11 and Wayland,
+  Mesa and NVIDIA) and find the black-frame race; and decide how Linux gets libmpv: the
+  release builds on ubuntu-22.04, whose libmpv1 (client API 1.x) libmpv2 6.0 refuses, so
+  M14 needs a newer build host (raising the glibc floor) or a `dlopen`-based binding that
+  falls back to external mpv. Then the shell side: Tauri's webview moved into a
+  `GtkOverlay` above a `GtkGLArea`, geometry in logical px, `LC_NUMERIC` after GTK init.
+
+## Follow-ups from M13
+
+- libmpv is a load-time dependency on macOS (Windows links it DELAYLOAD): if a bundled
+  library ever failed to load, the app would not start, instead of falling back to external
+  mpv. Weak-linking `libmpv` with a runtime probe would mirror Windows.
+- mpv's `tls-verify` is off by default on every OS (it predates M13); with Secure Transport
+  on macOS it could be turned on and use the system trust store.
+- Secure Transport (FFmpeg's TLS on macOS) stops at TLS 1.2; a server that requires 1.3
+  would need OpenSSL or mbedTLS in the bundle (FFmpeg would then become LGPL-3.0).
+
 ## Not yet verified on a real machine
 
 - **M12 against the real Stremio API: never run.** No real account was signed in to and
@@ -159,6 +203,13 @@ purpose; see the comment in `Cargo.toml`.
   --test live -- --ignored` (2026-10-16). Not yet tried: `stremio://` registration and
   links on Windows and Linux (CI builds them), opening a setup page with the opener,
   and reading the clipboard from the webview.
+- macOS built-in playback was watched through on an Apple Silicon Mac (macOS 27, dev
+  build with the bundle built from source): Big Buck Bunny, 9:56, under the controls;
+  fullscreen in and out, an error, Back, and a new video replacing a playing one. The
+  release `.app` was built locally and passed `check-macos-app.sh`. Not run: the Intel
+  build (CI built it, linked it and ran the tests on macos-15-intel), macOS 12 to 26 (the
+  bundle targets 12.0, and the build fails on objects built for anything newer), a window
+  resize by hand, and an external display with another scale factor.
 
 - Library progress with a real stream in the app. It is unit-tested against a real
   libmpv event trace (recorded headless by `record_a_progress_trace` in

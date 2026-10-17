@@ -1,7 +1,7 @@
 //! No embedded surface in this build: the `embedded` feature is off, or the OS has
-//! no embedded implementation yet (macOS: next; Linux: mpv keeps its own window).
-//! `player_start` uses external mpv, remote-controlled from Zeiler's player screen.
-//! The macOS and Linux surface modules re-export these no-ops.
+//! no embedded implementation (Linux: mpv keeps its own window). `player_start` uses
+//! external mpv, remote-controlled from Zeiler's player screen. The Linux surface
+//! module re-exports these no-ops.
 
 use tauri::AppHandle;
 use zeiler_player::{PlayerEvent, Session};
@@ -13,12 +13,9 @@ use crate::error::IpcError;
 pub struct Surface;
 
 /// Why built-in playback is unavailable, in the words Settings → Player shows.
-const REASON: &str = if cfg!(target_os = "macos") {
-    "Coming soon to macOS. Until then, videos play in an mpv window, with full controls \
-     in Zeiler."
-} else if cfg!(target_os = "linux") {
+const REASON: &str = if cfg!(target_os = "linux") {
     "On Linux, videos play in an mpv window, with full controls in Zeiler."
-} else if cfg!(windows) {
+} else if cfg!(any(windows, target_os = "macos")) {
     "This build of Zeiler doesn't include the built-in player, so videos play in an mpv \
      window, with full controls in Zeiler."
 } else {

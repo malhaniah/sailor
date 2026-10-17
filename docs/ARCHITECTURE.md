@@ -13,7 +13,7 @@ addon URLs. This document records the load-bearing decisions and the shape of th
 | UI | Vite 8 + React 19 + TypeScript ~6.0 + Tailwind 4 | Current stable stack; matches the create-tauri-app template. |
 | Protocol client | Hand-rolled `zeiler-addon` crate | `stremio-core` is git-only (frozen 0.1.0), framework-shaped (Elm runtime + static `Env`), hardwired to api.strem.io (incl. unauthenticated SeekLog telemetry), and assumes Stremio's `server.js` for torrents. The protocol surface is small; we mirror stremio-core's lenient serde semantics (MIT, referenced with attribution). |
 | Torrent engine | librqbit, in-process | Pure Rust, Apache-2.0, first-class streaming (sequential priority + HTTP Range endpoint). Pinned to a git rev of `main` until 9.0.2 ships (crates.io 9.0.1 lacks three Windows fixes: NTFS sparse marking #681, DHT death on UDP 10054 #690, stream-during-init #689). |
-| Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM, the default on Windows releases; macOS render-API NSOpenGLView next) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, macOS for now, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is the `embedded` cargo feature: Windows release builds turn it on and ship a hash-pinned LGPL `libmpv-2.dll` (`scripts/fetch-libmpv.mjs`); plain dev builds leave it off. See "Player backends". |
+| Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM, macOS the render API into an NSOpenGLView; the default on Windows and macOS releases) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is the `embedded` cargo feature: Windows and macOS release builds turn it on and ship a hash-pinned LGPL libmpv (`scripts/fetch-libmpv.mjs`: `libmpv-2.dll` on Windows, dylibs built from pinned sources in `Contents/Frameworks` on macOS); plain dev builds leave it off. See "Player backends". |
 | Content neutrality | No seeded stream addons; built-ins are metadata or subtitles only, switchable, never streams | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only metadata and subtitle addons — Cinemeta and Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) — from manifest snapshots compiled into the app (`src-tauri/builtin/`), each switchable in Settings → Content. A test fails the build if a built-in declares a `stream` resource. Stream addons are installed only by the user, behind a confirmation dialog showing the live manifest (name, version, resources, p2p/adult hints): from a pasted URL, an opt-in `stremio://` link, or the opt-in addon directory. |
 | Addon directory | Opt-in browsing of third-party listings (stremio-addons.net, Stremio's `addon_catalog`) | Zeiler curates, ranks and seeds nothing: no featured rails, no recommendations, no bundled list; the only orderings are the directory's own stars, listing date, or name. Every listing is labelled "not reviewed by Zeiler"; adult listings are hidden unless `showAdult`; every install goes through the confirmation dialog, which fetches the live manifest and shows where it differs from the listing. Nothing is fetched before `marketplaceEnabled`. |
 | Stremio account | Opt-in, per profile; link-code sign-in first, password second; the key in the OS keychain | Off until a profile signs in. Hand-rolled client of the account API (`zeiler-sync`, stremio-core's request shapes, an honest `Zeiler/<version>` user agent); never the telemetry or premium endpoints (events, seekLog, getSkipGaps, …). See "Account sync". |
@@ -117,7 +117,7 @@ backend setting says.
   backends"; `auto` follows the `playerBackend` setting, chosen in Settings → Player:
   Auto / Built-in / External mpv). Before the reply it shows the loading state of the
   backend it expects (from `player_backends` and the setting).
-  - *Embedded* (Windows releases: `embedded` feature + libmpv present): mpv renders
+  - *Embedded* (Windows and macOS releases: `embedded` feature + libmpv present): mpv renders
     under the transparent webview, with the controls drawn as auto-hiding overlays
     (`PlayerChrome.tsx`); `f` makes the Zeiler window fullscreen, Escape leaves
     fullscreen first (and the player only when not fullscreen), and leaving the
@@ -125,7 +125,7 @@ backend setting says.
     toggle and on every window resize, move and scale change the page re-sends the
     video rect and calls `player_surface_refresh` on a kick schedule (0, 60, 200,
     500, 1000, 2000 ms; `surface-sync.ts`).
-  - *External mpv* (Linux and macOS, Windows dev builds without the feature, a
+  - *External mpv* (Linux, Windows and macOS dev builds without the feature, a
     fallback, or a forced launch): mpv plays in its own window and the page is its full remote
     control (`ExternalRemote.tsx`): the title's art fills the window, dimmed; title,
     episode and source at the top; the same `ControlsBar` as embedded docked at the
@@ -679,7 +679,7 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
   carries `fallbackReason`. An explicit `embedded` never falls back (`unsupported` when
   this build/OS has none, `player` when it fails). External needs mpv
   (`mpvPath` or PATH/known locations).
-- **Embedded** (`embedded` feature; on by default in Windows releases): libmpv actor +
+- **Embedded** (`embedded` feature; on by default in Windows and macOS releases): libmpv actor +
   event thread (`crates/zeiler-player/src/embedded.rs`), `config=no`, no
   scripts/ytdl/OSC/input, `vo=gpu-next,` (the trailing comma falls back through mpv's
   default VO list instead of failing on RDP, VMs or old GPUs), `hwdec=auto-safe`. On
@@ -688,17 +688,37 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
   where the video goes, fixed at spawn:
   - `Surface::Wid(hwnd)` — a child window of the main window (Windows; with
     `force-window=immediate`);
-  - `Surface::RenderApi` — reserved for macOS (`vo=libmpv`, drawn by the host into an
-    NSOpenGLView, M13); not implemented yet, spawning with it fails;
+  - `Surface::RenderApi(host)` — macOS: `vo=libmpv`, `video-timing-offset=0`; the
+    host (`RenderHost`, `crates/zeiler-player/src/render.rs`) creates the OpenGL render
+    context once the core is up and before anything loads, and frees it before the
+    core quits (the actor calls `detach` before `quit`; a `GlRenderContext` also holds
+    the core, so the core is never destroyed under it);
   - `Surface::Detached` — mpv's own top-level window;
   - `Surface::Headless` — `vo=null`, `ao=null`, for tests.
 
   Per-OS surface code: `commands/mpv/windows.rs` (child HWND pinned under the
-  transparent WebView2), `macos.rs` / `linux.rs` (not available yet: macOS is next,
-  Linux keeps mpv in its own window), `stub.rs` (feature off). `player_backends`
-  reports why built-in playback is unavailable in a sentence Settings → Player shows
-  as-is (per OS: coming soon on macOS, mpv window on Linux, a Windows build without
-  the feature, or a missing `libmpv-2.dll`).
+  transparent WebView2), `macos.rs` (render API into an NSOpenGLView under the
+  WKWebView), `linux.rs` (not available: Linux keeps mpv in its own window),
+  `stub.rs` (feature off). `player_backends` reports why built-in playback is
+  unavailable in a sentence Settings → Player shows as-is (per OS: mpv window on
+  Linux, a Windows or macOS build without the feature, or a missing `libmpv-2.dll`).
+- **macOS surface** (`commands/mpv/macos.rs`, adapted from Harbor's
+  `mpv_render_mac.rs`). On the core's attach, the main thread puts an `NSOpenGLView`
+  (OpenGL 3.2 core, opaque surface, Retina-resolution drawable) into the WKWebView's
+  superview, ordered below the webview, turns the webview's `drawsBackground` off
+  and its layer non-opaque, creates the render context and clears the view to black
+  until mpv's first frame. mpv's update callback queues one redraw at a time on the
+  main dispatch queue; a redraw renders into the default framebuffer at the view's
+  backing size and flushes. `player_set_geometry` gets the page's physical pixels and
+  divides them by the window's scale factor (NSView frames are points; Harbor used
+  the pixels as points), flipping into AppKit's bottom-up coordinates; a rect that
+  fills the window keeps filling it while the window resizes. Same transparency
+  policy as Windows: the webview draws its background again when the surface is
+  removed (the core's detach, `player_stop`, or a start that ends elsewhere). A
+  newer core's install takes the surface of the one it replaces over, so nothing
+  flashes between two built-in videos; the replaced core's detach then leaves it
+  alone. libmpv is linked normally (it is always in the bundle), so a macOS build
+  with the feature reports built-in playback available.
 - **Windows surface and transparency policy** (`commands/mpv/windows.rs`). The mpv
   child window is pinned at `HWND_BOTTOM` with the UI's rect and made transparent to
   hit-testing; the WebView2 above it gets a transparent default background **only
@@ -860,9 +880,22 @@ is up; leaving the player pops the history entry it pushed.
   and FFmpeg commits and carries the source offer. The archive has no `.def`, so the script writes
   one from the DLL's export table (`LIBRARY libmpv-2.dll`) and generates `mpv.lib` with
   MSVC `lib /def:`. The app links it DELAYLOAD (`src-tauri/build.rs`) so it starts —
-  and falls back to external mpv — when the DLL is missing. macOS (M13) will bundle a
-  vendored dylib under Frameworks; Linux keeps the distro mpv. If a GPL libmpv/FFmpeg
-  build is ever shipped, the corresponding source offer goes in the release notes.
+  and falls back to external mpv — when the DLL is missing. macOS releases bundle
+  libmpv and the libraries it loads under `Contents/Frameworks`
+  (`bundle.macOS.frameworks` in the overlay `src-tauri/libmpv-macos/<arch>/tauri.conf.json`
+  that `scripts/fetch-libmpv.mjs` writes, with the notice and licence texts as
+  resources); `src-tauri/build.rs` links them with the rpath
+  `@executable_path/../Frameworks` (debug builds also the vendor dir). They are built
+  from pinned sources by `scripts/build-libmpv-macos.sh` (mpv `-Dgpl=false`, FFmpeg
+  without `--enable-gpl`/`--enable-version3`, libplacebo, libass with FreeType,
+  HarfBuzz and FriBidi, dav1d; macOS 12.0 deployment target; `@rpath` install names;
+  ad-hoc signed) in the `libmpv-macos` workflow, and kept with every source archive
+  on Zeiler's `libmpv-macos-<version>` pre-release (`docs/libmpv/`).
+  `scripts/check-macos-app.sh` (release.yml, after each macOS build) checks the app
+  loads nothing from outside itself and the system, that no library needs a newer
+  macOS than the app, and that the signature verifies. Linux keeps the distro mpv. If a
+  GPL libmpv/FFmpeg build is ever shipped, the corresponding source offer goes in the
+  release notes.
 - `deny.toml` allows `LGPL-2.1-only` for the `libmpv2`/`libmpv2-sys` bindings (a
   clarification, since they declare the deprecated id `LGPL-2.1`). CI's `deny` job runs
   `cargo deny --all-features check licenses sources`, `zeiler/embedded` included.

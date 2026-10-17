@@ -42,7 +42,7 @@ npm install
 npm run tauri dev
 ```
 
-### Built-in playback (Windows)
+### Built-in playback (Windows, macOS)
 
 Built-in playback (libmpv in-process, video under the webview) is the `embedded` cargo
 feature. Windows release builds have it on; plain `npm run tauri dev` builds leave it off
@@ -73,8 +73,30 @@ $env:LIB = "$PWD\src-tauri\libmpv;$env:LIB"; $env:PATH = "$PWD\src-tauri\libmpv;
 cargo test -p zeiler-player --features embedded
 ```
 
-These run headless (no window, no audio device). macOS and Linux keep external mpv for
-now (`commands/mpv/{macos,linux}.rs`).
+```bash
+# macOS: Homebrew's libmpv for the player crate's tests
+brew install mpv
+LIBRARY_PATH="$(brew --prefix)/lib" cargo test -p zeiler-player --features embedded
+```
+
+These run headless (no window, no audio device). Linux keeps external mpv
+(`commands/mpv/linux.rs`).
+
+On macOS, the app itself (`npm run tauri dev -- --features embedded`, or a bundle) links
+the libmpv Zeiler ships, not Homebrew's: `node scripts/fetch-libmpv.mjs` puts the pinned
+build for your Mac's architecture (or `--arch arm64|x86_64`) in
+`src-tauri/libmpv-macos/<arch>/`, with a `tauri.conf.json` overlay that bundles it under
+`Contents/Frameworks`:
+
+```bash
+node scripts/fetch-libmpv.mjs
+npm run tauri build -- --features embedded --config src-tauri/libmpv-macos/arm64/tauri.conf.json
+scripts/check-macos-app.sh target/release/bundle/macos/Zeiler.app
+```
+
+That build comes from pinned sources (`scripts/build-libmpv-macos.sh`, run by the
+`libmpv-macos` workflow; it needs `brew install meson ninja pkgconf nasm` to run
+locally), mirrored on a `libmpv-macos-<version>` pre-release with its sources.
 
 On Linux you also need the Tauri system packages (webkit2gtk 4.1, libayatana-appindicator,
 librsvg, patchelf — see `.github/workflows/ci.yml` for the exact list).

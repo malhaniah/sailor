@@ -77,6 +77,11 @@ windows = { version = "0.62", features = [
     "Win32_System_LibraryLoader",
 ] }
 
+# the macOS embedded surface: the versions wry 0.57 already pins in Cargo.lock
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSGeometry", "NSString", "NSValue"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSGraphics", "NSOpenGL", "NSOpenGLView", "NSResponder", "NSView"] }
+
 # workspace crates
 zeiler-account = { path = "crates/zeiler-account" }
 zeiler-addon = { path = "crates/zeiler-addon" }

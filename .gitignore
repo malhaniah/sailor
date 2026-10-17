@@ -13,6 +13,7 @@ dist/
 
 # vendored libmpv binaries (scripts/fetch-libmpv.mjs)
 /src-tauri/libmpv/
+/src-tauri/libmpv-macos/
 # generated per release target (scripts/third-party-licenses.mjs), or a placeholder
 # written by src-tauri/build.rs
 /src-tauri/licenses/THIRD-PARTY-LICENSES.txt

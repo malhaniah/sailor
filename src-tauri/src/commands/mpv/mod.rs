@@ -19,8 +19,9 @@
 //!   last write always lands before the next playback's first.
 //! - **Per-OS surfaces.** The embedded video surface is OS code: `windows.rs`
 //!   (libmpv child window under the transparent WebView2; its module docs hold the
-//!   transparency policy), `macos.rs`/`linux.rs` (not available yet) and `stub.rs`
-//!   (feature off). `player_set_geometry` and `player_surface_refresh` act on it.
+//!   transparency policy), `macos.rs` (libmpv's render API into an NSOpenGLView under
+//!   the WKWebView), `linux.rs` (not available) and `stub.rs` (feature off).
+//!   `player_set_geometry` and `player_surface_refresh` act on it.
 //!
 //! The pre-M2 command names stay as thin aliases for one release (`aliases.rs`).
 
@@ -45,7 +46,7 @@ mod linux;
 #[cfg(all(target_os = "linux", feature = "embedded"))]
 use self::linux as imp;
 
-#[cfg(not(all(windows, feature = "embedded")))]
+#[cfg(not(all(feature = "embedded", any(windows, target_os = "macos"))))]
 mod stub;
 #[cfg(not(all(
     feature = "embedded",
@@ -79,8 +80,11 @@ pub const PLAYER_EVENT: &str = "player://event";
 /// window's client area (the UI computes getBoundingClientRect() × devicePixelRatio).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
-// only the Windows surface reads the fields
-#[cfg_attr(not(all(windows, feature = "embedded")), allow(dead_code))]
+// only the Windows and macOS surfaces read the fields
+#[cfg_attr(
+    not(all(feature = "embedded", any(windows, target_os = "macos"))),
+    allow(dead_code)
+)]
 pub struct Geometry {
     pub x: f64,
     pub y: f64,
@@ -275,6 +279,8 @@ pub struct EmbeddedStatus {
 }
 
 impl EmbeddedStatus {
+    // macOS builds with the built-in player never report it unavailable
+    #[cfg_attr(all(target_os = "macos", feature = "embedded"), allow(dead_code))]
     fn unavailable(reason: String) -> Self {
         Self {
             available: false,
@@ -461,7 +467,8 @@ pub async fn player_set_geometry(
 
 /// Re-assert the embedded video surface after a window change (fullscreen, resize,
 /// move, DPI): on Windows the transparent webview background, the video window pinned
-/// under the webview with the last geometry, and the keyboard focus. A no-op when no
+/// under the webview with the last geometry, and the keyboard focus; on macOS the
+/// transparent webview, the video view's frame and a fresh frame. A no-op when no
 /// built-in video plays, and on builds and systems without one.
 #[tauri::command]
 pub async fn player_surface_refresh(
