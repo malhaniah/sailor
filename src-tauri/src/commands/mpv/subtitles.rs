@@ -16,6 +16,9 @@
 //! - `player_set_sub_style { style }`: apply style fields live (the UI saves them);
 //!   answers with the properties mpv refused.
 //! - `player_prefs_get { metaId }` / `player_prefs_set { metaId, patch }`.
+//! - `player_video_hash {}`: the OpenSubtitles hash and size of the file playing, for
+//!   subtitle addons when the stream names none; read with two range requests against
+//!   the stream itself (the URL and headers stay in Rust).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -25,7 +28,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tracing::warn;
 use url::Url;
-use zeiler_addon::{Encoding, MAX_SUBTITLE_BYTES, SubtitleFile, SubtitleFormat};
+use zeiler_addon::{
+    Encoding, HashTarget, MAX_SUBTITLE_BYTES, SubtitleFile, SubtitleFormat, VideoHasher,
+};
 use zeiler_player::Session;
 
 use super::{PlayerState, sanitize_title, session_error};
@@ -161,6 +166,45 @@ pub async fn player_set_sub_style(
     Ok(apply_style(&*player.session()?, &style).await)
 }
 
+/// The OpenSubtitles hash of a video, as the subtitle addons take it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoHashResult {
+    pub hash: String,
+    pub size: u64,
+}
+
+/// The OpenSubtitles hash and size of the file playing now (`None`: nothing of ours
+/// plays, the server does not serve ranges, or the file changed meanwhile). Never an
+/// error: subtitles are then asked for without it.
+#[tauri::command]
+pub async fn player_video_hash(
+    player: State<'_, PlayerState>,
+    hasher: State<'_, VideoHasher>,
+) -> Result<Option<VideoHashResult>, IpcError> {
+    let Some((loads, request)) = player.playing_request() else {
+        return Ok(None);
+    };
+    let target = HashTarget {
+        url: request.url,
+        headers: request.headers,
+        user_agent: request.user_agent,
+        referrer: request.referrer,
+    };
+    match hasher.hash(&target).await {
+        Ok(hashed) if player.load_count() == loads => Ok(Some(VideoHashResult {
+            hash: hashed.hash,
+            size: hashed.size,
+        })),
+        Ok(_) => Ok(None),
+        Err(e) => {
+            // (the error never names the URL, which may carry credentials)
+            warn!(error = %e, "could not hash the video for subtitles");
+            Ok(None)
+        }
+    }
+}
+
 /// The choices remembered for a title (`None`: nothing yet).
 #[tauri::command]
 pub async fn player_prefs_get(
@@ -170,8 +214,8 @@ pub async fn player_prefs_get(
     prefs.get(&meta_id).await
 }
 
-/// Remember choices for a title (`subLang`, `audioLang`, `subDelaySec`, `rate`; `null`
-/// forgets one).
+/// Remember choices for a title (`subLang`, `subSource`, `audioLang`, `subDelaySec`,
+/// `rate`; `null` forgets one).
 #[tauri::command]
 pub async fn player_prefs_set(
     prefs: State<'_, PlayerPrefs>,

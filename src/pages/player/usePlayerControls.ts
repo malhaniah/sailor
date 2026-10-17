@@ -5,8 +5,8 @@
  * the same code drives either backend; only fullscreen differs (the caller passes it).
  *
  * Keys work while the Zeiler window has focus: Space play/pause (replay once ended),
- * ←/→ seek 5 s, ↑/↓ volume ±5, m mute, f fullscreen, s next subtitle, z/x subtitle
- * delay −/+0.1 s, [ / ] slower/faster, Escape back. A focused text field
+ * ←/→ seek 5 s, ↑/↓ volume ±5, m mute, f fullscreen, s next subtitle, c next second
+ * subtitle, z/x subtitle delay −/+0.1 s, [ / ] slower/faster, Escape back. A focused text field
  * keeps its own keys, and so does the focused volume slider for the arrows; the seek
  * bar does not (its native step is a fraction of a second), so ←/→ still seek 5 s after
  * a click on it. An open menu takes Escape first (it closes, see ControlsBar).
@@ -29,19 +29,20 @@ interface Asked {
   at: number;
 }
 export const VOLUME_STEP = 5;
-/** The volume slider's and the ↑ key's ceiling (mpv's default volume-max is 130). */
+/** The volume slider's and the ↑ key's ceiling until the settings say otherwise
+ * (`audio.volumeMax`, which Rust also gives mpv as `volume-max`). */
 export const VOLUME_MAX = 100;
 /** Marks the seek bar's range input, whose arrow keys the window shortcuts take over. */
 export const SEEK_SLIDER_ATTR = "data-seek-slider";
 
 /**
- * The volume after a ↑/↓ step. Clamped to 0…VOLUME_MAX, except that a volume already
- * above VOLUME_MAX (external mpv: the user's mpv.conf or its own keys go up to its
- * volume-max) is never pulled down by ↑ and steps down from where it is with ↓.
+ * The volume after a ↑/↓ step. Clamped to 0…`max`, except that a volume already above
+ * it (external mpv: its own keys) is never pulled down by ↑ and steps down from where
+ * it is with ↓.
  */
-export function nextVolume(current: number, delta: number): number {
+export function nextVolume(current: number, delta: number, max = VOLUME_MAX): number {
   const now = Math.round(current);
-  const ceiling = Math.max(VOLUME_MAX, now);
+  const ceiling = Math.max(max, now);
   return Math.min(ceiling, Math.max(0, now + delta));
 }
 
@@ -52,6 +53,8 @@ export interface PlayerControls {
   toggleMute: () => void;
   /** the next subtitle track (and Off), as mpv orders them */
   cycleSubtitles: () => void;
+  /** the next second subtitle (and none) */
+  cycleSecondarySubtitles: () => void;
   stepSubDelay: (deltaSec: number) => void;
   /** the next speed of SPEEDS up (+1) or down (-1) */
   stepSpeed: (direction: 1 | -1) => void;
@@ -68,17 +71,22 @@ export function usePlayerControls({
   clock,
   mpv,
   ended,
+  volumeMax = VOLUME_MAX,
   poke,
 }: {
   clock: PlaybackClock;
   mpv: MpvState;
   ended: boolean;
+  /** the volume's ceiling (`audio.volumeMax`) */
+  volumeMax?: number;
   /** called after every action (shows auto-hiding controls) */
   poke: () => void;
 }): PlayerControls {
   // read at call time, so the callbacks stay stable across volume/mute changes
   const latest = useRef(mpv);
   latest.current = mpv;
+  const ceiling = useRef(volumeMax);
+  ceiling.current = volumeMax;
 
   const togglePauseOrReplay = useCallback(() => {
     if (ended) {
@@ -100,7 +108,7 @@ export function usePlayerControls({
 
   const changeVolume = useCallback(
     (delta: number) => {
-      const next = nextVolume(latest.current.volume, delta);
+      const next = nextVolume(latest.current.volume, delta, ceiling.current);
       void playerSetProperty("volume", next).catch(() => undefined);
       if (latest.current.mute && delta > 0) {
         void playerSetProperty("mute", false).catch(() => undefined);
@@ -132,6 +140,11 @@ export function usePlayerControls({
     poke();
   }, [poke]);
 
+  const cycleSecondarySubtitles = useCallback(() => {
+    void playerCommand("cycle", "secondary-sid").catch(() => undefined);
+    poke();
+  }, [poke]);
+
   const stepSubDelay = useCallback(
     (deltaSec: number) => {
       const next = Math.min(600, Math.max(-600, Math.round((base("subDelay") + deltaSec) * 1000) / 1000));
@@ -159,10 +172,20 @@ export function usePlayerControls({
       changeVolume,
       toggleMute,
       cycleSubtitles,
+      cycleSecondarySubtitles,
       stepSubDelay,
       stepSpeed,
     }),
-    [togglePauseOrReplay, seekBy, changeVolume, toggleMute, cycleSubtitles, stepSubDelay, stepSpeed],
+    [
+      togglePauseOrReplay,
+      seekBy,
+      changeVolume,
+      toggleMute,
+      cycleSubtitles,
+      cycleSecondarySubtitles,
+      stepSubDelay,
+      stepSpeed,
+    ],
   );
 }
 
@@ -231,6 +254,9 @@ export function usePlayerKeys({
           break;
         case "s":
           controls.cycleSubtitles();
+          break;
+        case "c":
+          controls.cycleSecondarySubtitles();
           break;
         case "z":
           controls.stepSubDelay(-SUB_DELAY_STEP);

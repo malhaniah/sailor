@@ -74,6 +74,9 @@ Adapted files:
 - `src/pages/player/SkipLayer.tsx` — the skip pill and the Up Next card
   (`skip-pill.tsx`, `skip-pill-container.tsx`), and `useNextEpisode.ts` — the
   end-of-episode rule (`use-auto-next-episode.ts`)
+- `src/pages/player/StatsOverlay.tsx` — the stats overlay's property list
+  (`stats-overlay.tsx`), and `src-tauri/src/commands/mpv/audio.rs` — the volume
+  normalization filter's values (`mpv.ts`)
 - `src/index.css`, `src/lib/theme.ts` — design tokens and theme presets
 - `src/lib/view.tsx`, `src/components/{ui,cards,Row,Hero,Poster,GenreTiles,LibraryCard}.tsx`,
   `src/views/{Discover,Browse}.tsx` — navigation model and UI recipes
@@ -81,6 +84,13 @@ Adapted files:
 - `src/lib/home-customization.ts` — Home row order, hiding and renaming
 - `src/lib/rooms.ts`, `src/lib/catalogs.ts` (`isAnimeCatalog`) — which rows go to Home
   and which to the Anime room
+- `crates/zeiler-addon/src/request.rs` (`normalize_transport_input`) — the rules for the
+  addon links people paste (`parseAddonUrl`)
+- `crates/zeiler-addon/src/directory.rs` — the directory endpoints and the merge by
+  manifest id (`src/lib/providers/stremio-addons.ts`, `src/lib/addons-store/community.ts`)
+- `src-tauri/src/deeplink.rs` — runtime `stremio://` registration
+  (`deeplink_set_stremio`); `src/views/addons/*` — install match kinds, the facts table
+  and masked addresses (`install-modal.tsx`, `addon-detail.tsx`)
 
 ```text
 MIT License

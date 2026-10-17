@@ -184,6 +184,8 @@ export interface TitlePrefs {
   metaId: string;
   /** a language code, or "off" */
   subLang: string | null;
+  /** where that subtitle came from */
+  subSource: "embedded" | "stream" | "addon" | null;
   audioLang: string | null;
   subDelaySec: number | null;
   rate: number | null;
@@ -217,6 +219,15 @@ export const playerOsdPrompt = (kind: "intro" | "recap" | "outro" | "next" | nul
 /** Every addon's streams for a video (the next episode's, to binge with). */
 export const streamsGet = (type: string, id: string) =>
   invoke<AddonStreams[]>("streams_get", { type, id });
+
+/** The OpenSubtitles hash and size of the file playing (null: unknown), for subtitle
+ * addons when the stream names none. Rust reads the stream itself (two range requests). */
+export const playerVideoHash = () =>
+  invoke<{ hash: string; size: number } | null>("player_video_hash");
+/** Even out the volume (a fixed, labelled audio filter) or stop; save it in
+ * `audio.normalize` with `settingsPatch`. */
+export const playerSetAudioNormalize = (on: boolean) =>
+  invoke<void>("player_set_audio_normalize", { on });
 
 /** How a subtitle file dropped on the window went (Rust emits it while a player runs). */
 export type SubtitleDropped =
@@ -256,9 +267,18 @@ export interface MpvTrack {
   /** added from a file (sub-add), not part of the stream */
   external?: boolean;
   "external-filename"?: string;
+  /** mpv sets it for the `sid` track and the `secondary-sid` track alike */
   selected?: boolean;
+  /** 0: the main selection (`sid`), 1: the second (`secondary-sid`) */
+  "main-selection"?: number;
   "demux-w"?: number;
   "demux-h"?: number;
+  /** an HLS variant's bitrate, bits/s */
+  "hls-bitrate"?: number;
+  "demux-bitrate"?: number;
+  /** cover art or a still image, not video */
+  albumart?: boolean;
+  image?: boolean;
   "demux-channel-count"?: number;
   /** mpv's channel layout name, e.g. "5.1(side)" */
   "demux-channels"?: string;

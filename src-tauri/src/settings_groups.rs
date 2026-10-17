@@ -221,6 +221,8 @@ settings_object!(SubtitleSettings, "subtitles");
 pub struct SubtitleStyle {
     /// `sub-scale` (1 = mpv's size).
     pub scale: Option<f64>,
+    /// `sub-font-size`, in mpv's scaled pixels (55 by default; `scale` multiplies it).
+    pub font_size: Option<f64>,
     /// `sub-font`, one of the fonts the player allows.
     pub font: Option<String>,
     pub bold: Option<bool>,
@@ -232,9 +234,17 @@ pub struct SubtitleStyle {
     pub border_style: Option<String>,
     pub back_color: Option<String>,
     pub shadow_offset: Option<f64>,
+    /// `sub-shadow-color`, `#RRGGBB` or `#AARRGGBB`. mpv 0.38+ reads it as another name
+    /// for `sub-back-color` (the shadow's colour, or the box's), so it applies only
+    /// while `back_color` is unset.
+    pub shadow_color: Option<String>,
     /// `sub-pos`: 100 is the bottom of the video, lower is higher up.
     pub pos: Option<f64>,
     pub margin_y: Option<f64>,
+    /// `sub-align-x`: `left`, `center` or `right`.
+    pub align_x: Option<String>,
+    /// `sub-align-y`: `top`, `center` or `bottom`.
+    pub align_y: Option<String>,
     /// `sub-ass-override`; `force` applies this style to styled (ASS) subtitles too,
     /// which breaks their typesetting, so it is opt-in.
     pub ass_override: Option<String>,
@@ -254,6 +264,7 @@ impl SubtitleStyle {
         let text = |s: &Option<String>| s.clone().map(Value::from);
         let number = |n: Option<f64>| n.map(Value::from);
         put(&["sub-scale"], number(self.scale));
+        put(&["sub-font-size"], number(self.font_size));
         put(&["sub-font"], text(&self.font));
         put(&["sub-bold"], self.bold.map(Value::from));
         put(&["sub-color"], text(&self.color));
@@ -268,8 +279,13 @@ impl SubtitleStyle {
         put(&["sub-border-style"], text(&self.border_style));
         put(&["sub-back-color"], text(&self.back_color));
         put(&["sub-shadow-offset"], number(self.shadow_offset));
+        if self.back_color.is_none() {
+            put(&["sub-shadow-color"], text(&self.shadow_color));
+        }
         put(&["sub-pos"], number(self.pos));
         put(&["sub-margin-y"], number(self.margin_y));
+        put(&["sub-align-x"], text(&self.align_x));
+        put(&["sub-align-y"], text(&self.align_y));
         put(&["sub-ass-override"], text(&self.ass_override));
         out
     }
@@ -293,6 +309,10 @@ pub struct AudioSettings {
     /// Preferred audio languages for anime (Kitsu, MyAnimeList, AniList and AniDB
     /// titles), used instead of `langs`. Empty: the file's default track.
     pub anime_langs: Vec<String>,
+    /// Even out the volume (a labelled `dynaudnorm` filter, `commands/mpv/audio.rs`).
+    pub normalize: bool,
+    /// The loudest the volume goes, in percent (mpv's `volume-max`, 100–200).
+    pub volume_max: u32,
 }
 
 impl Default for AudioSettings {
@@ -300,6 +320,8 @@ impl Default for AudioSettings {
         Self {
             langs: Vec::new(),
             anime_langs: vec!["ja".into()],
+            normalize: false,
+            volume_max: 130,
         }
     }
 }
@@ -307,7 +329,11 @@ impl Default for AudioSettings {
 impl AudioSettings {
     fn check(&self) -> Result<(), String> {
         check_languages("audio", &self.langs)?;
-        check_languages("anime audio", &self.anime_langs)
+        check_languages("anime audio", &self.anime_langs)?;
+        if !(100..=200).contains(&self.volume_max) {
+            return Err("volumeMax must be 100 to 200".into());
+        }
+        Ok(())
     }
 }
 
@@ -350,6 +376,33 @@ impl SkipSettings {
 
 settings_object!(SkipSettings, "skip");
 
+/// `marketplaceSources{}`: which directories the opt-in addon marketplace lists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(remote = "Self", rename_all = "camelCase", default)]
+pub struct MarketplaceSources {
+    /// The stremio-addons.net community directory (stars, categories, documentation).
+    pub stremio_addons_net: bool,
+    /// Stremio's community and official addon catalogs, served by Cinemeta.
+    pub stremio_catalog: bool,
+}
+
+impl Default for MarketplaceSources {
+    fn default() -> Self {
+        Self {
+            stremio_addons_net: true,
+            stremio_catalog: true,
+        }
+    }
+}
+
+impl MarketplaceSources {
+    fn check(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+settings_object!(MarketplaceSources, "marketplaceSources");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,16 +422,17 @@ mod tests {
                 "langs": [],
                 "autoLoad": true,
                 "style": {
-                    "scale": null, "font": null, "bold": null, "color": null,
-                    "outlineColor": null, "outlineSize": null, "borderStyle": null,
-                    "backColor": null, "shadowOffset": null, "pos": null,
-                    "marginY": null, "assOverride": null
+                    "scale": null, "fontSize": null, "font": null, "bold": null,
+                    "color": null, "outlineColor": null, "outlineSize": null,
+                    "borderStyle": null, "backColor": null, "shadowOffset": null,
+                    "shadowColor": null, "pos": null, "marginY": null, "alignX": null,
+                    "alignY": null, "assOverride": null
                 }
             })
         );
         assert_eq!(
             serde_json::to_value(AudioSettings::default()).unwrap(),
-            json!({"langs": [], "animeLangs": ["ja"]})
+            json!({"langs": [], "animeLangs": ["ja"], "normalize": false, "volumeMax": 130})
         );
     }
 
@@ -464,6 +518,30 @@ mod tests {
                 (&["sub-ass-override"][..], json!("force")),
             ]
         );
+    }
+
+    /// mpv 0.38+ reads `sub-shadow-color` as another name for `sub-back-color`: with a
+    /// box colour set, a shadow colour would replace it.
+    #[test]
+    fn a_shadow_colour_never_replaces_the_box_colour() {
+        let shadow = SubtitleStyle {
+            shadow_color: Some("#80000000".into()),
+            shadow_offset: Some(1.5),
+            ..SubtitleStyle::default()
+        };
+        assert!(
+            shadow
+                .properties()
+                .iter()
+                .any(|(names, _)| names[0] == "sub-shadow-color")
+        );
+        let boxed = SubtitleStyle {
+            back_color: Some("#99000000".into()),
+            ..shadow
+        };
+        let names: Vec<_> = boxed.properties().iter().map(|(n, _)| n[0]).collect();
+        assert!(names.contains(&"sub-back-color"));
+        assert!(!names.contains(&"sub-shadow-color"));
     }
 
     #[test]

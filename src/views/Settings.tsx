@@ -26,6 +26,7 @@ import type { PlayerBackend } from "../lib/types";
 import { AdultContentSetting } from "./AdultContentSetting";
 import { SkipAndNextCards } from "./SkipSettings";
 import { SubtitlesSection } from "./SubtitleSettings";
+import { AddonDirectorySettings } from "./addons/DirectorySettings";
 
 /** Ids reserved for later sections (docs/ARCHITECTURE.md, "Navigation names"). A
  * section shows only once it has a SECTIONS entry, so these stay hidden until then. */
@@ -597,6 +598,7 @@ function ContentSection() {
         })}
       </SectionCard>
       <AdultContentSetting />
+      <AddonDirectorySettings />
       <SectionCard title="Rooms" description="Hide sidebar rooms you don't use.">
         <ToggleRow
           label="Hide Anime"

@@ -1,6 +1,7 @@
 mod builtin;
 mod catalog_cache;
 mod commands;
+mod deeplink;
 mod error;
 mod home_rows;
 mod library;
@@ -30,11 +31,13 @@ pub fn run() {
     #[cfg(desktop)]
     {
         // single-instance must be the first registered plugin
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
+            // a stremio:// link opened while Zeiler runs (deeplink.rs)
+            tauri::async_runtime::spawn(deeplink::handle_args(app.clone(), argv, false));
         }));
     }
 
@@ -68,6 +71,12 @@ pub fn run() {
                 &state.profile_dir(),
             ))?;
             app.manage(subtitles::SubtitleStore::new(&cache_dir));
+            app.manage(zeiler_addon::VideoHasher::new()?);
+            app.manage(commands::marketplace::MarketState::new(&cache_dir));
+            app.manage(commands::addons::UpdateCache::default());
+            app.manage(deeplink::DeepLinkState::default());
+            let deep_link_on =
+                tauri::async_runtime::block_on(state.settings.read()).stremio_deep_link;
             app.manage(state);
             app.manage(catalog_cache::CatalogCache::default());
             app.manage(library);
@@ -79,6 +88,13 @@ pub fn run() {
                 "Zeiler/",
                 env!("CARGO_PKG_VERSION")
             ))?);
+            deeplink::refresh_registration(app.handle(), deep_link_on);
+            // a stremio:// link that started the app waits for the UI to ask for it
+            tauri::async_runtime::block_on(deeplink::handle_args(
+                app.handle().clone(),
+                std::env::args().collect(),
+                true,
+            ));
             updater::start(app.handle().clone());
             info!("zeiler started");
             Ok(())
@@ -94,6 +110,17 @@ pub fn run() {
             commands::addons::addon_add,
             commands::addons::addon_remove,
             commands::addons::addon_list,
+            commands::addons::addon_reorder,
+            commands::addons::addon_check_updates,
+            commands::addons::addon_refresh,
+            // marketplace
+            commands::marketplace::marketplace_list,
+            commands::marketplace::marketplace_categories,
+            commands::marketplace::marketplace_detail,
+            commands::marketplace::marketplace_refresh,
+            deeplink::deeplink_take_pending,
+            deeplink::deeplink_stremio_status,
+            deeplink::deeplink_set_stremio,
             commands::content::catalog_load,
             commands::content::meta_get,
             commands::content::streams_get,
@@ -128,6 +155,8 @@ pub fn run() {
             commands::mpv::subtitles::player_set_sub_style,
             commands::mpv::subtitles::player_prefs_get,
             commands::mpv::subtitles::player_prefs_set,
+            commands::mpv::subtitles::player_video_hash,
+            commands::mpv::audio::player_set_audio_normalize,
             // skip and next episode
             commands::skip::skip_segments_get,
             commands::mpv::osd::player_osd_prompt,

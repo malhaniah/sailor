@@ -1,5 +1,6 @@
 //! Per-title playback choices: the subtitle and audio language the user picked for a
-//! show (or that they switched subtitles off), its subtitle delay and its speed, so the
+//! show (or that they switched subtitles off), where that subtitle came from (the video
+//! itself, the stream, or a subtitle addon), its subtitle delay and its speed, so the
 //! next episode starts the same way. Kept in `player-prefs.json` under `profile_dir()`,
 //! for the 200 titles used most recently.
 //!
@@ -40,6 +41,12 @@ pub struct TitlePrefs {
     #[serde_as(deserialize_as = "DefaultOnError")]
     #[serde(default)]
     pub sub_lang: Option<String>,
+    /// Where the subtitle picked last came from: `embedded` (in the video), `stream`
+    /// (listed by the stream) or `addon` (a subtitle addon). The next episode's automatic
+    /// pick prefers that source in that language.
+    #[serde_as(deserialize_as = "DefaultOnError")]
+    #[serde(default)]
+    pub sub_source: Option<String>,
     #[serde_as(deserialize_as = "DefaultOnError")]
     #[serde(default)]
     pub audio_lang: Option<String>,
@@ -57,6 +64,13 @@ impl TitlePrefs {
     fn sanitized(mut self) -> Self {
         if self.sub_lang.as_deref().is_some_and(|l| !valid_sub_lang(l)) {
             self.sub_lang = None;
+        }
+        if self
+            .sub_source
+            .as_deref()
+            .is_some_and(|s| !valid_sub_source(s))
+        {
+            self.sub_source = None;
         }
         if self
             .audio_lang
@@ -77,6 +91,10 @@ impl TitlePrefs {
 
 fn valid_sub_lang(lang: &str) -> bool {
     lang == "off" || is_language_code(lang)
+}
+
+fn valid_sub_source(source: &str) -> bool {
+    matches!(source, "embedded" | "stream" | "addon")
 }
 
 fn valid_delay(delay: f64) -> bool {
@@ -119,7 +137,7 @@ impl PlayerPrefs {
             .map(TitlePrefs::sanitized))
     }
 
-    /// Merge `patch` (`subLang`, `audioLang`, `subDelaySec`, `rate`; `null` forgets a
+    /// Merge `patch` (`subLang`, `subSource`, `audioLang`, `subDelaySec`, `rate`; `null` forgets a
     /// choice) into `meta_id`'s choices and make it the most recently used title.
     pub async fn set(&self, meta_id: &str, patch: Value) -> Result<TitlePrefs, IpcError> {
         check_meta_id(meta_id)?;
@@ -158,6 +176,7 @@ impl PlayerPrefs {
                 for (key, value) in &patch {
                     match key.as_str() {
                         "subLang" => entry.sub_lang = text(key, value, valid_sub_lang)?,
+                        "subSource" => entry.sub_source = text(key, value, valid_sub_source)?,
                         "audioLang" => entry.audio_lang = text(key, value, is_language_code)?,
                         "subDelaySec" => entry.sub_delay_sec = number(key, value, valid_delay)?,
                         "rate" => entry.rate = number(key, value, valid_rate)?,
@@ -197,11 +216,15 @@ mod tests {
         assert_eq!(prefs.get("tt1").await.unwrap(), None);
 
         prefs
-            .set("tt1", json!({"subLang": "ar", "subDelaySec": 1.5}))
+            .set(
+                "tt1",
+                json!({"subLang": "ar", "subSource": "addon", "subDelaySec": 1.5}),
+            )
             .await
             .unwrap();
         let entry = prefs.set("tt1", json!({"rate": 1.25})).await.unwrap();
         assert_eq!(entry.sub_lang.as_deref(), Some("ar"));
+        assert_eq!(entry.sub_source.as_deref(), Some("addon"));
         assert_eq!(entry.sub_delay_sec, Some(1.5));
         assert_eq!(entry.rate, Some(1.25));
         let off = prefs
@@ -239,6 +262,8 @@ mod tests {
             json!({"subDelaySec": 601}),
             json!({"subLang": "en,fr"}),
             json!({"audioLang": "english"}),
+            json!({"subSource": "local"}),
+            json!({"subSource": 1}),
             json!({"volume": 50}),
             json!(["rate"]),
         ] {
@@ -278,7 +303,7 @@ mod tests {
         std::fs::write(
             dir.join("player-prefs.json"),
             r#"{"version": 1, "titles": [
-                {"metaId": "tt1", "subLang": "not a code", "rate": 99, "subDelaySec": "x", "audioLang": "en"},
+                {"metaId": "tt1", "subLang": "not a code", "rate": 99, "subDelaySec": "x", "audioLang": "en", "subSource": "elsewhere"},
                 {"subLang": "en"},
                 5
             ]}"#,

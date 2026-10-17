@@ -25,6 +25,12 @@ pub async fn settings_patch(
     state: State<'_, AppState>,
     patch: serde_json::Value,
 ) -> Result<Settings, IpcError> {
+    // the OS registration has to change with it: deeplink_set_stremio does both
+    if patch.get("stremioDeepLink").is_some() {
+        return Err(IpcError::InvalidInput(
+            "Switch stremio:// links on or off with deeplink_set_stremio.".into(),
+        ));
+    }
     // naming mpvPath re-locates mpv even when unchanged (picks up a fresh install on PATH)
     let relocate = patch.get("mpvPath").is_some();
     update(&app, &state, relocate, |current| current.patched(patch)).await
@@ -37,7 +43,14 @@ pub async fn settings_set(
     state: State<'_, AppState>,
     settings: Settings,
 ) -> Result<Settings, IpcError> {
-    update(&app, &state, true, |_| Ok(settings)).await
+    // stremioDeepLink changes only with the OS registration (deeplink_set_stremio)
+    update(&app, &state, true, |current| {
+        Ok(Settings {
+            stremio_deep_link: current.stremio_deep_link,
+            ..settings
+        })
+    })
+    .await
 }
 
 /// Compute the next settings from the current ones, persist them, and only after the

@@ -39,10 +39,6 @@ pub enum IpcError {
     Locked(String),
     /// The request clashes with existing state (e.g. the same addon is already
     /// installed under another URL).
-    #[allow(
-        dead_code,
-        reason = "reserved; first used by the marketplace install path"
-    )]
     #[error("{0}")]
     Conflict(String),
     /// Not available on this platform or build (e.g. embedded playback without the

@@ -14,7 +14,8 @@ addon URLs. This document records the load-bearing decisions and the shape of th
 | Protocol client | Hand-rolled `zeiler-addon` crate | `stremio-core` is git-only (frozen 0.1.0), framework-shaped (Elm runtime + static `Env`), hardwired to api.strem.io (incl. unauthenticated SeekLog telemetry), and assumes Stremio's `server.js` for torrents. The protocol surface is small; we mirror stremio-core's lenient serde semantics (MIT, referenced with attribution). |
 | Torrent engine | librqbit, in-process | Pure Rust, Apache-2.0, first-class streaming (sequential priority + HTTP Range endpoint). Pinned to a git rev of `main` until 9.0.2 ships (crates.io 9.0.1 lacks three Windows fixes: NTFS sparse marking #681, DHT death on UDP 10054 #690, stream-during-init #689). |
 | Playback | mpv, two backends behind one session | Embedded libmpv (`libmpv2` 6.x crate; video under the transparent webview — Windows `wid`+HWND_BOTTOM, macOS the render API into an NSOpenGLView; the default on Windows and macOS releases) or the user's own `mpv` in its own window, remote-controlled over mpv's JSON IPC (Linux, and anywhere embedded is unavailable). libmpv is a link-time dependency, so the embedded backend is the `embedded` cargo feature: Windows and macOS release builds turn it on and ship a hash-pinned LGPL libmpv (`scripts/fetch-libmpv.mjs`: `libmpv-2.dll` on Windows, dylibs built from pinned sources in `Contents/Frameworks` on macOS); plain dev builds leave it off. See "Player backends". |
-| Content neutrality | No seeded stream addons; built-ins are metadata or subtitles only, switchable, never streams | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only metadata and subtitle addons — Cinemeta and Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) — from manifest snapshots compiled into the app (`src-tauri/builtin/`), each switchable in Settings → Content. A test fails the build if a built-in declares a `stream` resource. Stream addons are installed by user-pasted URL only, behind a confirmation dialog showing the manifest (name, version, resources, p2p/adult hints). |
+| Content neutrality | No seeded stream addons; built-ins are metadata or subtitles only, switchable, never streams | Unlike Harbor (which also seeds Torrentio), Zeiler builds in only metadata and subtitle addons — Cinemeta and Anime Kitsu (metadata) and OpenSubtitles v3 (subtitles) — from manifest snapshots compiled into the app (`src-tauri/builtin/`), each switchable in Settings → Content. A test fails the build if a built-in declares a `stream` resource. Stream addons are installed only by the user, behind a confirmation dialog showing the live manifest (name, version, resources, p2p/adult hints): from a pasted URL, an opt-in `stremio://` link, or the opt-in addon directory. |
+| Addon directory | Opt-in browsing of third-party listings (stremio-addons.net, Stremio's `addon_catalog`) | Zeiler curates, ranks and seeds nothing: no featured rails, no recommendations, no bundled list; the only orderings are the directory's own stars, listing date, or name. Every listing is labelled "not reviewed by Zeiler"; adult listings are hidden unless `showAdult`; every install goes through the confirmation dialog, which fetches the live manifest and shows where it differs from the listing. Nothing is fetched before `marketplaceEnabled`. |
 | Updates | tauri-plugin-updater, install on next launch | Signed (minisign) packages from `releases/latest/download/latest.json`; releases are therefore regular, not pre-releases. Checked at launch (installed immediately, before the user starts anything) and every 6 h (downloaded to the cache, installed on the next launch). Signing key: `TAURI_SIGNING_PRIVATE_KEY` secret; release builds pass `--config src-tauri/tauri.release.conf.json` to emit updater artifacts. Dev builds never self-update. |
 
 ## Workspace layout
@@ -228,14 +229,46 @@ run `sub-add` (see "Validation policy").
   mpv reports refusals; the built-in core is the pinned libmpv, which has every property.
 - **Per title** (`player-prefs.json` under `profile_dir()`, the 200 titles used last):
   the subtitle language picked (or "off") and the audio language, when the user picks
-  them; the subtitle delay and the speed whenever they change and settle (also from
+  them, and where that subtitle came from (`subSource`: `embedded`, `stream` or
+  `addon`; in the remembered language the next file's automatic pick tries that source
+  first); the subtitle delay and the speed whenever they change and settle (also from
   keys in the external mpv window). The next file of the title starts with them.
+- **Hash.** When the stream names no OpenSubtitles hash, the addons are asked once the
+  file has loaded, with the hash Rust reads from the stream itself
+  (`player_video_hash`: the size plus the 64-bit words of the first and last 64 KiB,
+  from two range requests with the stream's own headers, or the engine's loopback URL;
+  the request is the one Rust remembered at `player_start`/`player_load`, so it never
+  comes back through the webview; only while that session still runs and no other file
+  came since, and a file that changed meanwhile gets none; 15 s for both requests, and
+  the error logged without the URL). A server that ignores ranges is given up on after
+  the first chunk. A file that has not loaded within 20 s is asked for without a hash.
+- **Second subtitle.** The Subtitles menu can show a second subtitle above the first
+  (`secondary-sid`, any track already in the player); `c` cycles it.
 - **Menus** (`SubtitleMenu.tsx`, `AudioMenu.tsx`). Subtitles: Off/On, a language rail,
   tabs by source (in the video, addons, files), tags (Forced, SDH, Default, format,
   addon), a spinner while a subtitle downloads and its error inline, "Load from file…",
   the encoding of an added subtitle, the delay (±0.1/±0.5 s), and the quick style.
   Audio: tracks by language with title, channels (Stereo, 5.1, 7.1), codec and
-  Default/File, and the audio delay. Both work the same on either backend.
+  Default/File, the audio delay, and volume normalization. Both work the same on
+  either backend.
+- **Audio level.** Normalization (`player_set_audio_normalize`, `audio.normalize`)
+  adds a fixed `lavfi=[dynaudnorm=f=200:g=15:m=10:r=0.6]` under the `@zeiler-normalize`
+  label (adding again replaces it; removing it leaves the user's own filters), applied
+  at every start and every load; `af` itself stays off the webview's list.
+  `audio.volumeMax` (100–200, 130 by default, mpv's own) goes to mpv as the pre-load
+  `volume-max` when it is not 130 (so external mpv otherwise keeps the user's own), and
+  the volume slider and ↑ reach it.
+- **A second subtitle** is per file: every load sends `secondary-sid=no`. mpv marks the
+  second track `selected` too; the UI tells the main one by `sid` (or
+  `main-selection`).
+- **Shadow colour.** mpv 0.38+ reads `sub-shadow-color` as another name for
+  `sub-back-color`, so `shadowColor` applies only while `backColor` is unset, and the
+  Shadow choice leaves a Box background's colour alone.
+- **Also in the control bar:** chapter ticks on the seek bar (hover shows the time and
+  the chapter), a Quality menu when the stream has more than one video track (HLS or
+  DASH variants, by height and bitrate; `vid`), and the stats overlay (key i: codecs,
+  hardware decoding, frame rates, bitrates, dropped frames, buffer, download speed,
+  read once a second through `player_get_property`).
 
 ## Skip and next episode
 
@@ -286,10 +319,29 @@ run `sub-add` (see "Validation policy").
 Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list matches the
 `generate_handler!` in `src-tauri/src/lib.rs` exactly — update both together.
 
-- Addons: `addon_preview { url }` → Descriptor (fetch + parse, not persisted — feeds the
-  confirm dialog) · `addon_add { url }` → Descriptor · `addon_remove { transportUrl }` ·
-  `addon_list()` → Descriptor[] (built-ins first, then the user's addons; while
-  `showAdult` is off, without adult genre options or adult-named catalogs)
+- Addons: `addon_preview { url, listingKey? }` → `{ descriptor, maskedUrl, existing?
+  { kind: sameUrl|sameId|sameHost, name, transportUrl, maskedUrl }, configureUrl?,
+  listingChanges, listingRequiresReview }` (fetch + parse, not persisted — feeds the
+  confirm dialog; `listingKey` compares the live manifest with a directory listing) ·
+  `addon_add { url, replace? }` → Descriptor (`replace` swaps an installed addon in place,
+  keeping its position) · `addon_remove { transportUrl }` · `addon_list()` →
+  Descriptor[] (built-ins first, then the user's addons; while `showAdult` is off,
+  without adult genre options or adult-named catalogs) · `addon_reorder { order }` →
+  Descriptor[] (an exact permutation of the user's transport URLs, else `conflict`) ·
+  `addon_check_updates { force }` → `{ transportUrl, maskedUrl, name, currentVersion,
+  latestVersion, changes, capabilitiesChanged, requiresReview }[]` (six at a time, 10 s
+  each, reused for 6 h) · `addon_refresh { transportUrl }` → Descriptor (a one-click
+  update; `conflict` when capabilities changed)
+- Marketplace (only while `marketplaceEnabled`): `marketplace_list { query: { search?,
+  types, resources, category?, sort: stars|newest|name }, page, limit }` → `{ entries,
+  total, hasMore, sourcesOk, sourcesFailed, fetchedAt }` · `marketplace_categories()` ·
+  `marketplace_detail { key }` → `{ entry, documentation? }` (plain text) ·
+  `marketplace_refresh()`
+- Deep links: `deeplink_take_pending()` → the `stremio://` link that started the app,
+  once · `deeplink_stremio_status()` → `{ supported, enabled, registered }` ·
+  `deeplink_set_stremio { enabled }` (registers or unregisters with the OS, then stores
+  `stremioDeepLink`; `settings_patch` refuses that key). Event `deeplink://stremio`
+  carries a link opened while Zeiler runs.
 - Content: `catalog_load { args: { transportUrl, type, id, extra, force? } }` →
   `{ metas }` (only from an addon in effect, for a catalog and extras it declares; while
   `showAdult` is off, never an addon flagged adult, an adult option or an adult-named
@@ -327,8 +379,10 @@ Commands (all async, `Result<T, IpcError>`; payloads camelCase). This list match
   as another encoding) · `player_subtitle_pick_local()` → the same, or null when the
   dialog is cancelled · `player_set_sub_style { style }` → the mpv properties it refused
   (style fields, applied live) ·
-  `player_prefs_get { metaId }` → `{ metaId, subLang, audioLang, subDelaySec, rate }`
-  or null · `player_prefs_set { metaId, patch }` → the same
+  `player_prefs_get { metaId }` → `{ metaId, subLang, subSource, audioLang, subDelaySec,
+  rate }` or null · `player_prefs_set { metaId, patch }` → the same ·
+  `player_video_hash()` → `{ hash, size }` or null (the file playing, see "Subtitles
+  and audio") · `player_set_audio_normalize { on }`
 - Skip (see "Skip and next episode"): `skip_segments_get { query: { metaId, videoId,
   durationSec } }` → `[{ kind: "intro" | "recap" | "outro", startSec, endSec, source:
   "aniskip" | "introdb" }]` · `player_osd_prompt { kind: "intro" | "recap" | "outro" |
@@ -428,20 +482,21 @@ an unknown field, a wrong type or an out-of-range value at any depth. Settings a
 mirrored wholesale to the webview, so secrets (Stremio authKey, IPTV credentials) never
 go here.
 
-The groups so far: `subtitles { langs, autoLoad, style { scale, font, bold, color,
-outlineColor, outlineSize, borderStyle, backColor, shadowOffset, pos, marginY,
-assOverride } }` (style values are mpv's, checked by the player's property rules; every
-style field `null` by default), `audio { langs, animeLangs }` (`animeLangs` defaults
-to `["ja"]`) and `skip { showButton, autoSkipIntro, autoSkipRecap, autoSkipCredits,
-onlineLookup }` (auto-skip off, the rest on), plus the top-level `bingeWatching` (on)
-and `upNextSeconds` (15, 5–60).
+The groups so far: `subtitles { langs, autoLoad, style { scale, fontSize, font, bold,
+color, outlineColor, outlineSize, borderStyle, backColor, shadowOffset, shadowColor, pos,
+marginY, alignX, alignY, assOverride } }` (style values are mpv's, checked by the
+player's property rules; every style field `null` by default), `audio { langs,
+animeLangs, normalize, volumeMax }` (`animeLangs` defaults to `["ja"]`, `normalize`
+off, `volumeMax` 130, 100–200) and `skip { showButton, autoSkipIntro, autoSkipRecap,
+autoSkipCredits, onlineLookup }` (auto-skip off, the rest on), plus the top-level
+`bingeWatching` (on) and `upNextSeconds` (15, 5–60).
 
 Reserved key map — names are fixed now; each key is added only when its feature ships:
 
 | Scope | Keys (existing **bold**) |
 | --- | --- |
-| Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), `marketplaceEnabled`, `marketplaceSources`, `stremioDeepLink` |
-| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, **`showAdult`** (the single adult flag and age gate, also used by the marketplace; matched by `zeiler_addon::is_adult_text`), `hideP2pAddons`, **`homeRows`** (`{order, hidden, renamed: [{key, name}]}`, keyed without transport URLs), **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages; later normalize, volume max), **`skip{}`** (skip button, auto-skip, online lookups), **`bingeWatching`**, **`upNextSeconds`** |
+| Per device | **`mpvPath`**, **`engineListenPort`**, **`engineUpnp`**, **`uploadLimitKibps`**, **`downloadLimitKibps`**, **`deleteOnStop`**, **`autoUpdate`**, **`playerBackend`** (`auto`/`embedded`/`external`), **`marketplaceEnabled`**, **`marketplaceSources{}`** (`stremioAddonsNet`, `stremioCatalog`), **`stremioDeepLink`** |
+| Per profile | **`theme`**, **`instantPlay`**, **`hideAnime`**, **`hideLiveTv`**, **`showAdult`** (the single adult flag and age gate, also used by the marketplace; matched by `zeiler_addon::is_adult_text`), **`hideP2pAddons`**, **`homeRows`** (`{order, hidden, renamed: [{key, name}]}`, keyed without transport URLs), **`subtitles{}`** (languages, auto-load, style), **`audio{}`** (languages, normalize, volume max), **`skip{}`** (skip button, auto-skip, online lookups), **`bingeWatching`**, **`upNextSeconds`** |
 | Built-in toggles (scope is an owner decision; device until then) | **`builtinCinemeta`**, **`builtinKitsu`**, **`builtinOpensubtitles`** |
 
 A settings file from before `builtinKitsu` and `builtinOpensubtitles` existed takes them
@@ -635,10 +690,11 @@ set (`OBSERVED` in `crates/zeiler-player/src/lib.rs`). The shell
 
 The frontend navigates with a frame stack (`src/lib/view.tsx`). Every switch over
 `RootView` or `Frame` kinds ends in `unreachable(x)`, so a new kind that is not handled
-everywhere fails `tsc`. Reserved now, unreachable from the UI until their milestones:
-the frame `addon-detail` (marketplace). The frame `browse` (the catalog browser,
-`src/views/Browse.tsx`) is in use since M8 and replaced `filter`; the root view `live`
-(Live TV: the addons' `tv` and `channel` catalogs, `src/views/Live.tsx`) since M9.
+everywhere fails `tsc`. Nothing is reserved any more:
+the frame `browse` (the catalog browser, `src/views/Browse.tsx`) is in use since M8 and
+replaced `filter`; the root view `live` (Live TV: the addons' `tv` and `channel` catalogs,
+`src/views/Live.tsx`) since M9; the frame `addon-detail` (a marketplace listing, keyed by
+manifest id) since M10.
 Reserved Settings section ids: `account`, `playback` (`subtitles` is in use since M6:
 Settings → Subtitles & audio).
 
@@ -671,8 +727,21 @@ is up; leaving the player pops the history entry it pushed.
   URLs, headers and transport URLs stay out of the history stack, and release builds
   ignore URL-carrying player params.
 - Engine HTTP binds 127.0.0.1 with per-session basic-auth credentials.
-- Deep links (`zeiler://`; `stremio://` opt-in later) are untrusted argv input and are
-  parsed/validated before any navigation or install prompt.
+- Deep links are untrusted argv input. `stremio://` is opt-in (`stremioDeepLink`,
+  registered at runtime on Windows and Linux; tauri.conf.json declares no scheme, so it
+  is never claimed while off). On Windows the scheme's previous per-user owner (a
+  Stremio app) is saved when Zeiler takes over and put back when it lets go; Zeiler
+  never touches the machine-wide key. A lone `stremio://` argument becomes the install
+  confirmation's input, parsed in Rust like a pasted URL, never an install. Links are
+  ignored while the setting is off or a confirmation is open, a repeat within 2.5 s
+  counts once, and links are never logged (they may carry an addon's keys).
+- Directory listings are untrusted display data: remote `flags` are dropped, the
+  documentation is plain text (never HTML), slugs are checked before they reach a URL,
+  and directory errors name the directory, never a URL. The index always includes
+  adult listings (so their `nsfw` category marks the same addon from any directory)
+  and hides them locally unless `showAdult`. HTTP errors from addons and directories
+  are passed on without their URL (reqwest's `without_url`). Transport URLs are masked in the
+  UI until revealed.
 
 ## Packaging & licensing notes
 

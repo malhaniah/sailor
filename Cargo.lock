@@ -7005,6 +7005,7 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
+ "futures",
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
@@ -7027,6 +7028,7 @@ dependencies = [
  "uuid",
  "webview2-com",
  "windows",
+ "windows-registry",
  "zeiler-account",
  "zeiler-addon",
  "zeiler-engine",
