@@ -1,6 +1,8 @@
 mod builtin;
+mod catalog_cache;
 mod commands;
 mod error;
+mod home_rows;
 mod library;
 mod persist;
 mod settings_groups;
@@ -67,6 +69,7 @@ pub fn run() {
             ))?;
             app.manage(subtitles::SubtitleStore::new(&cache_dir));
             app.manage(state);
+            app.manage(catalog_cache::CatalogCache::default());
             app.manage(library);
             app.manage(prefs);
             app.manage(commands::mpv::PlayerState::default());

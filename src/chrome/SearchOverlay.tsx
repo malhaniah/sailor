@@ -5,7 +5,7 @@ import { Spinner } from "../components/ui";
 import { catalogDisplayName, searchableCatalogs } from "../lib/catalogs";
 import { catalogLoad } from "../lib/ipc";
 import { playerActive } from "../lib/playback-handoff";
-import { useAddons, useSearch } from "../lib/store";
+import { useAddons, useSearch, useSettings } from "../lib/store";
 import { useView } from "../lib/view";
 import type { MetaPreview } from "../lib/types";
 
@@ -18,6 +18,8 @@ interface SectionResult {
 export function SearchOverlay() {
   const { open, setOpen } = useSearch();
   const { addons } = useAddons();
+  const { settings } = useSettings();
+  const showAdult = settings?.showAdult ?? false;
   const { openMeta } = useView();
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -55,7 +57,7 @@ export function SearchOverlay() {
     const id = ++requestId.current;
     setSearching(true);
     const timer = setTimeout(async () => {
-      const targets = searchableCatalogs(addons);
+      const targets = searchableCatalogs(addons, showAdult);
       const sections = await Promise.all(
         targets.map(async (t): Promise<SectionResult> => {
           try {
@@ -81,7 +83,7 @@ export function SearchOverlay() {
       }
     }, 450);
     return () => clearTimeout(timer);
-  }, [query, open, addons]);
+  }, [query, open, addons, showAdult]);
 
   if (!open) return null;
 

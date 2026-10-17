@@ -160,6 +160,8 @@ export interface MetaLookup {
 
 export interface CatalogResponse {
   metas: MetaPreview[];
+  /** how many titles the addon sent before adult ones were taken out (the next skip) */
+  fetched: number;
 }
 
 export interface AddonStreams {
@@ -191,6 +193,10 @@ export interface Settings {
   instantPlay: boolean;
   hideAnime: boolean;
   hideLiveTv: boolean;
+  /** Show adult catalogs, genres and titles (Rust `zeiler_addon::is_adult_text`). */
+  showAdult: boolean;
+  /** Home's catalog rows as the user arranged them (Rust `home_rows::HomeRows`). */
+  homeRows: HomeRows;
   builtinCinemeta: boolean;
   builtinKitsu: boolean;
   builtinOpensubtitles: boolean;
@@ -201,6 +207,14 @@ export interface Settings {
   subtitles: SubtitleSettings;
   /** Rust `settings_groups::AudioSettings`. */
   audio: AudioSettings;
+}
+
+/** Row keys are `catalogKey`s (src/lib/catalogs.ts), never transport URLs. Each list is
+ * replaced whole by a patch. */
+export interface HomeRows {
+  order: string[];
+  hidden: string[];
+  renamed: { key: string; name: string }[];
 }
 
 export interface SubtitleSettings {

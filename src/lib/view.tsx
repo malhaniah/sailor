@@ -1,5 +1,5 @@
 // Harbor-style navigation: no router library, a frame stack in context.
-// Root views reset the stack (settings pushes); detail/filter/picker frames push on top.
+// Root views reset the stack (settings pushes); detail/browse/picker frames push on top.
 import {
   type ReactNode,
   createContext,
@@ -44,18 +44,20 @@ export type Frame =
   // the catalog item that was clicked: the detail page falls back to it when no
   // installed addon serves meta for this id
   | { kind: "meta"; type: string; id: string; preview: MetaPreview }
-  | { kind: "filter"; genre: string; type: string }
   | { kind: "picker"; meta: MetaItem; video: Video | null }
-  // reserved: catalog browser (filter's successor); fields may still change before it ships
-  | {
-      kind: "browse";
-      type: string;
-      transportUrl?: string;
-      catalogId?: string;
-      extra: { name: string; value: string }[];
-    }
+  // the catalog browser: a type, optionally one addon's catalog and its filters (kept in
+  // the frame, so Back restores them); the transport URL never leaves memory
+  | BrowseFrame
   // reserved: marketplace addon detail, keyed into the directory index
   | { kind: "addon-detail"; key: string };
+
+export interface BrowseFrame {
+  kind: "browse";
+  type: string;
+  transportUrl?: string;
+  catalogId?: string;
+  extra: { name: string; value: string }[];
+}
 
 /** Exhaustiveness guard: `default: return unreachable(x)` fails to compile when a
  * RootView or Frame kind is added without a case. */
@@ -67,7 +69,6 @@ export function unreachable(value: never): never {
 function popsOnEscape(frame: Frame): boolean {
   switch (frame.kind) {
     case "meta":
-    case "filter":
     case "picker":
     case "browse":
     case "addon-detail":
@@ -96,6 +97,10 @@ interface ViewCtx {
   canGoBack: boolean;
   setView: (view: RootView) => void;
   openMeta: (preview: MetaPreview) => void;
+  openBrowse: (target: Omit<BrowseFrame, "kind">) => void;
+  /** Change the Browse frame on top in place (its filters), so Back skips the changes. */
+  updateBrowse: (target: Omit<BrowseFrame, "kind">) => void;
+  /** Browse `type` filtered to one genre (its first catalog that has the genre). */
   openFilter: (type: string, genre: string) => void;
   openPicker: (meta: MetaItem, video: Video | null) => void;
   goBack: () => void;
@@ -125,6 +130,14 @@ export function ViewProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const updateBrowse = useCallback((target: Omit<BrowseFrame, "kind">) => {
+    setStack((prev) =>
+      prev[prev.length - 1].kind === "browse"
+        ? [...prev.slice(0, -1), { kind: "browse", ...target }]
+        : prev,
+    );
+  }, []);
+
   const goBack = useCallback(() => {
     setStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
   }, []);
@@ -141,10 +154,13 @@ export function ViewProvider({ children }: { children: ReactNode }) {
       goBack,
       openMeta: (preview) =>
         push({ kind: "meta", type: preview.type, id: preview.id, preview }),
-      openFilter: (type, genre) => push({ kind: "filter", type, genre }),
+      openBrowse: (target) => push({ kind: "browse", ...target }),
+      updateBrowse,
+      openFilter: (type, genre) =>
+        push({ kind: "browse", type, extra: [{ name: "genre", value: genre }] }),
       openPicker: (meta, video) => push({ kind: "picker", meta, video }),
     };
-  }, [stack, push, setView, goBack]);
+  }, [stack, push, setView, goBack, updateBrowse]);
 
   // Escape pops overlay frames (never a root view). Not while the Player screen is up:
   // the shell stays mounted underneath it, and the player's own Escape goes back.
