@@ -1,22 +1,27 @@
 # Feature plan handoff
 
 How to pick up the feature plan locally. Written when the cloud session handed over on
-2026-10-16, and updated after M4a, M4b, M5 and M6 were finished locally and released as
-v0.2.0 the same day.
+2026-10-16, updated after M4a, M4b, M5 and M6 were finished locally and released as
+v0.2.0 the same day, and again on 2026-10-17 when M7 to M13 were merged for v0.3.0.
 
 ## Where things stand
 
-- **Released:** v0.2.0, with every milestone below (M0 to M6): Zeiler's own player screen,
-  built-in playback on Windows, the library with Continue Watching, the Kitsu and
-  OpenSubtitles built-ins, and subtitles and audio controls. Before it, v0.1.3 was the first
-  release named Zeiler.
-- **Merged through:** PR #4 (M0 to M4a), #5 (M4b), #6 (M5) and #7 (M6 and the v0.2.0
-  version bump). Everything below is on main.
-- **Since v0.2.0, released as v0.2.1:** #8/#11 and #12 (another file opened in external
-  mpv no longer gets the title's subtitles, and a subtitle add fails if the file changed
-  meanwhile), #9 (libmpv from Zeiler's own mirror, with its sources), #10 (dependency
-  licences checked in CI and their notices in every bundle) and #14 (a release is a draft
-  until all four builds are in it).
+- **Released:** v0.2.1 (2026-10-16): M0 to M6, Zeiler's own player screen, built-in
+  playback on Windows, the library with Continue Watching, the Kitsu and OpenSubtitles
+  built-ins, subtitles and audio controls, plus the fixes in #8 to #14 (subtitles kept
+  off another file opened in external mpv, libmpv from Zeiler's own mirror, dependency
+  licences checked in CI, a release is a draft until all four builds are in it).
+- **On main, releasing as v0.3.0:** ten PRs merged on 2026-10-17, in this order: #16
+  (the zeiler.io download website, `website/`), #17 (M8 catalogs), #20 (M9 A, Live TV
+  from addons), #18 (M7 skip and next episode), #22 (M6 leftovers), #19 (M10
+  marketplace), #23 (M11 local profiles), #25 (M12 Stremio account sync), #24 (M9 B, user
+  IPTV), #21 (M13 built-in playback on macOS; M14 Linux prototyped and stopped), then #26
+  (security policy, README rewrite, issue and PR templates). Every milestone of the plan
+  is built except the optional M14.
+- **Before releasing:** the HANDOFF gates passed on the merged tree on a Mac (including
+  the macOS embedded and real-mpv tests); CI is green on main. An integration review
+  found no code defect that survived verification; its unverified and low findings are
+  listed under "Open findings from the v0.3.0 review" below.
 
 | Commit | Milestone | What it did |
 |---|---|---|
@@ -82,8 +87,35 @@ above. Still left from M6, on purpose: pre-adding unselected subtitles per langu
 is shown; and anime detection by genre, and stripping Japanese for titles that are not
 anime.
 
-Also still open: the download website. The owner asked for OS detection, a downloads page and a
-product tour. It is not started, and the domain is `zeiler.io`.
+The download website (OS detection, a downloads page, a product tour) shipped in #16 as
+`website/`, with its own CI job (`website.yml`). The domain is `zeiler.io`; hosting is the
+owner's (a `CNAME` for GitHub Pages is on main).
+
+## Open findings from the v0.3.0 review
+
+An integration review of the merged tree (six lenses, each finding attacked by refuters)
+left these for a follow-up. None was confirmed as a shipped defect; the first two deserve
+a decision:
+
+- IPTV: `iptv_resolve` (`src-tauri/src/commands/iptv.rs`) plays a channel's `http://`
+  stream URL without the source's `allowHttp` consent; the consent gate covers only the
+  playlist, EPG and Xtream account URLs. Xtream stream URLs carry the account in the path.
+  Decide whether an unconsented http stream is refused (then a source whose playlist is
+  https but whose streams are http needs a way to consent) or documented as allowed.
+- Hide Live TV (`settings.hideLiveTv`, `src/App.tsx`) also hides the user's own IPTV
+  playlists, while the setting's text only promises that addon catalogs move.
+- Low: `profile_select`/`account_logout` wait on `sync_lock` behind a running sync; a
+  profile switch does not kick a sync for the new profile; sign-in resolves the active
+  profile after the network round trip; IPTV `storage_of` reports "os" for a memory-kept
+  secret after a switch; a keychain read error reads as "no entry"; the skip client and
+  the OpenSubtitles hasher are not https-only and follow redirects with reqwest's
+  defaults; `profile_delete` forgets a Stremio session without revoking it; playlist
+  `#EXTVLCOPT` user agent and referrer skip the length checks of the source-level ones.
+- Docs: `docs/ARCHITECTURE.md` lists shipped work as future, omits four events and
+  three crates, and documents `catalog_load` as `{ metas }` (it returns `{ metas, fetched }`);
+  the macOS `THIRD-PARTY-LICENSES.txt` lacks the libmpv cross-reference paragraph; the
+  macOS library and signature check in `release.yml` runs after tauri-action has
+  uploaded, so a failure leaves a draft rather than preventing the upload.
 
 ## How each milestone was built
 
@@ -117,7 +149,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 npm run typecheck
 
-# embedded player (needs libmpv: Linux `libmpv-dev`; Windows `node scripts/fetch-libmpv.mjs`)
+# embedded player (needs libmpv: Linux `libmpv-dev`; Windows `node scripts/fetch-libmpv.mjs`;
+# macOS `brew install mpv` with LIBRARY_PATH=$(brew --prefix)/lib for the tests, and
+# `node scripts/fetch-libmpv.mjs` for the bundled dylibs, see CONTRIBUTING.md)
 cargo clippy -p zeiler-player --features embedded --all-targets --locked -- -D warnings
 cargo test -p zeiler-player --features embedded --locked
 
